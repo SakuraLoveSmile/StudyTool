@@ -1,0 +1,446 @@
+<template>
+  <div class="page-stack">
+    <header class="surface p-5 sm:p-6 space-y-4">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">RAG V1</span>
+            <span v-if="today.round" class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{{ roundLabel(today.round) }}</span>
+            <span
+              v-if="today.status !== 'idle'"
+              class="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium"
+              :class="statusClass(today.status)"
+            >
+              {{ statusLabel(today.status) }}
+            </span>
+          </div>
+          <h1 class="mt-2 text-xl sm:text-2xl font-bold tracking-tight text-slate-900">今日学习</h1>
+          <p class="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500">
+            按章节范围安排主动回忆。先回想，再揭示答案，最后用难度反馈帮助系统调整下一次复习。
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="btn btn-secondary text-xs" :disabled="loading" @click="refreshToday">
+            {{ loading ? '刷新中…' : '刷新今日队列' }}
+          </button>
+          <button v-if="today.status === 'paused' || today.status === 'idle'" type="button" class="btn btn-primary" :disabled="busy || loading" @click="openToday">
+            {{ busy ? '准备中…' : today.status === 'paused' ? '继续今日学习' : '开始今日学习' }}
+          </button>
+          <button v-else-if="today.status === 'active'" type="button" class="btn btn-secondary" :disabled="busy || loading" @click="pauseToday">
+            暂停学习
+          </button>
+          <button v-else type="button" class="btn btn-primary" :disabled="busy || loading" @click="advanceDay">
+            再来一组
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+          <span class="text-xs text-slate-500">今日总量</span>
+          <strong class="mt-1 block text-xl text-slate-900">{{ today.total }}</strong>
+        </div>
+        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+          <span class="text-xs text-slate-500">已完成</span>
+          <strong class="mt-1 block text-xl text-emerald-600">{{ today.completed }}</strong>
+        </div>
+        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+          <span class="text-xs text-slate-500">待复习</span>
+          <strong class="mt-1 block text-xl text-blue-600">{{ today.remaining }}</strong>
+        </div>
+        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+          <span class="text-xs text-slate-500">新卡 / 复习</span>
+          <strong class="mt-1 block text-xl text-amber-600">{{ today.new_count }} / {{ today.review_count }}</strong>
+        </div>
+      </div>
+
+      <div class="h-2 overflow-hidden rounded-full bg-slate-100" aria-label="今日学习进度">
+        <div class="h-full rounded-full bg-gradient-to-r from-indigo-500 to-blue-600 transition-all" :style="{ width: `${completionPercent}%` }" />
+      </div>
+    </header>
+
+    <div v-if="pageError" class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert">
+      {{ pageError }}
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
+      <div>
+        <RecallSession
+          :attempt="today.current_attempt"
+          :busy="busy"
+          :source-excerpt="today.current_card?.source_excerpt"
+          @reveal="revealCurrent"
+          @rate="rateCurrent"
+          @next="nextCard"
+          @skip="skipCard"
+          @pause="pauseToday"
+        />
+      </div>
+
+      <aside class="space-y-4">
+        <section class="surface p-4 sm:p-5">
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <h2 class="text-sm font-semibold text-slate-800">学习范围</h2>
+              <p class="mt-1 text-xs text-slate-500">选择今天参与队列的章节</p>
+            </div>
+            <button type="button" class="text-xs font-medium text-blue-600 hover:underline disabled:opacity-50" :disabled="savingScope" @click="saveScope">
+              {{ savingScope ? '保存中…' : '保存' }}
+            </button>
+          </div>
+          <div v-if="chapters.length === 0" class="mt-4 rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400">
+            暂无章节，请先在回忆卡页面创建章节或导入内容。
+          </div>
+          <div v-else class="mt-4 max-h-64 space-y-1.5 overflow-y-auto pr-1">
+            <label
+              v-for="chapter in chapters"
+              :key="chapter.id"
+              class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors hover:bg-slate-50"
+            >
+              <input v-model="selectedChapterIds" type="checkbox" :value="chapter.id" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+              <span class="min-w-0 flex-1 truncate text-slate-700">{{ chapter.name }}</span>
+              <span class="shrink-0 text-[11px] text-slate-400">{{ chapter.card_count }}</span>
+            </label>
+          </div>
+          <label class="mt-3 flex cursor-pointer items-center gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+            <input v-model="includeUnassigned" type="checkbox" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            包含未分类卡片
+          </label>
+        </section>
+
+        <section class="surface p-4 sm:p-5">
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <h2 class="text-sm font-semibold text-slate-800">今日设置</h2>
+              <p class="mt-1 text-xs text-slate-500">限制每次打开的学习量</p>
+            </div>
+            <button type="button" class="text-xs font-medium text-blue-600 hover:underline disabled:opacity-50" :disabled="savingSettings" @click="saveSettings">
+              {{ savingSettings ? '保存中…' : '保存' }}
+            </button>
+          </div>
+          <div class="mt-4 space-y-3 text-xs">
+            <label class="block">
+              <span class="field-label">每日新卡上限（1–100）</span>
+              <input v-model.number="settings.daily_new_limit" type="number" min="1" max="100" step="1" class="field" placeholder="未配置" />
+            </label>
+            <label class="block">
+              <span class="field-label">每日复习上限（1–100）</span>
+              <input v-model.number="settings.daily_review_limit" type="number" min="1" max="100" class="field" placeholder="未配置" />
+            </label>
+            <label class="flex cursor-pointer items-center gap-2 text-slate-600">
+              <input v-model="settings.auto_advance" type="checkbox" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+              评分后自动进入下一张
+            </label>
+            <label class="flex cursor-pointer items-center gap-2 text-slate-600">
+              <input v-model="settings.show_hints" type="checkbox" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+              揭示前显示提示
+            </label>
+          </div>
+        </section>
+
+        <section v-if="today.queue.length > 0" class="surface p-4 sm:p-5">
+          <h2 class="text-sm font-semibold text-slate-800">队列预览</h2>
+          <p class="mt-1 text-xs text-slate-500">到期复习与续接优先；未完成前不会加入新学内容。</p>
+          <ul class="mt-3 space-y-1.5">
+            <li
+              v-for="(card, index) in today.queue.slice(0, 8)"
+              :key="`${card.id}-${index}`"
+              class="flex items-start gap-2 rounded-lg border border-slate-100 px-3 py-2 text-xs"
+            >
+              <span class="shrink-0 text-slate-400">{{ index + 1 }}.</span>
+              <span class="min-w-0 flex-1 text-slate-700">
+                <span class="line-clamp-2">{{ card.prompt }}</span>
+                <span v-if="card.due_at" class="mt-0.5 block text-[11px] text-slate-400">到期 {{ card.due_at }}</span>
+              </span>
+            </li>
+          </ul>
+          <label class="mt-3 flex cursor-pointer items-start gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              class="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              :checked="today.override_enabled"
+              :disabled="busy || today.status !== 'active'"
+              @change="toggleOverride(($event.target as HTMLInputElement).checked)"
+            />
+            <span>
+              今日临时覆盖：允许在到期复习未完成时也加入新学内容
+              <span class="mt-0.5 block text-[11px] text-amber-600">仅影响今天，次日自动恢复默认优先级。</span>
+            </span>
+          </label>
+        </section>
+      </aside>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { apiClient } from '../api/client';
+import RecallSession from '../components/RecallSession.vue';
+import type { AttemptRating, LearningChapter, LearningScope, LearningSettings, TodayLearning } from '../types/learning';
+import { normaliseScope, normaliseSettings, normaliseToday } from '../types/learning';
+
+const newRequestId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const defaultSettings: LearningSettings = {
+  daily_new_limit: null,
+  daily_review_limit: null,
+  reveal_after_seconds: null,
+  auto_advance: false,
+  show_hints: true,
+  timezone: 'Asia/Shanghai',
+};
+
+const today = ref<TodayLearning>(normaliseToday(null));
+const settings = ref<LearningSettings>({ ...defaultSettings });
+const chapters = ref<LearningChapter[]>([]);
+const selectedChapterIds = ref<string[]>([]);
+const includeUnassigned = ref(true);
+const loading = ref(false);
+const busy = ref(false);
+const savingSettings = ref(false);
+const savingScope = ref(false);
+const pageError = ref('');
+
+const completionPercent = computed(() => {
+  if (!today.value.total) return 0;
+  return Math.min(100, Math.round((today.value.completed / today.value.total) * 100));
+});
+
+const statusLabel = (status: TodayLearning['status']): string => {
+  const labels: Record<TodayLearning['status'], string> = {
+    idle: '未开始',
+    active: '学习中',
+    paused: '已暂停',
+    completed: '已完成',
+  };
+  return labels[status];
+};
+
+const statusClass = (status: TodayLearning['status']): string => {
+  if (status === 'active') return 'bg-blue-50 text-blue-700';
+  if (status === 'completed') return 'bg-emerald-50 text-emerald-700';
+  if (status === 'paused') return 'bg-amber-50 text-amber-700';
+  return 'bg-slate-100 text-slate-600';
+};
+
+const roundLabel = (round: NonNullable<TodayLearning['round']>): string => {
+  if (typeof round === 'number') return `第 ${round} 轮`;
+  const labels: Record<string, string> = {
+    morning: '早晨轮次',
+    noon: '中午轮次',
+    evening: '晚间轮次',
+  };
+  return labels[round] ?? round;
+};
+
+const applyToday = (value: TodayLearning) => {
+  today.value = value;
+  if (value.settings) settings.value = { ...settings.value, ...value.settings };
+  if (value.scope) applyScope(value.scope);
+};
+
+const applyScope = (scope: LearningScope) => {
+  selectedChapterIds.value = [...scope.chapter_ids];
+  includeUnassigned.value = scope.include_unassigned;
+};
+
+const refreshToday = async () => {
+  loading.value = true;
+  pageError.value = '';
+  try {
+    applyToday(await apiClient.getTodayLearning());
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '加载今日学习失败，请稍后重试。';
+  } finally {
+    loading.value = false;
+  }
+};
+
+const openToday = async () => {
+  busy.value = true;
+  pageError.value = '';
+  try {
+    applyToday(await apiClient.openTodayLearning({
+      day_version: today.value.state_version || undefined,
+      resume: today.value.status === 'paused',
+    }));
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '打开今日学习失败，请稍后重试。';
+  } finally {
+    busy.value = false;
+  }
+};
+
+const pauseToday = async () => {
+  busy.value = true;
+  try {
+    applyToday(await apiClient.pauseTodayLearning({ day_version: today.value.state_version || undefined }));
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '暂停学习失败，请稍后重试。';
+  } finally {
+    busy.value = false;
+  }
+};
+
+const revealCurrent = async () => {
+  const attempt = today.value.current_attempt;
+  if (!attempt) return;
+  busy.value = true;
+  try {
+    const action = await apiClient.revealLearningAttempt(attempt.id, {
+      day_unit_id: attempt.day_unit_id || undefined,
+      day_version: today.value.state_version || undefined,
+    });
+    const revealed = action.unit ?? action.attempt;
+    if (revealed) {
+      today.value.current_attempt = revealed;
+      today.value.current_card = revealed.card ?? today.value.current_card;
+    } else {
+      await refreshToday();
+    }
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '揭示答案失败，请稍后重试。';
+  } finally {
+    busy.value = false;
+  }
+};
+
+const rateCurrent = async (rating: AttemptRating) => {
+  const attempt = today.value.current_attempt;
+  if (!attempt) return;
+  busy.value = true;
+  try {
+    await apiClient.rateLearningAttempt(attempt.id, {
+      rating,
+      request_id: newRequestId(),
+      content_revision_no: attempt.content_revision_no || undefined,
+      day_unit_id: attempt.day_unit_id || undefined,
+      day_version: today.value.state_version || undefined,
+    });
+    await refreshToday();
+    if (settings.value.auto_advance && today.value.current_attempt?.id === attempt.id) {
+      await nextCard();
+    }
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '记录难度失败，请稍后重试。';
+  } finally {
+    busy.value = false;
+  }
+};
+
+const advanceDay = async () => {
+  busy.value = true;
+  try {
+    applyToday(await apiClient.advanceTodayLearning({ day_version: today.value.state_version || undefined }));
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '推进学习轮次失败，请稍后重试。';
+  } finally {
+    busy.value = false;
+  }
+};
+
+const nextCard = async () => {
+  busy.value = true;
+  try {
+    if (today.value.current_attempt && !today.value.current_attempt.completed && today.value.current_attempt.status !== 'rated') return;
+    applyToday(await apiClient.nextTodayLearning({
+      day_unit_id: today.value.current_attempt?.day_unit_id || undefined,
+      day_version: today.value.state_version || undefined,
+    }));
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '进入下一张失败，请稍后重试。';
+  } finally {
+    busy.value = false;
+  }
+};
+
+const skipCard = async () => {
+  await nextCard();
+};
+
+const toggleOverride = async (enabled: boolean) => {
+  busy.value = true;
+  try {
+    applyToday(await apiClient.overrideTodayLearning({
+      enabled,
+      day_version: today.value.state_version || undefined,
+    }));
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '切换今日覆盖失败，请稍后重试。';
+  } finally {
+    busy.value = false;
+  }
+};
+
+const clampDailyLimit = (value: number | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(100, Math.max(1, Math.round(parsed)));
+};
+
+const nullableDailyLimit = (value: number | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  return clampDailyLimit(value);
+};
+
+const saveSettings = async () => {
+  savingSettings.value = true;
+  try {
+    settings.value = await apiClient.updateLearningSettings({
+      daily_new_limit: nullableDailyLimit(settings.value.daily_new_limit),
+      daily_review_limit: nullableDailyLimit(settings.value.daily_review_limit),
+      reveal_after_seconds: settings.value.reveal_after_seconds === null ? null : Math.max(0, Number(settings.value.reveal_after_seconds) || 0),
+      auto_advance: settings.value.auto_advance,
+      show_hints: settings.value.show_hints,
+    });
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '保存设置失败，请稍后重试。';
+  } finally {
+    savingSettings.value = false;
+  }
+};
+
+const saveScope = async () => {
+  savingScope.value = true;
+  try {
+    const scope = await apiClient.updateLearningScope({
+      chapter_ids: selectedChapterIds.value,
+      include_unassigned: includeUnassigned.value,
+    });
+    applyScope(normaliseScope(scope));
+    await refreshToday();
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '保存学习范围失败，请稍后重试。';
+  } finally {
+    savingScope.value = false;
+  }
+};
+
+const loadPage = async () => {
+  loading.value = true;
+  pageError.value = '';
+  try {
+    const [todayResult, settingsResult, chapterResult] = await Promise.all([
+      apiClient.getTodayLearning(),
+      apiClient.getLearningSettings(),
+      apiClient.listLearningChapters(),
+    ]);
+    applyToday(todayResult);
+    settings.value = { ...defaultSettings, ...normaliseSettings(settingsResult) };
+    chapters.value = chapterResult;
+    if (todayResult.scope) applyScope(normaliseScope(todayResult.scope));
+    else applyScope(normaliseScope(settingsResult));
+  } catch (error) {
+    pageError.value = error instanceof Error ? error.message : '加载学习数据失败，请稍后重试。';
+  } finally {
+    loading.value = false;
+  }
+};
+
+onMounted(loadPage);
+</script>

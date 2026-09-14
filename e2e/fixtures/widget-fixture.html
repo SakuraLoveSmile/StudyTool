@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>feedback-widget component fixture</title>
+  </head>
+  <body>
+    <!--
+      组件级 fixture：直接用 <script> 加载 @feedback/web 的 UMD 产物（顶层副作用自动注册
+      custom element），运行期可切换 api-base。用于验证「同一实例」上的身份世代行为，
+      宿主集成级（换会话世代重建实例）无法覆盖这一层。
+
+      组件代码来自 e2e/node_modules/@feedback/web → 只读引用
+      frontend/vendor/feedback-web-0.2.0.tgz，不修改 frontend 任何文件。
+    -->
+    <h1 id="page-title">学习页面（fixture）</h1>
+    <p id="page-body">这里代表学习内容，用于验证组件故障不影响宿主页面。</p>
+    <button id="plain-button">普通按钮</button>
+    <div id="widget-host"></div>
+
+    <script src="/vendor/feedback-web.umd.cjs"></script>
+    <script>
+      (function () {
+        const params = new URLSearchParams(location.search);
+        const a = params.get('a') || 'http://127.0.0.1:5199';
+        const b = params.get('b') || 'http://127.0.0.1:5198';
+        const appId = params.get('appId') || 'rag';
+        const expose = params.get('expose') === '1';
+
+        const el = document.createElement('feedback-widget');
+        // 先入 DOM 再赋属性：连接后才赋值必然触发属性回调（身份世代随之递增）。
+        document.getElementById('widget-host').appendChild(el);
+        el.apiBase = a;
+        el.appId = appId;
+        el.pageLabel = 'fixture';
+        el.side = 'right';
+        el.launcherMode = 'orb';
+        el.captureMode = 'off';
+
+        /** 供测试注入 captureProvider（截图会话时序用）。 */
+        function setCaptureProvider(fn) {
+          el.captureProvider = fn;
+        }
+
+        /** 运行期切换服务身份（api-base 变化 = 完整身份切换）。 */
+        function switchBase(next) {
+          el.apiBase = next;
+        }
+
+        window.__fixture = {
+          el,
+          version: typeof FeedbackWidget !== 'undefined' ? 'umd' : 'unknown',
+          elementRegistered: Boolean(customElements.get('feedback-widget')),
+          setCaptureProvider,
+          switchBase,
+          baseA: a,
+          baseB: b,
+          snapshot() {
+            const draft = el.draft || {};
+            const blob = draft.screenshotBlob || null;
+            const snap = el.submitSnapshot || null;
+            return {
+              apiBaseAttr: el.getAttribute('api-base'),
+              apiBase: el.apiBase,
+              appId: el.appId,
+              pageLabel: el.pageLabel,
+              identityEpoch: el.identityEpoch,
+              accessToken: el.accessToken,
+              tokenExpiresAt: el.tokenExpiresAt,
+              idempotencyKey: el.idempotencyKey,
+              lastFeedbackId: el.lastFeedbackId,
+              phase: el.phase,
+              draftText: String(draft.text || ''),
+              draftBytes: blob ? blob.size : 0,
+              snapshotKey: snap ? snap.idempotencyKey : null,
+              snapshotText: snap ? snap.text : null,
+            };
+          },
+          /** 记录组件派发的 feedback-submitted。 */
+          events: [],
+        };
+        document.addEventListener('feedback-submitted', (e) => {
+          window.__fixture.events.push(e.detail);
+        });
+        if (expose) window.__fixtureReady = true;
+      })();
+    </script>
+  </body>
+</html>

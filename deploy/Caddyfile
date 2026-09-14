@@ -1,0 +1,27 @@
+{
+    http_port 8080
+    https_port 8443
+}
+
+:8081 {
+    respond /healthz "ok" 200
+}
+
+{$DOMAIN} {
+    encode gzip
+    request_body {
+        max_size 105MB
+    }
+    handle /healthz {
+        respond "ok" 200
+    }
+    @api path /api /api/*
+    handle @api {
+        reverse_proxy backend:8000
+    }
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}

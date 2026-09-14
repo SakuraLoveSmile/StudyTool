@@ -1,0 +1,17 @@
+{
+  "name": "rag-feedback-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "RAG 反馈接入的 Playwright 接入测试。独立依赖树：绝不进入 frontend/package.json、frontend/package-lock.json 或 frontend/vendor/。",
+  "scripts": {
+    "test": "playwright test --reporter=list",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  },
+  "dependencies": {
+    "@feedback/web": "file:../frontend/vendor/feedback-web-0.2.0.tgz"
+  }
+}

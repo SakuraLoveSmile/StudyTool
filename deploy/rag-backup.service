@@ -1,0 +1,11 @@
+[Unit]
+Description=RAG application offline backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/rag
+EnvironmentFile=/srv/rag/deploy/.env
+Environment=RAG_BACKUP_DIR=/srv/rag-backups
+ExecStart=/srv/rag/deploy/backup.sh

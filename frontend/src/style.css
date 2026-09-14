@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  color: #1e293b;
+  background-color: #f8fafc;
+}
+
+@layer components {
+  .page-stack {
+    @apply min-h-[calc(100vh-4rem)] max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6;
+  }
+
+  .page-toolbar {
+    @apply flex items-center justify-between gap-4 p-4 rounded-xl border border-slate-200 bg-white shadow-sm flex-wrap;
+  }
+
+  .surface {
+    @apply bg-white border border-slate-200 rounded-xl shadow-sm;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center font-medium rounded-lg transition-colors px-4 py-2 text-sm min-h-[38px] focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed select-none;
+  }
+
+  .btn-sm {
+    @apply inline-flex items-center justify-center font-medium rounded-md transition-colors px-2.5 py-1.5 text-xs min-h-[30px] focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed select-none;
+  }
+
+  .btn-primary {
+    @apply bg-blue-600 hover:bg-blue-700 text-white shadow-sm focus:ring-blue-500 border border-transparent;
+  }
+
+  .btn-secondary {
+    @apply bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 shadow-sm focus:ring-slate-400;
+  }
+
+  .btn-danger {
+    @apply bg-rose-600 hover:bg-rose-700 text-white shadow-sm focus:ring-rose-500 border border-transparent;
+  }
+
+  .reading-content {
+    @apply text-[15px] sm:text-base leading-relaxed text-slate-800;
+  }
+
+  .field {
+    @apply w-full px-3 py-2 text-sm sm:text-base rounded-lg border border-slate-300 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-h-[40px] text-slate-900 placeholder:text-slate-400;
+  }
+
+  .field-label {
+    @apply text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1 block;
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Modern native progress bar styling */
+progress {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-radius: 9999px;
+  overflow: hidden;
+  height: 6px;
+  background-color: #f1f5f9;
+}
+progress::-webkit-progress-bar {
+  background-color: #f1f5f9;
+  border-radius: 9999px;
+}
+progress::-webkit-progress-value {
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+progress::-moz-progress-bar {
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  border-radius: 9999px;
+}
+progress.progress-danger::-webkit-progress-value {
+  background: #ef4444;
+}
+progress.progress-danger::-moz-progress-bar {
+  background: #ef4444;
+}
+progress.progress-warning::-webkit-progress-value {
+  background: #f59e0b;
+}
+progress.progress-warning::-moz-progress-bar {
+  background: #f59e0b;
+}
