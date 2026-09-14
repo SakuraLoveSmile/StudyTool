@@ -79,6 +79,32 @@ docker compose --env-file deploy/.env exec backend python -m app.manage_users di
 
 初始密码至少 12 字符；首次登录必须修改。开户失败保持禁用，修复环境后对同一用户名重跑 create。已经成功开户再禁用的用户不会被 create 或 reset-password 自动启用。后台在约 1 秒内发现新账号或禁用状态。首次开放限定最多 10 位人工确认用户。
 
+## 反馈组件登记（上线时）
+
+前端内置的反馈组件（`@feedback/web`）是否出现，由**构建期**变量决定。下面两个动作必须配套，缺少任意一个都会静默失效：
+
+**A. 构建镜像时传入构建参数。** Vite 在打包时把这两个值静态内联进产物，容器运行时再设同名环境变量**无效**：
+
+```sh
+VITE_FEEDBACK_API_BASE=https://feedback.xn--fhqths51enha.cn \
+VITE_FEEDBACK_APP_ID=rag \
+docker compose --env-file deploy/.env build frontend
+```
+
+`compose.yaml` 已把这两个变量映射为 `frontend.build.args`，默认值为空 —— **默认构建出的产物不含反馈入口**，这是刻意设计，避免误发布未配置产物。构建后可用 `docker compose --env-file deploy/.env config` 确认 `build.args` 已按预期填充。
+
+**B. 在反馈服务后台登记上线后的真实来源。** 必须精确匹配浏览器实际 origin，**不要使用通配符**：
+
+- `appId`：`rag`
+- 名称：RAG 备考助手
+- 允许来源：`https://$DOMAIN`（即上线后的 HTTPS origin）
+
+若还要保留本机调试，`http://127.0.0.1:5174` 必须**单独再登记一条**；登记一个不会覆盖另一个。
+
+两者的失效方式不对称：只做 A 不做 B，灵感球会出现但提交被服务端按来源拒绝；只做 B 不做 A，产物里根本没有反馈入口（未配置时组件包也不会被加载）。
+
+截图遮挡由反馈组件自身完成：带 `data-feedback-capture-mask` 的元素（当前为导航栏账号区）在截图中被不透明覆盖，`input[type="password"]` 自动受保护。反馈原话与截图归档在反馈服务侧（最终落到 Kaneo），**本仓库不保存反馈数据**。
+
 ## 上线前核查
 
 1. 核对 Linux 架构、内存、磁盘空间及 80/443 端口使用者；不要覆盖其他站点。构建需要额外空间，镜像和缓存大小不能当作可用容量。
@@ -86,6 +112,7 @@ docker compose --env-file deploy/.env exec backend python -m app.manage_users di
 3. 确认非空 LLM/Embedding 密钥和可用视觉模型。OCR 默认复用 LLM 地址和密钥，但模型必须支持图片；不能使用 mock 通过真实验收。
 4. 两浏览器分别使用两个账号验证资料、任务、评分隔离；检查 HTTP 跳转、HTTPS 证书及 `/today` 深链接刷新。
 5. 先执行独立恢复演练，再开通首批用户。实际结果写入项目 `RELEASE.md`，历史记录不等于本次通过。
+6. 按「反馈组件登记（上线时）」完成 A（构建参数）与 B（后台登记生产 origin）；上线域名与登记的允许来源必须一致，否则球会出现但提交被拒。
 
 账号目录及后端镜像使用 UID/GID 10001。系统备份服务以 root 运行，以便停止 Docker 服务容器并读取该专属目录；只停止本 Compose 项目的 backend。
 
