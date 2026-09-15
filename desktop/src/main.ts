@@ -22,6 +22,10 @@ import {
   type LogLevel,
 } from './diagnostics';
 import { buildDiagnosticArchive, writeArchiveAtomically } from './diagnostic-export';
+import {
+  classifyConnectionTestTransportFailure,
+  normalizeConnectionTestResult,
+} from './connection-test';
 
 const PORT = 18764;
 const HOST = '127.0.0.1';
@@ -990,6 +994,7 @@ function setupIpcHandlers() {
 
   ipcMain.handle('desktop:testConnection', async (event, serviceType, customConfig) => {
     validateIpcSender(event);
+    const startedAt = Date.now();
     try {
       const res = await makeBackendRequest('POST', '/api/desktop/test-connection', {
         service_type: serviceType,
@@ -999,9 +1004,28 @@ function setupIpcHandlers() {
         baidu_ocr_url: customConfig?.baidu_ocr_url,
         baidu_ocr_token: customConfig?.baidu_ocr_token,
       });
-      return res.data;
+      const outcome = normalizeConnectionTestResult(
+        serviceType,
+        res.status,
+        res.data,
+        Date.now() - startedAt
+      );
+      if (outcome.event === 'connection_test.invalid_response') {
+        diagWarn(outcome.event, outcome.message, outcome.fields);
+      } else if (outcome.event) {
+        diagError(outcome.event, outcome.message, outcome.fields);
+      }
+      return outcome.result;
     } catch (err: any) {
-      return { ok: false, message: `连接测试请求失败: ${err.message}` };
+      // Transport-level failure: the local backend itself could not be reached. This is a
+      // different class of problem from the backend reaching the LLM and failing.
+      const failure = classifyConnectionTestTransportFailure(
+        serviceType,
+        err,
+        Date.now() - startedAt
+      );
+      diagError(failure.event, failure.message, failure.fields);
+      return failure.result;
     }
   });
 

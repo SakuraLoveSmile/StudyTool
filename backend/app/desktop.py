@@ -25,6 +25,14 @@ from starlette.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import db_session
+from app.diagnostics import (
+    call_context,
+    extract_provider_request_id,
+    extract_safe_exception_info,
+    log_diagnostic,
+    sanitize_endpoint,
+    sanitize_text,
+)
 
 import threading
 
@@ -588,6 +596,194 @@ class ConnectionTestRequest(BaseModel):
     baidu_ocr_token: Optional[str] = None
 
 
+# Connectivity probe timeout. Kept as a named constant so the value that is logged
+# (`timeout_config`) is the same value that the request actually used.
+LLM_TEST_TIMEOUT_SECONDS = 20.0
+MAX_UPSTREAM_ERROR_SUMMARY_LENGTH = 300
+
+
+def _extract_upstream_error_summary(res: httpx.Response) -> Dict[str, Any]:
+    """
+    Extracts a masked, length-limited summary from an upstream error response.
+
+    Only a provider error code and a scrubbed, truncated message ever leave this function:
+    the raw body, request headers, credentials and model output are never returned or logged.
+    A non-JSON body is described by its format instead of its content.
+    """
+    content_type = (res.headers.get("content-type") or "").split(";")[0].strip().lower()
+    summary: Dict[str, Any] = {"body_format": content_type or "unknown"}
+    declared_length = res.headers.get("content-length")
+    if declared_length and declared_length.isdigit():
+        summary["bytes"] = int(declared_length)
+
+    try:
+        data = res.json()
+    except Exception:
+        summary["reason_code"] = "non_json_error_body"
+        return summary
+
+    if not isinstance(data, dict):
+        summary["reason_code"] = "unexpected_error_body"
+        return summary
+
+    error = data.get("error")
+    code: Any = None
+    message: Any = None
+    if isinstance(error, dict):
+        code = error.get("code") or error.get("type")
+        message = error.get("message")
+    elif isinstance(error, str):
+        message = error
+    if code is None:
+        code = data.get("code") or data.get("error_code")
+    if message is None:
+        message = data.get("message") or data.get("msg")
+
+    if code is not None and str(code).strip():
+        summary["reason_code"] = str(code).strip()[:80]
+    if isinstance(message, str) and message.strip():
+        summary["detail"] = sanitize_text(message).strip()[:MAX_UPSTREAM_ERROR_SUMMARY_LENGTH]
+    return summary
+
+
+def _extract_llm_message_content(data: Any) -> Optional[str]:
+    """Reads `choices[0].message.content`, returning None when the response shape is unexpected."""
+    if not isinstance(data, dict):
+        return None
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    return content if isinstance(content, str) else None
+
+
+def _classify_llm_http_status(status_code: int) -> str:
+    """Maps an upstream HTTP status to a stable, searchable failure code."""
+    if status_code == 401:
+        return "auth_failed"
+    if status_code == 403:
+        return "permission_denied"
+    if status_code == 404:
+        return "endpoint_not_found"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "upstream_error"
+    if 400 <= status_code < 500:
+        return "upstream_rejected"
+    return "unexpected_status"
+
+
+def _classify_llm_exception(exc: BaseException) -> str:
+    """Maps a transport exception to a stable, searchable failure code."""
+    if isinstance(exc, httpx.ConnectTimeout):
+        return "connect_timeout"
+    if isinstance(exc, httpx.ReadTimeout):
+        return "read_timeout"
+    if isinstance(exc, httpx.WriteTimeout):
+        return "write_timeout"
+    if isinstance(exc, httpx.PoolTimeout):
+        return "pool_timeout"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.ConnectError):
+        return "connect_failed"
+    if isinstance(exc, httpx.NetworkError):
+        return "network_error"
+    return "unexpected_error"
+
+
+def _llm_http_failure_message(status_code: int, model: str) -> str:
+    """Short, actionable Chinese reason for a non-200 upstream response."""
+    if status_code == 401:
+        return "LLM API Key 无效或未授权 (401)"
+    if status_code == 403:
+        return "LLM 访问被拒绝 (403)，请检查密钥权限或来源限制"
+    if status_code == 404:
+        return f"LLM 模型或端点不存在 (404: {model})"
+    if status_code == 429:
+        return "LLM 服务限流 (429)，请稍后重试"
+    if status_code >= 500:
+        return f"LLM 服务端异常（HTTP {status_code}），请稍后重试"
+    return f"LLM 服务返回错误（HTTP {status_code}）"
+
+
+_LLM_EXCEPTION_MESSAGES = {
+    "connect_timeout": "LLM 连接超时，请检查网络或 Base URL",
+    "read_timeout": "LLM 响应读取超时，服务端长时间无响应",
+    "write_timeout": "LLM 请求写入超时",
+    "pool_timeout": "LLM 连接池等待超时",
+    "timeout": "LLM 请求超时",
+    "connect_failed": "无法连接 LLM 服务，请检查网络或 Base URL",
+    "network_error": "LLM 网络异常",
+    "unexpected_error": "LLM 测试发生未预期错误",
+}
+
+
+def _llm_test_failure(
+    *,
+    call_id: str,
+    model: str,
+    endpoint: str,
+    error_type: str,
+    message: str,
+    failed_stage: str,
+    duration_ms: float,
+    status_code: Optional[int] = None,
+    provider_request_id: Optional[str] = None,
+    reason_code: Optional[str] = None,
+    detail: Optional[str] = None,
+    note: Optional[str] = None,
+    exception_info: Optional[Dict[str, Any]] = None,
+    exception_type: Optional[str] = None,
+    level: int = logging.ERROR,
+) -> Dict[str, Any]:
+    """
+    Logs one LLM connectivity-test failure and returns the client envelope.
+
+    Every failure carries the correlation id, model, sanitized endpoint, elapsed time and
+    the stage it died in; network failures additionally carry the safe exception chain and
+    stack. Response fields are preserved from the original contract (`ok` / `service` /
+    `message` / `status_code`) with `call_id` and `error_type` added.
+    """
+    if exception_type is None and exception_info:
+        exception_type = exception_info.get("exception_type")
+    log_diagnostic(
+        "llm_test_failed",
+        level=level,
+        message=message,
+        service="llm",
+        model=model,
+        endpoint=endpoint,
+        status_code=status_code,
+        provider_request_id=provider_request_id,
+        duration_ms=duration_ms,
+        error_type=error_type,
+        failed_stage=failed_stage,
+        reason_code=reason_code,
+        detail=detail,
+        note=note,
+        exception_type=exception_type,
+        exception_info=exception_info,
+    )
+    result: Dict[str, Any] = {
+        "ok": False,
+        "service": "llm",
+        "error_type": error_type,
+        "call_id": call_id,
+        "message": message,
+    }
+    if status_code is not None:
+        result["status_code"] = status_code
+    return result
+
+
 @desktop_router.post("/test-connection")
 async def test_service_connection(body: ConnectionTestRequest):
     """Test connectivity for LLM, Embedding, or Baidu OCR using a real, capability-verifying probe.
@@ -603,37 +799,140 @@ async def test_service_connection(body: ConnectionTestRequest):
         base_url = (body.base_url or settings.LLM_BASE_URL).rstrip("/")
         model = body.model or settings.LLM_MODEL
         api_key = body.api_key or settings.LLM_API_KEY
-        if not api_key:
-            raise HTTPException(status_code=400, detail="LLM API Key 未配置")
+        endpoint = sanitize_endpoint(f"{base_url}/chat/completions")
 
-        url = f"{base_url}/chat/completions"
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": 'Please reply with exactly: {"status":"ok","code":200}'}],
-            "max_tokens": 50,
-            "temperature": 0.0,
-        }
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                res = await client.post(url, json=payload, headers=headers)
-                if res.status_code == 200:
-                    data = res.json()
-                    content = data["choices"][0]["message"]["content"]
-                    if "ok" in content.lower() or "200" in content:
-                        return {"ok": True, "service": "llm", "message": f"LLM 服务测试成功 (模型: {model})"}
-                    return {"ok": True, "service": "llm", "message": "LLM 服务响应成功"}
-                return {
-                    "ok": False,
-                    "service": "llm",
-                    "status_code": res.status_code,
-                    "message": f"LLM 服务返回错误（HTTP {res.status_code}）",
-                }
-        except Exception as exc:
-            return {"ok": False, "service": "llm", "message": f"LLM 连接失败: {type(exc).__name__}"}
+        with call_context() as call_id:
+            if not api_key:
+                return _llm_test_failure(
+                    call_id=call_id,
+                    model=model,
+                    endpoint=endpoint,
+                    error_type="missing_credentials",
+                    message="LLM API Key 未配置，请先填写密钥后再测试",
+                    failed_stage="precheck",
+                    duration_ms=0.0,
+                    level=logging.WARNING,
+                )
+
+            url = f"{base_url}/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": 'Please reply with exactly: {"status":"ok","code":200}'}],
+                "max_tokens": 50,
+                "temperature": 0.0,
+            }
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+
+            log_diagnostic(
+                "llm_test_started",
+                level=logging.INFO,
+                message=f"开始测试 LLM 连通性 (模型: {model})",
+                service="llm",
+                model=model,
+                endpoint=endpoint,
+                timeout_config=LLM_TEST_TIMEOUT_SECONDS,
+            )
+
+            t_start = time.monotonic()
+            try:
+                async with httpx.AsyncClient(timeout=LLM_TEST_TIMEOUT_SECONDS) as client:
+                    res = await client.post(url, json=payload, headers=headers)
+            except Exception as exc:
+                duration_ms = round((time.monotonic() - t_start) * 1000.0, 2)
+                error_type = _classify_llm_exception(exc)
+                exception_info = extract_safe_exception_info(exc, stage="request_send")
+                return _llm_test_failure(
+                    call_id=call_id,
+                    model=model,
+                    endpoint=endpoint,
+                    error_type=error_type,
+                    message=_LLM_EXCEPTION_MESSAGES.get(error_type, _LLM_EXCEPTION_MESSAGES["unexpected_error"]),
+                    failed_stage=exception_info.get("failed_stage", "request_send"),
+                    duration_ms=duration_ms,
+                    exception_info=exception_info,
+                )
+
+            status_code = res.status_code
+            provider_req_id = extract_provider_request_id(res.headers)
+
+            if status_code != 200:
+                summary = _extract_upstream_error_summary(res)
+                duration_ms = round((time.monotonic() - t_start) * 1000.0, 2)
+                return _llm_test_failure(
+                    call_id=call_id,
+                    model=model,
+                    endpoint=endpoint,
+                    error_type=_classify_llm_http_status(status_code),
+                    message=_llm_http_failure_message(status_code, model),
+                    failed_stage="http_status",
+                    duration_ms=duration_ms,
+                    status_code=status_code,
+                    provider_request_id=provider_req_id,
+                    reason_code=summary.get("reason_code"),
+                    detail=summary.get("detail"),
+                    note=summary.get("body_format"),
+                    exception_type="HTTPStatusError",
+                )
+
+            try:
+                data = res.json()
+            except Exception as exc:
+                duration_ms = round((time.monotonic() - t_start) * 1000.0, 2)
+                exception_info = extract_safe_exception_info(exc, stage="response_parse")
+                return _llm_test_failure(
+                    call_id=call_id,
+                    model=model,
+                    endpoint=endpoint,
+                    error_type="invalid_json",
+                    message="LLM 返回内容不是合法 JSON，无法确认服务可用",
+                    failed_stage="response_parse",
+                    duration_ms=duration_ms,
+                    status_code=status_code,
+                    provider_request_id=provider_req_id,
+                    note=(res.headers.get("content-type") or "").split(";")[0].strip().lower() or "unknown",
+                    exception_info=exception_info,
+                )
+
+            content = _extract_llm_message_content(data)
+            duration_ms = round((time.monotonic() - t_start) * 1000.0, 2)
+            if content is None:
+                return _llm_test_failure(
+                    call_id=call_id,
+                    model=model,
+                    endpoint=endpoint,
+                    error_type="unexpected_response",
+                    message="LLM 响应结构缺少 choices[0].message.content",
+                    failed_stage="response_structure",
+                    duration_ms=duration_ms,
+                    status_code=status_code,
+                    provider_request_id=provider_req_id,
+                )
+
+            log_diagnostic(
+                "llm_test_succeeded",
+                level=logging.INFO,
+                message=f"LLM 连通性测试成功 (模型: {model})",
+                service="llm",
+                model=model,
+                endpoint=endpoint,
+                status_code=status_code,
+                provider_request_id=provider_req_id,
+                duration_ms=duration_ms,
+            )
+            matched = "ok" in content.lower() or "200" in content
+            return {
+                "ok": True,
+                "service": "llm",
+                "call_id": call_id,
+                "message": (
+                    f"LLM 服务测试成功 (模型: {model})"
+                    if matched
+                    else "LLM 服务响应成功"
+                ),
+            }
 
     elif service == "embedding":
         base_url = (body.base_url or settings.EMBEDDING_BASE_URL).rstrip("/")

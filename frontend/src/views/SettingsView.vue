@@ -179,8 +179,11 @@
             <Sparkles v-else class="h-3.5 w-3.5 text-indigo-500" />
             <span>{{ testingLlm ? '测试中...' : '测试 LLM 连通性' }}</span>
           </button>
-          <span v-if="llmTestResult" class="text-xs" :class="llmTestResult.ok ? 'text-emerald-600' : 'text-rose-600'">
+          <span v-if="llmTestResult" class="text-right text-xs" :class="llmTestResult.ok ? 'text-emerald-600' : 'text-rose-600'">
             {{ llmTestResult.message }}
+            <span v-if="!llmTestResult.ok && llmTestResult.callId" class="block text-slate-400" :title="llmTestResult.errorType">
+              诊断编号 {{ llmTestResult.callId }}（可在日志页搜索）
+            </span>
           </span>
         </div>
       </section>
@@ -580,7 +583,7 @@ const form = reactive({
 });
 
 const testingLlm = ref(false);
-const llmTestResult = ref<{ ok: boolean; message: string } | null>(null);
+const llmTestResult = ref<{ ok: boolean; message: string; callId?: string; errorType?: string } | null>(null);
 
 const testingEmbedding = ref(false);
 const embeddingTestResult = ref<{ ok: boolean; message: string } | null>(null);
@@ -636,7 +639,12 @@ const testLlm = async () => {
       model: form.llm_model,
       api_key: form.llm_api_key || undefined,
     });
-    llmTestResult.value = { ok: res.ok, message: res.message };
+    llmTestResult.value = {
+      ok: !!res?.ok,
+      message: res?.message ?? 'LLM 测试未返回结果',
+      callId: res?.call_id,
+      errorType: res?.error_type,
+    };
   } catch (err: any) {
     llmTestResult.value = { ok: false, message: err.message };
   } finally {

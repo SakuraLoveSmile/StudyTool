@@ -223,11 +223,23 @@ export function useDesktop() {
     if (isDesktop.value && window.desktopAPI) {
       return await window.desktopAPI.testConnection(serviceType, customConfig);
     } else {
-      const res = await axios.post('/api/desktop/test-connection', {
-        service_type: serviceType,
-        ...customConfig,
-      });
-      return res.data;
+      try {
+        const res = await axios.post('/api/desktop/test-connection', {
+          service_type: serviceType,
+          ...customConfig,
+        });
+        return res.data;
+      } catch (err: any) {
+        // Surface the backend's own reason (e.g. HTTPException `detail`) instead of the
+        // generic axios "Request failed with status code 400".
+        const detail = err?.response?.data?.detail;
+        return {
+          ok: false,
+          service: serviceType,
+          error_type: 'backend_error',
+          message: typeof detail === 'string' ? detail : err.message,
+        };
+      }
     }
   };
 
