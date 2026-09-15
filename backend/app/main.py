@@ -91,6 +91,20 @@ log_diagnostic(
     phase="bootstrap",
 )
 
+# Startup hang watchdog: if the process is still starting after 60s, dump every thread's
+# stack to stderr once. A frozen build that blocks during import produces no traceback and
+# no further log records, leaving "the backend never became ready" as the only symptom;
+# the dump names the exact line it is stuck on. Disarmed as soon as startup completes.
+_startup_dump_armed = False
+if _running_as_script:
+    try:
+        import faulthandler
+
+        faulthandler.dump_traceback_later(60, repeat=False, exit=False)
+        _startup_dump_armed = True
+    except Exception:  # pragma: no cover - diagnostics must never block startup
+        _startup_dump_armed = False
+
 def _importing(module_name: str) -> None:
     """Records which business module import is in progress.
 
@@ -177,6 +191,13 @@ async def lifespan(app: FastAPI):
         model=settings.LLM_MODEL,
         endpoint=sanitize_endpoint(settings.LLM_BASE_URL),
     )
+    if _startup_dump_armed:
+        try:
+            import faulthandler
+
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:  # pragma: no cover
+            pass
     try:
         yield
     finally:
