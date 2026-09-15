@@ -212,10 +212,63 @@
 
 发布说明已改写为修复导向（本版修复三项：日志页加载、非 UTF-8 控制台中文日志、冻结后台启动阻塞），并列出该版本包含的日志能力与已知限制。
 
+#### LLM 测试失败可定位与桌面来源预检排查（2026-09-15）
+
+##### T2：LLM 连通性测试失败可定位（已实现，自动化验证通过）
+
+此前 `/api/desktop/test-connection` 的 LLM 分支只在请求前写一条泛化 INFO：失败时不记录状态码、耗时、端点，`except` 直接丢弃异常对象，客户端只拿到 `LLM 连接失败: ConnectError` 这类无法定位的文案；缺失密钥时抛 `HTTPException(400)`，IPC 层把 `{detail}` 原样返回，设置页读到的是 `undefined`。
+
+本轮复用既有诊断设施（`app.diagnostics`）改造该分支，新增三个事件：
+
+| 事件 | 时机 | 关键字段 |
+| --- | --- | --- |
+| `llm_test_started` | 发请求前 | `call_id` `model` `endpoint` `timeout_config` |
+| `llm_test_succeeded` | HTTP 200 且结构可解析 | `call_id` `status_code` `provider_request_id` `duration_ms` |
+| `llm_test_failed` | 任一失败分支 | `call_id` `error_type` `failed_stage` `status_code` `model` `endpoint` `duration_ms` `provider_request_id`，以及上游 `reason_code`/`detail`（错误码与脱敏限长摘要）、`note`（响应格式）、`exception_info`（网络异常的安全异常链与堆栈） |
+
+- 每次测试经 `call_context()` 生成独立 `call_id`，同时写入日志并随响应返回；`call_id` 由格式化器从上下文解析，因此开始/成功/失败三条记录可用同一编号串起来。设置页失败时显示简短原因与“诊断编号”，可在日志页直接搜索该编号。
+- `error_type` 为稳定可检索的失败分类：`missing_credentials`、`auth_failed`(401)、`permission_denied`(403)、`endpoint_not_found`(404)、`rate_limited`(429)、`upstream_error`(5xx)、`upstream_rejected`(其余 4xx)、`connect_failed`、`connect_timeout`、`read_timeout`、`invalid_json`、`unexpected_response`。
+- 安全边界：上游错误只提取错误码与经 `sanitize_text` 脱敏、限长 300 字符的摘要；非 JSON 错误体只记录状态与 `content-type`，不落完整响应体；API Key、请求头与模型回答均不进入日志。
+- 响应字段向后兼容：保留 `ok` / `service` / `message` / `status_code`，新增 `call_id`、`error_type`。缺失密钥由 400 改为结构化失败响应，使设置页能显示原因而非空文案（其余服务的缺密钥行为未改动）。
+- 桌面 IPC 区分两类失败：`connection_test.unreachable`（传输层错误——无法请求本地后端）与 `connection_test.failed`（本地后端可达、但 LLM 探测失败），后者记录 `status_code`、`call_id`、`reason_code`；后端返回非 JSON 时记 `connection_test.invalid_response`。
+
+**自动化验证**：新增 `backend/tests/test_llm_connection_test_diagnostics.py`（25 项），用 `httpx.AsyncClient.post` 桩隔离模拟 401 / 403 / 429 / 500 / 503、连接失败、连接超时、读取超时、非 JSON 的 200、四种响应结构异常、缺失密钥与成功路径；断言响应字段与 JSONL 日志一一对应（含 `call_id` 相等、`endpoint` 已脱敏去查询串），并以 `sk-live-…` 与模型回答标记为金丝雀断言凭据与回答不落盘、上游摘要保留但被掩码。桌面侧把失败分类抽成纯模块 `desktop/src/connection-test.ts` 并新增 `desktop/src/tests/connection-test.test.ts`（8 项），覆盖成功、后端报告失败、`{detail}` 归一化、非 JSON 响应与传输层不可达的区分。后端全量 **233 passed**，桌面 **46 passed**，前端 `vue-tsc + vite build` 零报错。
+
+**未以 mock 替代的部分**：真实密钥下的 LLM 测试与真实上游 401/429 仍需在桌面客户端里跑一遍（见下方未完成项）。
+
+##### T1：桌面 Feedback 登录的来源与预检排查（结论：阻塞点不是缺少白名单条目）
+
+线上只读探测结果（2026-09-15，未改动任何服务端配置、未使用任何凭据）：
+
+| 请求 | 结果 |
+| --- | --- |
+| `OPTIONS /api/auth/login`，`Origin: http://127.0.0.1:18764` | `404`，**无任何 `Access-Control-Allow-*` 响应头** |
+| `OPTIONS /api/auth/login`，`Origin: http://127.0.0.1:5174`（文档记录为已登记） | `404`，同样无 CORS 头 |
+| `OPTIONS /api/auth/login`，`Origin` 为服务自身 | `404`，同样无 CORS 头 |
+| `OPTIONS /api/feedback`，`Origin: http://127.0.0.1:18764` | `404`，无 CORS 头 |
+| `POST /api/auth/login`（组件契约：`clientLabel=web:rag`、`appId=rag`，无效凭据） | `401 invalid_credentials`，且**无 `Access-Control-Allow-Origin`**，未返回 `403 origin_not_allowed` |
+
+结论：线上 `/api/auth/*` 与 `/api/feedback*` 对预检一律返回应用自身的 `404 接口不存在`，且**对任何来源都不回显 CORS 头——包括文档记录为已登记的 5174**。因此本次登录失败不能只归因于“18764 未加入白名单”：要么线上运行的版本尚未包含按应用回显来源的预检中间件（该实现在服务端仓库 `apps/server/src/app.ts`），要么生产 `appId=rag` 的 `allowed_origins` 实际为空。两种情形下，浏览器预检都拿不到 `Access-Control-Allow-Origin`，真实 POST 不会被放行。
+
+**需要线上授权的修复路径（本计划不执行部署）**：
+1. 核对生产 Feedback 服务运行的版本是否包含 `/api/auth/*` 与 `/api/feedback*` 的预检处理（对已登记来源返回 `204` + 匹配的 `Access-Control-Allow-Origin`）；如缺失，需升级/重新部署该服务。
+2. 在 `appId=rag` 的允许来源中**追加** `http://127.0.0.1:18764`（保留既有来源）。
+3. 复核未登记来源仍被拒绝；禁止通过放宽为全开放跨域或关闭浏览器安全检查来绕过。
+
+**发布前必须执行的预检清单**（已同步至下方“未完成项与阻塞”，防止后续部署遗漏）：凡涉及 Feedback 或桌面端口的发布，均须执行
+
+```
+OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
+  Origin: http://127.0.0.1:18764
+  Access-Control-Request-Method: POST
+```
+
+断言返回 `204` 且 `access-control-allow-origin` 精确等于 `http://127.0.0.1:18764`；同时用一个未登记来源断言其被拒绝（不得返回匹配的 CORS 头）。
+
 #### 未完成项与阻塞（因此状态仍是「实现中」）
 
 - **Windows 实机安装未做**：1.0.2 已在 Windows runner 上完成构建与冻结后台冒烟（就绪/首页/干净退出），但「在干净 Windows 10/11 x64 机器上安装并运行」仍未做——中文路径、启动失败弹窗导出、关闭重开、覆盖升级保留资料，均不得以 CI 结果替代。
-- **生产反馈服务来源登记未核对**：`http://127.0.0.1:18764` 是否已在 `appId=rag` 的允许来源中，需用生产管理员凭据在 `https://feedback.xn--fhqths51enha.cn/admin`（应用页）核对；如缺失，仅追加该来源并保留既有来源。此为本轮唯一需要线上配置变更的操作，须由用户授权后执行，本轮未改动任何服务端配置。
+- **生产反馈服务来源登记与预检均未通过（阻塞桌面登录）**：线上只读探测显示 `/api/auth/login` 的 `OPTIONS` 预检对**任何**来源（含文档记录为已登记的 `http://127.0.0.1:5174`）都返回 `404` 且无 CORS 头，因此登录失败不能只靠追加白名单条目解决。需用生产管理员凭据在 `https://feedback.xn--fhqths51enha.cn/admin`（应用页）核对两件事：运行版本是否包含预检/CORS 中间件、`appId=rag` 的允许来源是否为 `http://127.0.0.1:18764`（追加时保留既有来源）。此为本轮唯一需要线上变更（可能含服务升级）的操作，须由用户授权后执行；本轮未改动任何服务端配置。**发布前预检清单**：以 `Origin: http://127.0.0.1:18764` 对 `/api/auth/login` 发 `OPTIONS`，断言 `204` 且 `access-control-allow-origin` 精确匹配，并用未登记来源断言被拒绝。
 - **反馈组件实际挂载未验证**：构建期注入与产物门禁只证明「配置已注入」，不证明组件挂载；挂载需在打包后的应用中观察（登录完成、外壳可见时才会加载）。
 - **桌面端 UI 路径未实跑**：日志页筛选/分页/详情复制/自动刷新、原生保存对话框取消路径、前端错误上报的实际落盘，均需在真实桌面客户端里跑一遍。1.0.2 的日志页 IPC 缺陷（响应式 Proxy 无法克隆）已证明这类问题不会被现有自动化覆盖，故此项**不可省略**；1.0.3 修复后仍需在真实客户端复核一次。
 
