@@ -23,6 +23,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def configure_console_encoding() -> None:
+    """Keep release logs printable on Windows runners with legacy code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def run_command(cmd: list[str], cwd: Path, description: str) -> None:
     print(f"\n[Release Pipeline] >>> {description}...")
     print(f"Executing: {' '.join(cmd)} in {cwd}")
@@ -175,4 +182,5 @@ def main():
 
 
 if __name__ == "__main__":
+    configure_console_encoding()
     main()
