@@ -38,6 +38,65 @@ export interface DesktopUpdateStatus {
   error?: string;
 }
 
+export interface DesktopLogMeta {
+  ok: boolean;
+  sessionId: string;
+  appVersion: string;
+  platform: string;
+  arch: string;
+  logDir: string;
+  sources: string[];
+  levels: string[];
+  pageSize: number;
+  defaultRangeMs: number;
+  maxRangeMs: number;
+}
+
+export interface DesktopLogEntry {
+  timestamp: string;
+  timestamp_ms: number;
+  level: string;
+  source: string;
+  event: string;
+  message: string;
+  session_id: string | null;
+  task_id?: string;
+  [key: string]: unknown;
+}
+
+export interface DesktopLogQuery {
+  from: number;
+  to: number;
+  levels?: string[];
+  sources?: string[];
+  sessionId?: string;
+  taskId?: string;
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface DesktopLogQueryResult {
+  ok: boolean;
+  entries: DesktopLogEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  scannedBytes: number;
+  scanTruncated: boolean;
+  unavailable: string[];
+}
+
+export interface DesktopDiagnosticExportResult {
+  ok: boolean;
+  canceled?: boolean;
+  path?: string;
+  entries?: number;
+  truncated?: boolean;
+  message?: string;
+}
+
 declare global {
   interface Window {
     desktopAPI?: {
@@ -60,6 +119,11 @@ declare global {
       restoreBackup(archivePath: string): Promise<any>;
       openExternal(url: string): void;
       openLogDirectory(): void;
+      /** Diagnostics (test build). Read-only: there is no delete/clear channel. */
+      getLogMeta?(): Promise<DesktopLogMeta>;
+      queryLogs?(params: DesktopLogQuery): Promise<DesktopLogQueryResult>;
+      reportLog?(entries: unknown[]): Promise<{ ok: boolean; accepted: number; dropped: number }>;
+      exportDiagnostics?(params: { from: number; to: number }): Promise<DesktopDiagnosticExportResult>;
     };
   }
 }

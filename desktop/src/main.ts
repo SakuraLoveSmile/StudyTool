@@ -2,13 +2,26 @@ import { app, BrowserWindow, dialog, ipcMain, shell, session } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import os from 'os';
 import http from 'http';
 import { autoUpdater } from 'electron-updater';
 import { CancellationToken } from 'electron-updater/out/types';
 import { isPortAvailable } from './port-checker';
 import { CredentialsStore, CredentialsUpdateRequest } from './credentials-store';
 import { BackendManager } from './backend-manager';
+import {
+  ALL_SOURCES,
+  DEFAULT_PAGE_SIZE,
+  queryLogs,
+  type LogQueryOptions,
+  type LogQueryResult,
+} from './log-store';
+import {
+  DiagnosticsLogger,
+  getDiagnostics,
+  initDiagnostics,
+  type LogLevel,
+} from './diagnostics';
+import { buildDiagnosticArchive, writeArchiveAtomically } from './diagnostic-export';
 
 const PORT = 18764;
 const HOST = '127.0.0.1';
@@ -70,7 +83,13 @@ function setupAutoUpdater(): void {
       error: undefined,
     })
   );
-  autoUpdater.on('error', (err) => publishUpdateState({ state: 'error', error: err.message || '更新服务不可用' }));
+  autoUpdater.on('error', (err) => {
+    diagError('update.error', '自动更新出错', {
+      error_type: err?.name,
+      error_message: err?.message,
+    });
+    return publishUpdateState({ state: 'error', error: err.message || '更新服务不可用' });
+  });
 }
 
 async function checkForUpdates(): Promise<UpdateState> {
@@ -82,6 +101,10 @@ async function checkForUpdates(): Promise<UpdateState> {
     publishUpdateState({ state: 'checking', error: undefined });
     await autoUpdater.checkForUpdates();
   } catch (err: any) {
+    diagError('update.check_failed', '检查更新失败', {
+      error_type: err?.name,
+      error_message: err?.message,
+    });
     publishUpdateState({ state: 'error', error: err?.message || '检查更新失败' });
   }
   return updateState;
@@ -97,6 +120,10 @@ async function downloadUpdate(): Promise<UpdateState> {
     await autoUpdater.downloadUpdate(cancellation);
   } catch (err: any) {
     if (!cancellation.cancelled) {
+      diagError('update.download_failed', '下载更新失败', {
+        error_type: err?.name,
+        error_message: err?.message,
+      });
       publishUpdateState({ state: 'error', error: err?.message || '下载更新失败' });
     }
   } finally {
@@ -169,7 +196,302 @@ if (!gotTheLock) {
 // 2. Generate random 32-byte instance token for this launch
 const instanceToken = crypto.randomBytes(32).toString('hex');
 const credentialsStore = new CredentialsStore();
-backendManager = new BackendManager(PORT, HOST, instanceToken, credentialsStore, app.isPackaged);
+backendManager = new BackendManager(PORT, HOST, instanceToken, credentialsStore, app.isPackaged, {
+  onEvent: (event, level, message, fields) => {
+    // Resolved lazily: the logger is initialized immediately after this and the hook is
+    // only ever invoked from process lifecycle callbacks.
+    getDiagnostics()?.log(level, event, message, fields ?? {});
+  },
+});
+
+// 2b. Diagnostics. The persistent log is initialized HERE — before the backend is
+// spawned — so a startup failure still leaves evidence on disk. One session id is minted
+// per launch and shared by the desktop / backend / frontend log streams.
+const SESSION_ID =
+  (process.env.RAG_SESSION_ID || '').trim() || `sess-${crypto.randomBytes(4).toString('hex')}`;
+process.env.RAG_SESSION_ID = SESSION_ID;
+process.env.RAG_APP_VERSION = app.getVersion();
+
+const LOG_DIR = backendManager.getLogDir();
+const desktopLogger: DiagnosticsLogger = initDiagnostics({
+  dir: LOG_DIR,
+  source: 'desktop',
+  sessionId: SESSION_ID,
+  appVersion: app.getVersion(),
+});
+/** Frontend reports arrive over restricted IPC and land in their own file. */
+const frontendLogger: DiagnosticsLogger = new DiagnosticsLogger({
+  dir: LOG_DIR,
+  source: 'frontend',
+  sessionId: SESSION_ID,
+  appVersion: app.getVersion(),
+  maxRecordsPerSecond: 50,
+  aggregationWindowMs: 3000,
+});
+
+const DEFAULT_RANGE_MS = 24 * 60 * 60 * 1000;
+const EXPORT_MAX_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+const LOG_LEVELS = new Set(['DEBUG', 'INFO', 'WARN', 'ERROR']);
+const LOG_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+/** Upper bound on records a single frontend report call may carry. */
+const FRONTEND_REPORT_MAX_BATCH = 100;
+
+/** Set once the startup path has completed; used to keep failure handling honest. */
+let appReady = false;
+
+function diagInfo(event: string, message: string, fields: Record<string, unknown> = {}): void {
+  try {
+    desktopLogger.info(event, message, fields);
+  } catch {
+    /* diagnostics must never break startup */
+  }
+}
+
+function diagWarn(event: string, message: string, fields: Record<string, unknown> = {}): void {
+  try {
+    desktopLogger.warn(event, message, fields);
+  } catch {
+    /* ignore */
+  }
+}
+
+function diagError(event: string, message: string, fields: Record<string, unknown> = {}): void {
+  try {
+    desktopLogger.error(event, message, fields);
+  } catch {
+    /* ignore */
+  }
+}
+
+function currentLogDir(): string {
+  return getDiagnostics()?.getLogDir() || backendManager!.getLogDir();
+}
+
+/**
+ * Normalizes an untrusted time range from the renderer: defaults to 24h, never extends
+ * beyond 7 days, and never reaches into the future.
+ */
+function normalizeRange(params: unknown): { from: number; to: number } {
+  const source = (params ?? {}) as Record<string, unknown>;
+  const now = Date.now();
+  let to = Number(source.to);
+  if (!Number.isFinite(to) || to <= 0) to = now;
+  if (to > now + 60_000) to = now;
+  let from = Number(source.from);
+  if (!Number.isFinite(from) || from <= 0 || from > to) from = to - DEFAULT_RANGE_MS;
+  if (to - from > EXPORT_MAX_RANGE_MS) from = to - EXPORT_MAX_RANGE_MS;
+  return { from: Math.floor(from), to: Math.floor(to) };
+}
+
+function logMeta(): Record<string, unknown> {
+  return {
+    ok: true,
+    sessionId: SESSION_ID,
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    logDir: currentLogDir(),
+    sources: ALL_SOURCES,
+    levels: [...LOG_LEVELS],
+    pageSize: DEFAULT_PAGE_SIZE,
+    defaultRangeMs: DEFAULT_RANGE_MS,
+    maxRangeMs: EXPORT_MAX_RANGE_MS,
+  };
+}
+
+/** Validates and bounds every viewer query parameter before it touches the filesystem. */
+function handleQueryLogs(params: unknown): LogQueryResult {
+  const source = (params ?? {}) as Record<string, unknown>;
+
+  const sources = Array.isArray(source.sources)
+    ? (source.sources as unknown[]).filter(
+        (item): item is string => typeof item === 'string' && (ALL_SOURCES as string[]).includes(item)
+      )
+    : [];
+
+  const levels = Array.isArray(source.levels)
+    ? (source.levels as unknown[])
+        .filter((item): item is string => typeof item === 'string' && LOG_LEVELS.has(item.toUpperCase()))
+        .map((item) => item.toUpperCase())
+    : [];
+
+  const sessionId =
+    typeof source.sessionId === 'string' && LOG_ID_PATTERN.test(source.sessionId)
+      ? source.sessionId
+      : undefined;
+  const taskId =
+    typeof source.taskId === 'string' && LOG_ID_PATTERN.test(source.taskId) ? source.taskId : undefined;
+  const keyword =
+    typeof source.keyword === 'string' && source.keyword.trim()
+      ? source.keyword.trim().slice(0, 100)
+      : undefined;
+
+  const page = Number.isFinite(Number(source.page)) ? Math.max(1, Math.floor(Number(source.page))) : 1;
+  const pageSize = Number.isFinite(Number(source.pageSize))
+    ? Math.min(500, Math.max(1, Math.floor(Number(source.pageSize))))
+    : DEFAULT_PAGE_SIZE;
+
+  const options: LogQueryOptions = {
+    dir: currentLogDir(),
+    sources: sources.length ? sources : ALL_SOURCES,
+    from: normalizeRange(source).from,
+    to: normalizeRange(source).to,
+    levels,
+    sessionId,
+    taskId,
+    keyword,
+    page,
+    pageSize,
+  };
+  return queryLogs(options);
+}
+
+/**
+ * Accepts a bounded batch of frontend diagnostics. Fields are whitelisted and scrubbed by
+ * the frontend logger itself, so a compromised renderer cannot smuggle content into the
+ * log files through this channel.
+ */
+function handleReportLog(entries: unknown): { ok: boolean; accepted: number; dropped: number } {
+  if (!Array.isArray(entries)) return { ok: false, accepted: 0, dropped: 0 };
+  const batch = entries.slice(0, FRONTEND_REPORT_MAX_BATCH);
+  let accepted = 0;
+  for (const raw of batch) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const levelText = String(item.level ?? 'ERROR').toUpperCase();
+    const level = (LOG_LEVELS.has(levelText) ? levelText : 'ERROR') as LogLevel;
+    const event = typeof item.event === 'string' && item.event ? item.event.slice(0, 120) : 'frontend.unknown';
+    const message = typeof item.message === 'string' ? item.message : '';
+    const fields =
+      item.fields && typeof item.fields === 'object' && !Array.isArray(item.fields)
+        ? (item.fields as Record<string, unknown>)
+        : {};
+    frontendLogger.log(level, event, message, fields);
+    accepted += 1;
+  }
+  return { ok: true, accepted, dropped: Math.max(0, entries.length - batch.length) };
+}
+
+/**
+ * Builds and saves a diagnostic bundle. Runs entirely in the main process so it also
+ * works when the backend never started and no renderer page exists.
+ */
+async function exportDiagnostics(range: {
+  from: number;
+  to: number;
+}): Promise<{
+  ok: boolean;
+  canceled?: boolean;
+  path?: string;
+  entries?: number;
+  truncated?: boolean;
+  message?: string;
+}> {
+  const logger = getDiagnostics();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const saveOptions: Electron.SaveDialogOptions = {
+    title: '导出诊断包',
+    defaultPath: `rag-diagnostics-${stamp}.zip`,
+    filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+  };
+
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const result = parent
+    ? await dialog.showSaveDialog(parent, saveOptions)
+    : await dialog.showSaveDialog(saveOptions);
+
+  // A cancelled dialog must leave nothing behind — the archive is only built after the
+  // destination is confirmed, and the write itself is atomic.
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+  try {
+    const archive = buildDiagnosticArchive({
+      dir: currentLogDir(),
+      appVersion: app.getVersion(),
+      sessionId: SESSION_ID,
+      from: range.from,
+      to: range.to,
+      memoryFallback: logger?.getMemoryEntries() ?? [],
+    });
+    writeArchiveAtomically(result.filePath, archive.buffer);
+    diagInfo('diagnostics.export.ok', '诊断包导出完成', {
+      entries: archive.entries,
+      bytes: archive.buffer.length,
+      truncated: archive.truncated,
+      note: archive.note,
+    });
+    return {
+      ok: true,
+      path: result.filePath,
+      entries: archive.entries,
+      truncated: archive.truncated,
+    };
+  } catch (err: any) {
+    diagError('diagnostics.export.failed', '诊断包导出失败', {
+      error_type: err?.name,
+      error_message: err?.message,
+    });
+    return { ok: false, message: err?.message || String(err) };
+  }
+}
+
+/**
+ * Native startup-failure dialog offering log access, bundle export and exit.
+ * Deliberately independent of the backend and of any renderer page.
+ */
+async function showStartupFailureDialog(context: {
+  title: string;
+  message: string;
+  detail: string;
+}): Promise<void> {
+  let extra = '';
+  for (;;) {
+    const options: Electron.MessageBoxSyncOptions = {
+      type: 'error',
+      title: context.title,
+      message: context.message,
+      detail: [context.detail, extra, `日志目录：${currentLogDir()}`, `会话编号：${SESSION_ID}`]
+        .filter(Boolean)
+        .join('\n'),
+      buttons: ['打开日志目录', '导出诊断包', '退出'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    };
+
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const choice = parent
+      ? dialog.showMessageBoxSync(parent, options)
+      : dialog.showMessageBoxSync(options);
+
+    if (choice === 0) {
+      try {
+        await shell.openPath(currentLogDir());
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
+    if (choice === 1) {
+      const result = await exportDiagnostics({
+        from: Date.now() - DEFAULT_RANGE_MS,
+        to: Date.now(),
+      });
+      extra = result.ok
+        ? `诊断包已导出：${result.path}（${result.entries ?? 0} 条记录${result.truncated ? '，已截断' : ''}）`
+        : result.canceled
+          ? '已取消导出，未生成任何文件。'
+          : `导出失败：${result.message ?? '未知错误'}`;
+      continue;
+    }
+    return;
+  }
+}
+
+// NOTE: main-process `uncaughtException` / `unhandledRejection` handlers are intentionally
+// NOT installed. Registering them would swallow crashes that currently terminate the app,
+// changing failure semantics. Renderer-side Vue errors and unhandled rejections are
+// collected instead (frontend/src/utils/diagnostics.ts), which is what the plan requires.
 
 function validateIpcSender(event: Electron.IpcMainInvokeEvent): void {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame?.parent !== null) {
@@ -244,6 +566,10 @@ async function handleGracefulClose() {
       }
     } catch (err: any) {
       console.error('[Main] Failed acquiring exit lease:', err);
+      diagError('shutdown.lease_failed', '无法进入安全退出流程', {
+        error_type: err?.name,
+        error_message: err?.message,
+      });
       if (mainWindow && !mainWindow.isDestroyed()) {
         dialog.showMessageBoxSync(mainWindow, {
           type: 'error',
@@ -318,6 +644,10 @@ async function handleGracefulClose() {
     }
   } catch (err: any) {
     console.error('[Main] Error during graceful close:', err);
+    diagError('shutdown.graceful_failed', '安全退出流程失败', {
+      error_type: err?.name,
+      error_message: err?.message,
+    });
     if (leaseAcquired) {
       try {
         await makeBackendRequest('POST', '/api/desktop/maintenance/release', { lease_id: exitLeaseId });
@@ -394,6 +724,27 @@ async function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    diagInfo('window.closed', '桌面窗口已关闭');
+  });
+
+  // Renderer-level failure evidence: without these a blank window leaves no trace.
+  mainWindow.webContents.on('did-finish-load', () => {
+    diagInfo('window.load.ok', '桌面窗口加载完成', { target: BASE_URL });
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    diagError('window.load.failed', '桌面窗口加载失败', {
+      status_code: errorCode,
+      error_message: errorDescription,
+      target: validatedURL,
+    });
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    diagError('renderer.gone', '渲染进程退出', {
+      reason: details?.reason,
+      exit_code: details?.exitCode,
+    });
   });
 
   // Load the application
@@ -402,6 +753,11 @@ async function createWindow() {
 
 // 3. Application Lifecycle
 app.whenReady().then(async () => {
+  appReady = true;
+  diagInfo('startup.app.ready', '桌面主进程就绪，开始启动流程', {
+    app_version: app.getVersion(),
+  });
+
   // Setup session filter: inject instance token ONLY into local backend requests from mainWindow
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     if (mainWindow && details.webContentsId !== mainWindow.webContents.id) {
@@ -427,16 +783,35 @@ app.whenReady().then(async () => {
   // Check port availability
   let portAvailable = await isPortAvailable(PORT, HOST);
   while (!portAvailable) {
+    diagWarn('startup.port.conflict', '端口已被占用，等待用户处理', { target: `${HOST}:${PORT}` });
     const choice = dialog.showMessageBoxSync({
       type: 'error',
       title: '端口占用冲突',
       message: `端口 ${PORT} 已被其他程序占用。`,
-      detail: `桌面版固定使用 http://${HOST}:${PORT} 保证安全来源与反馈组件正常工作。请关闭冲突程序后重试。`,
-      buttons: ['重试', '退出程序'],
+      detail: [
+        `桌面版固定使用 http://${HOST}:${PORT} 保证安全来源与反馈组件正常工作。请关闭冲突程序后重试。`,
+        `日志目录：${currentLogDir()}`,
+      ].join('\n'),
+      buttons: ['重试', '打开日志目录', '导出诊断包', '退出程序'],
       defaultId: 0,
+      cancelId: 3,
+      noLink: true,
     });
 
     if (choice === 1) {
+      try {
+        await shell.openPath(currentLogDir());
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
+    if (choice === 2) {
+      await exportDiagnostics({ from: Date.now() - DEFAULT_RANGE_MS, to: Date.now() });
+      continue;
+    }
+    if (choice === 3) {
+      diagWarn('startup.aborted', '用户因端口占用选择退出');
       isQuitting = true;
       app.quit();
       return;
@@ -445,24 +820,25 @@ app.whenReady().then(async () => {
   }
 
   // Start backend process
+  diagInfo('startup.backend.begin', '开始启动本地后台服务');
   let backendStarted = false;
   let backendStartupError = '';
   try {
     backendStarted = await backendManager!.start();
   } catch (err: any) {
     backendStartupError = err?.message || String(err);
+    diagError('startup.backend.failed', '后台启动过程抛出异常', {
+      error_type: err?.name,
+      error_message: backendStartupError,
+    });
   }
   if (!backendStarted) {
-    dialog.showMessageBoxSync({
-      type: 'error',
+    const detail = backendStartupError || backendManager!.getStartupFailureDetail();
+    diagError('startup.backend.failed', '后台服务未启动或未通过就绪验证', { detail });
+    await showStartupFailureDialog({
       title: '后台启动失败',
       message: '无法启动本地后台服务或未通过就绪验证。',
-      detail: [
-        backendStartupError || backendManager!.getStartupFailureDetail(),
-        `日志目录：${backendManager!.getLogDir()}`,
-        '请修复日志中指出的问题后重新启动。',
-      ].join('\n'),
-      buttons: ['确定'],
+      detail: `${detail}\n请修复日志中指出的问题后重新启动。`,
     });
     isQuitting = true;
     app.quit();
@@ -474,24 +850,27 @@ app.whenReady().then(async () => {
   setupAutoUpdater();
 
   // Create Window
+  diagInfo('startup.window.begin', '开始创建桌面窗口');
   try {
     await createWindow();
   } catch (err: any) {
-    dialog.showMessageBoxSync({
-      type: 'error',
+    diagError('startup.window.failed', '桌面窗口加载失败', {
+      error_type: err?.name,
+      error_message: err?.message || String(err),
+    });
+    await showStartupFailureDialog({
       title: '窗口启动失败',
       message: '本地后台已启动，但桌面窗口无法加载。',
-      detail: [
-        err?.message || String(err),
-        `日志目录：${backendManager!.getLogDir()}`,
-      ].join('\n'),
-      buttons: ['确定'],
+      detail: err?.message || String(err),
     });
     await backendManager!.forceKill();
     isQuitting = true;
     app.quit();
     return;
   }
+
+  diagInfo('startup.completed', '启动流程完成', { phase: 'ready', target: BASE_URL });
+
   if (app.isPackaged) {
     setTimeout(() => void checkForUpdates(), 1500);
     updateTimer = setInterval(() => void checkForUpdates(), 6 * 60 * 60 * 1000);
@@ -836,24 +1215,33 @@ function setupIpcHandlers() {
 
   ipcMain.handle('desktop:openLogDirectory', (event) => {
     validateIpcSender(event);
-    let logDir = '';
-    if (process.platform === 'win32' || process.env.LOCALAPPDATA) {
-      logDir = path.join(
-        process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-        'RAGStudyAssistant',
-        'logs'
-      );
-    } else if (process.platform === 'darwin') {
-      logDir = path.join(os.homedir(), 'Library', 'Application Support', 'RAGStudyAssistant', 'logs');
-    } else {
-      logDir = path.join(
-        process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-        'RAGStudyAssistant',
-        'logs'
-      );
-    }
+    const logDir = currentLogDir();
     fs.mkdirSync(logDir, { recursive: true });
     shell.openPath(logDir);
+  });
+
+  // --- Test-build diagnostics surface (restricted IPC) --------------------------------
+  // There is deliberately no public HTTP log endpoint and no IPC that reads an arbitrary
+  // path: the renderer can only query the three known streams, and export always goes
+  // through a native save dialog owned by the main process.
+  ipcMain.handle('desktop:getLogMeta', (event) => {
+    validateIpcSender(event);
+    return logMeta();
+  });
+
+  ipcMain.handle('desktop:queryLogs', (event, params: unknown) => {
+    validateIpcSender(event);
+    return handleQueryLogs(params);
+  });
+
+  ipcMain.handle('desktop:reportLog', (event, entries: unknown) => {
+    validateIpcSender(event);
+    return handleReportLog(entries);
+  });
+
+  ipcMain.handle('desktop:exportDiagnostics', async (event, params: unknown) => {
+    validateIpcSender(event);
+    return exportDiagnostics(normalizeRange(params));
   });
 }
 
@@ -869,5 +1257,19 @@ app.on('before-quit', (e) => {
   if (!isQuitting) {
     e.preventDefault();
     handleGracefulClose();
+  }
+});
+
+app.on('will-quit', () => {
+  // Flush aggregated duplicates and close both writers so nothing is lost on exit.
+  try {
+    getDiagnostics()?.close();
+  } catch {
+    /* ignore */
+  }
+  try {
+    frontendLogger.close();
+  } catch {
+    /* ignore */
   }
 });

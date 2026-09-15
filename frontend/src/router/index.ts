@@ -60,6 +60,14 @@ const router = createRouter({
       component: () => import('../views/SettingsView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      // Test-build diagnostic viewer. Lazy-loaded so the web bundle stays untouched;
+      // the page itself explains that logs are only available in the desktop client.
+      path: '/logs',
+      name: 'logs',
+      component: () => import('../views/LogsView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 });
 

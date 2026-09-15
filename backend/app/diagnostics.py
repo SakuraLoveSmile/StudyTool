@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 from urllib.parse import urlparse, urlunparse
@@ -18,6 +19,19 @@ import httpx
 
 # Unique runtime instance identifier per backend process
 INSTANCE_ID: str = f"inst-{uuid.uuid4().hex[:8]}"
+
+# Identity fields shared with the desktop main process (see desktop/src/diagnostics.ts).
+# The Electron main process mints one session id per launch and passes it down, so the
+# desktop / backend / frontend files can be correlated for a single startup.
+SESSION_ID: str = os.environ.get("RAG_SESSION_ID", "").strip() or f"sess-{uuid.uuid4().hex[:8]}"
+APP_VERSION: str = os.environ.get("RAG_APP_VERSION", "").strip()
+LOG_SOURCE: str = "backend"
+
+# Storage policy (release gates: 5 MiB per file, 5 rotated files, 7 day retention).
+DEFAULT_LOG_MAX_BYTES: int = 5 * 1024 * 1024
+LOG_RETENTION_DAYS: int = 7
+LOG_RECORDS_PER_SECOND: int = 300
+ERROR_AGGREGATION_WINDOW_SECONDS: float = 5.0
 
 # Context variables for distributed task and execution unit tracing
 task_id_var: ContextVar[Optional[str]] = ContextVar("task_id", default=None)
@@ -101,7 +115,9 @@ WHITELIST_REQUEST_ID_HEADERS = (
 
 # Regex patterns for strict secret & credential masking
 SENSITIVE_PATTERNS = (
-    (re.compile(r"(sk-[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+"), r"\1***"),
+    # Word-boundary anchored: an identifier such as `task-recon-999` merely CONTAINS
+    # "sk-" and must not be mangled, while real keys (space/quote/line prefixed) are masked.
+    (re.compile(r"(?<![A-Za-z0-9_])sk-([A-Za-z0-9_-]{4})[A-Za-z0-9_-]+"), r"sk-\1***"),
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9_.\-]+"), r"\1***"),
     (
         re.compile(
@@ -112,7 +128,104 @@ SENSITIVE_PATTERNS = (
     ),
     (re.compile(r"(?i)(cookie:\s*)\S+"), r"\1***"),
     (re.compile(r"https?://[^:@\s]+:[^:@\s]+@"), r"https://***:***@"),
+    # URL query strings and fragments never reach the log (tokens, ids, user input live there).
+    (re.compile(r"(https?://[^\s\"'?]+)\?[^\s\"']*"), r"\1"),
+    (re.compile(r"(https?://[^\s\"'#]+)#[^\s\"']*"), r"\1"),
+    # Absolute user paths: drive letters, UNC, macOS/Linux home, and `~`.
+    (re.compile(r"[A-Za-z]:\\(?:[^\\\s\"']+\\)*[^\\\s\"']*"), r"<path>"),
+    (re.compile(r"\\\\[^\s\"']+"), r"<path>"),
+    (re.compile(r"/(?:Users|home)/[^\s\"':]+(?:/[^\s\"':]*)*"), r"<path>"),
+    (re.compile(r"~/[^\s\"']*"), r"<path>"),
+    (re.compile(r"(?i)(?:AppData|LOCALAPPDATA|APPDATA)[\\/][^\s\"']*"), r"<path>"),
+    # Document/media file names are user content. Source extensions (py/js/ts) are kept:
+    # module names are legitimate diagnostics and carry no user data.
+    (
+        re.compile(
+            r"[^\s\"'\\/:*?<>|]+\.(?:pdf|docx?|pptx?|xlsx?|csv|md|markdown|txt|rtf|png|jpe?g|webp|"
+            r"gif|bmp|tiff?|zip|rar|7z|tar|tgz|gz|epub|mobi)\b",
+            re.IGNORECASE,
+        ),
+        "<file>",
+    ),
 )
+
+# Only these field names may ever be persisted. Unknown keys are dropped, which is what
+# makes "never record business payload" enforceable instead of aspirational.
+# Kept in step with the desktop/frontend whitelist in desktop/src/diagnostics.ts so the
+# three streams share one schema.
+LOG_FIELD_WHITELIST = frozenset({
+    # envelope
+    "timestamp", "level", "source", "event", "message", "session_id", "instance_id",
+    "app_version", "platform", "arch", "logger", "phase", "pid",
+    # errors / failures
+    "error_type", "error_name", "error_message", "stack", "stack_frames", "frames",
+    "cause_chain", "exception_type", "failed_stage", "stage", "reason", "detail",
+    "component", "info", "reason_code",
+    # stack frame shape (exception_info.frames[])
+    "file", "line", "func",
+    # correlation
+    "task_id", "task_type", "unit_id", "unit_index", "scope", "call_id", "attempt",
+    # external calls / provider observability
+    "service", "model", "endpoint", "method", "input_chars", "input_bytes",
+    "timeout_config", "status_code", "provider_request_id", "duration_ms",
+    "retry_reason", "retry_wait_seconds", "result_count", "exception_info",
+    # process lifecycle
+    "exit_code", "signal", "code", "killed",
+    # limiting / aggregation
+    "occurrences", "first_seen", "last_seen", "dropped", "limit", "window_ms",
+    # generic counters used by call sites
+    "bytes", "entries", "count", "total", "ok", "version", "truncated", "note",
+    "action", "operation", "route", "target", "kind", "tags",
+})
+
+# Attributes that belong to logging.LogRecord itself; they must never be copied into the
+# entry just because a whitelist key happens to share their name.
+_LOGRECORD_INTERNAL_FIELDS = frozenset({
+    "name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module",
+    "exc_info", "exc_text", "stack_info", "lineno", "funcName", "created", "msecs",
+    "relativeCreated", "thread", "threadName", "processName", "process", "taskName",
+    "getMessage",
+})
+
+MAX_LOG_STRING_LENGTH = 2000
+MAX_LOG_MESSAGE_LENGTH = 500
+MAX_LOG_DEPTH = 4
+MAX_LOG_ARRAY_ITEMS = 20
+
+
+def _scrub_value(value: Any) -> Any:
+    """Recursively scrubs a value that already survives the whitelist check."""
+    if isinstance(value, str):
+        return sanitize_text(value)[:MAX_LOG_STRING_LENGTH]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_scrub_value(item) for item in list(value)[:MAX_LOG_ARRAY_ITEMS]]
+    if isinstance(value, dict):
+        return scrub_record(value)
+    return sanitize_text(str(value))[:MAX_LOG_STRING_LENGTH]
+
+
+def scrub_record(record: Dict[str, Any], depth: int = 0) -> Dict[str, Any]:
+    """
+    Whitelists and recursively scrubs a record before it is written or exported.
+
+    Whitelisting happens first so a field nobody vetted (document text, prompt, answer,
+    file path from a caller) can never be persisted even if a call site adds it later.
+    """
+    out: Dict[str, Any] = {}
+    if depth > MAX_LOG_DEPTH or not isinstance(record, dict):
+        return out
+    for key, value in record.items():
+        if key not in LOG_FIELD_WHITELIST or value is None:
+            continue
+        if isinstance(value, dict) and depth + 1 > MAX_LOG_DEPTH:
+            continue
+        scrubbed = _scrub_value(value)
+        if key == "message" and isinstance(scrubbed, str):
+            scrubbed = scrubbed[:MAX_LOG_MESSAGE_LENGTH]
+        out[key] = scrubbed
+    return out
 
 
 def sanitize_text(text: Any) -> str:
@@ -243,6 +356,204 @@ class SafeRotatingFileHandler(RotatingFileHandler):
                 pass
 
 
+class DiagnosticFileHandler(SafeRotatingFileHandler):
+    """
+    Fail-safe JSONL rotating handler implementing the release-gated log policy:
+      - 5 MiB per file, 5 rotated files, rotated copies older than 7 days deleted;
+      - writes are rate limited (token bucket), so a log storm cannot stall business work;
+      - repeated identical ERROR records collapse into one summary carrying `occurrences`.
+    Every failure path degrades to a single stderr note and never raises into business code.
+    """
+
+    def __init__(
+        self,
+        filename: str,
+        maxBytes: int = DEFAULT_LOG_MAX_BYTES,
+        backupCount: int = 5,
+        retention_days: int = LOG_RETENTION_DAYS,
+        max_records_per_second: int = LOG_RECORDS_PER_SECOND,
+        aggregation_window_seconds: float = ERROR_AGGREGATION_WINDOW_SECONDS,
+    ):
+        super().__init__(
+            filename=filename,
+            maxBytes=maxBytes,
+            backupCount=backupCount,
+            encoding="utf-8",
+        )
+        self.retention_days = retention_days
+        self._rate_limit = float(max(1, max_records_per_second))
+        self._tokens = self._rate_limit
+        self._last_refill = time.monotonic()
+        self._dropped_in_window = 0
+        self._drop_reported = False
+        self._agg_lock = threading.Lock()
+        self._aggregation_window = aggregation_window_seconds
+        self._pending_errors: Dict[tuple, Dict[str, Any]] = {}
+        # NOTE: deliberately NOT named `_closed`. `logging.config.dictConfig()` — which
+        # `uvicorn.run()` performs on startup — sets the private `_closed` flag on every
+        # pre-existing handler while leaving it attached to the root logger. Reading that
+        # framework-internal flag here would silently disable ALL file logging the moment
+        # uvicorn starts. Only our own close() may stop this handler.
+        self._diagnostics_closed = False
+        self.cleanup_old_files()
+
+    def cleanup_old_files(self) -> int:
+        """Deletes rotated files older than the retention window; never the active file."""
+        removed = 0
+        try:
+            cutoff = time.time() - self.retention_days * 24 * 60 * 60
+            for index in range(1, max(1, self.backupCount) + 1):
+                candidate = f"{self.baseFilename}.{index}"
+                if os.path.exists(candidate) and os.path.getmtime(candidate) < cutoff:
+                    os.unlink(candidate)
+                    removed += 1
+        except Exception:
+            pass
+        return removed
+
+    def doRollover(self):
+        super().doRollover()
+        self.cleanup_old_files()
+
+    def _take_token(self):
+        with self._agg_lock:
+            now = time.monotonic()
+            elapsed = now - self._last_refill
+            if elapsed > 0:
+                self._tokens = min(self._rate_limit, self._tokens + elapsed * self._rate_limit)
+                self._last_refill = now
+                if self._tokens >= self._rate_limit * 0.5:
+                    self._dropped_in_window = 0
+                    self._drop_reported = False
+            if self._tokens < 1:
+                self._dropped_in_window += 1
+                report = not self._drop_reported
+                self._drop_reported = True
+                return False, report, self._dropped_in_window
+            self._tokens -= 1
+            return True, False, 0
+
+    def _notice_record(self, dropped: int) -> logging.LogRecord:
+        notice = logging.LogRecord(
+            name="app.diagnostics",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=0,
+            msg="日志写入超过限流阈值，超出部分已丢弃",
+            args=(),
+            exc_info=None,
+        )
+        notice.event = "log.rate_limited"
+        notice.dropped = dropped
+        notice.limit = int(self._rate_limit)
+        notice.window_ms = 1000
+        return notice
+
+    def _aggregate_error(self, record: logging.LogRecord) -> bool:
+        """Returns True when the record was absorbed into an existing aggregate."""
+        event = getattr(record, "event", "log")
+        try:
+            message = record.getMessage()[:200]
+        except Exception:
+            message = ""
+        tid = getattr(record, "task_id", None) or task_id_var.get()
+        key = (record.levelno, event, message, tid)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        with self._agg_lock:
+            pending = self._pending_errors.get(key)
+            if pending is not None:
+                pending["count"] += 1
+                pending["last_seen"] = now_iso
+                return True
+            if len(self._pending_errors) >= 200:
+                return False
+            entry: Dict[str, Any] = {
+                "record": record,
+                "count": 1,
+                "first_seen": now_iso,
+                "last_seen": now_iso,
+                "timer": None,
+            }
+            self._pending_errors[key] = entry
+
+        timer = threading.Timer(self._aggregation_window, self._flush_error, args=(key,))
+        timer.daemon = True
+        entry["timer"] = timer
+        try:
+            timer.start()
+        except Exception:
+            pass
+        return False
+
+    def _error_summary(self, entry: Dict[str, Any]) -> logging.LogRecord:
+        original = entry["record"]
+        summary = logging.LogRecord(
+            name=original.name,
+            level=original.levelno,
+            pathname=original.pathname,
+            lineno=original.lineno,
+            msg=f"重复错误已聚合（{entry['count']} 次）",
+            args=(),
+            exc_info=None,
+        )
+        summary.event = getattr(original, "event", "log")
+        summary.occurrences = entry["count"]
+        summary.first_seen = entry["first_seen"]
+        summary.last_seen = entry["last_seen"]
+        for field in (
+            "task_id", "task_type", "unit_id", "unit_index", "scope", "call_id", "attempt",
+            "stage", "failed_stage", "exception_type", "service", "model", "status_code",
+        ):
+            value = getattr(original, field, None)
+            if value is not None:
+                setattr(summary, field, value)
+        return summary
+
+    def _flush_error(self, key: tuple) -> None:
+        with self._agg_lock:
+            entry = self._pending_errors.pop(key, None)
+        if not entry:
+            return
+        timer = entry.get("timer")
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        # The first occurrence was already written; only the extra ones need a summary.
+        if entry["count"] <= 1:
+            return
+        try:
+            super().emit(self._error_summary(entry))
+        except Exception:
+            pass
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            if self._diagnostics_closed:
+                return
+            if record.levelno >= logging.ERROR and self._aggregate_error(record):
+                return
+            allowed, report_drop, dropped = self._take_token()
+            if not allowed:
+                if report_drop:
+                    super().emit(self._notice_record(dropped))
+                return
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+
+    def close(self):
+        self._diagnostics_closed = True
+        try:
+            for key in list(self._pending_errors.keys()):
+                self._flush_error(key)
+        except Exception:
+            pass
+        super().close()
+
+
 class StructuredJsonFormatter(logging.Formatter):
     """Formats log records as single-line JSON objects with context and metrics."""
 
@@ -254,7 +565,12 @@ class StructuredJsonFormatter(logging.Formatter):
             "logger": record.name,
             "event": getattr(record, "event", "log"),
             "instance_id": INSTANCE_ID,
+            "source": LOG_SOURCE,
+            "session_id": SESSION_ID,
+            "platform": sys.platform,
         }
+        if APP_VERSION:
+            entry["app_version"] = APP_VERSION
 
         # Context variable resolution
         tid = getattr(record, "task_id", None) or task_id_var.get()
@@ -283,32 +599,24 @@ class StructuredJsonFormatter(logging.Formatter):
         if att is not None:
             entry["attempt"] = att
 
-        # Observable diagnostic fields
-        for key in (
-            "service",
-            "model",
-            "endpoint",
-            "input_chars",
-            "input_bytes",
-            "timeout_config",
-            "status_code",
-            "provider_request_id",
-            "duration_ms",
-            "stage",
-            "failed_stage",
-            "exception_type",
-            "cause_chain",
-            "retry_reason",
-            "retry_wait_seconds",
-            "result_count",
-            "exception_info",
-        ):
+        # Pass-through of every whitelisted record attribute.
+        # Driving this from LOG_FIELD_WHITELIST (instead of a second hardcoded list) means a
+        # new call-site field becomes loggable by being whitelisted once, and can never be
+        # silently dropped by a formatter list that nobody remembered to update.
+        reserved = {
+            "timestamp", "level", "logger", "event", "instance_id",
+            "source", "session_id", "app_version", "platform", "message",
+        }
+        for key in LOG_FIELD_WHITELIST:
+            if key in reserved or key in entry or key in _LOGRECORD_INTERNAL_FIELDS:
+                continue
             val = getattr(record, key, None)
             if val is not None:
                 entry[key] = val
 
         entry["message"] = sanitize_text(record.getMessage())
-        return json.dumps(entry, ensure_ascii=False)
+        # Whitelist + scrub last, so nothing unvetted leaves this formatter.
+        return json.dumps(scrub_record(entry), ensure_ascii=False)
 
 
 class SanitizedConsoleFormatter(logging.Formatter):
@@ -337,18 +645,46 @@ _diagnostics_console_handler: Optional[logging.Handler] = None
 _diagnostics_initialized: bool = False
 
 
+def _handler_is_open(handler: Optional[logging.Handler]) -> bool:
+    """
+    True only while a handler can still actually write.
+
+    `logging.config.dictConfig()` — which `uvicorn.run()` performs on startup — CLOSES every
+    pre-existing handler (stream set to None) while leaving it attached to the root logger.
+    Checking "is it still in root.handlers" is therefore not enough: the stream must still be
+    open, otherwise the diagnostics file would silently stop receiving records the moment
+    uvicorn starts. Handlers without a `stream` attribute (queue handlers) count as open.
+    """
+    if handler is None:
+        return False
+    return getattr(handler, "stream", "no-stream-attribute") is not None
+
+
+def _drop_dead_handlers(root_logger: logging.Logger) -> None:
+    """Detaches handlers that a reconfiguration closed underneath us."""
+    for handler in list(root_logger.handlers):
+        if getattr(handler, "stream", "no-stream-attribute") is None:
+            try:
+                root_logger.removeHandler(handler)
+            except Exception:
+                pass
+
+
 def setup_diagnostics(
     log_level: Optional[str] = None,
     log_dir: Optional[Path] = None,
     max_bytes: Optional[int] = None,
     backup_count: Optional[int] = None,
+    retention_days: Optional[int] = None,
 ):
     """
     Configures structured diagnostic file logging and sanitized console output.
     Idempotent: repeated calls do not stack handlers.
     """
     global _diagnostics_file_handler, _diagnostics_console_handler, _diagnostics_initialized
-    if _diagnostics_initialized and _diagnostics_file_handler is not None:
+    # Re-arm when the previous handler was closed by a logging reconfiguration, otherwise
+    # all file logging dies silently at uvicorn startup.
+    if _diagnostics_initialized and _handler_is_open(_diagnostics_file_handler):
         return
 
     from app.config import settings
@@ -360,21 +696,23 @@ def setup_diagnostics(
     if target_dir is None:
         target_dir = Path(getattr(settings, "DATA_DIR", "./data")) / "logs"
 
-    mb = max_bytes if max_bytes is not None else getattr(settings, "LOG_MAX_BYTES", 10485760)
+    mb = max_bytes if max_bytes is not None else getattr(settings, "LOG_MAX_BYTES", DEFAULT_LOG_MAX_BYTES)
     bc = backup_count if backup_count is not None else getattr(settings, "LOG_BACKUP_COUNT", 5)
+    rd = retention_days if retention_days is not None else getattr(settings, "LOG_RETENTION_DAYS", LOG_RETENTION_DAYS)
 
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
+    _drop_dead_handlers(root_logger)
 
     # 1. File Handler Setup
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         log_file = target_dir / "backend.jsonl"
-        file_handler = SafeRotatingFileHandler(
+        file_handler = DiagnosticFileHandler(
             filename=str(log_file),
             maxBytes=mb,
             backupCount=bc,
-            encoding="utf-8",
+            retention_days=rd,
         )
         file_handler.setLevel(level)
         file_handler.setFormatter(StructuredJsonFormatter())
@@ -388,7 +726,9 @@ def setup_diagnostics(
 
     # 2. Console Handler Setup
     has_console = any(
-        isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler)
+        isinstance(h, logging.StreamHandler)
+        and not isinstance(h, RotatingFileHandler)
+        and _handler_is_open(h)
         for h in root_logger.handlers
     )
     if not has_console:
@@ -399,7 +739,11 @@ def setup_diagnostics(
         _diagnostics_console_handler = console_handler
     else:
         for h in root_logger.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler):
+            if (
+                isinstance(h, logging.StreamHandler)
+                and not isinstance(h, RotatingFileHandler)
+                and _handler_is_open(h)
+            ):
                 h.setFormatter(SanitizedConsoleFormatter())
 
     # Suppress verbose third-party wire logging

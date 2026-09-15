@@ -34,4 +34,11 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   },
   openExternal: (url: string) => ipcRenderer.invoke('desktop:openExternal', url),
   openLogDirectory: () => ipcRenderer.invoke('desktop:openLogDirectory'),
+
+  // Diagnostics (test build): read-only viewer, frontend error reporting and export.
+  // There is deliberately no delete/clear channel — logs stay append-only for the user.
+  getLogMeta: () => ipcRenderer.invoke('desktop:getLogMeta'),
+  queryLogs: (params: any) => ipcRenderer.invoke('desktop:queryLogs', params),
+  reportLog: (entries: any) => ipcRenderer.invoke('desktop:reportLog', entries),
+  exportDiagnostics: (params: any) => ipcRenderer.invoke('desktop:exportDiagnostics', params),
 });

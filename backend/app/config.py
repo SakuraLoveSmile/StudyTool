@@ -20,8 +20,9 @@ class Settings(BaseSettings):
     # Logging & Diagnostics Settings
     LOG_LEVEL: str = "INFO"
     LOG_DIR: Optional[str] = None
-    LOG_MAX_BYTES: int = 10485760  # 10 MiB
+    LOG_MAX_BYTES: int = 5242880  # 5 MiB per file (desktop / backend / frontend streams)
     LOG_BACKUP_COUNT: int = 5
+    LOG_RETENTION_DAYS: int = 7
     
     # LLM Settings
     LLM_BASE_URL: str = "https://api.openai.com/v1"

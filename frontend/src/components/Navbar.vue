@@ -31,6 +31,15 @@
           <router-link to="/practice" class="nav-tab" :class="{ 'nav-tab-active': $route.path === '/practice' }">
             <CheckSquare class="mr-1.5 inline h-4 w-4" />模拟与批改
           </router-link>
+          <!-- 测试版日志入口：桌面客户端默认可见，无需开发者工具或隐藏配置 -->
+          <router-link
+            v-if="isDesktop"
+            to="/logs"
+            class="nav-tab"
+            :class="{ 'nav-tab-active': $route.path === '/logs' }"
+          >
+            <ScrollText class="mr-1.5 inline h-4 w-4" />日志
+          </router-link>
           <router-link to="/settings" class="nav-tab" :class="{ 'nav-tab-active': $route.path === '/settings' }">
             <Sliders class="mr-1.5 inline h-4 w-4" />设置
           </router-link>
@@ -84,27 +93,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, type Component } from 'vue';
+import { ref, computed, type Component } from 'vue';
 import { useRouter } from 'vue-router';
-import { BookOpen, FolderArchive, BarChart3, Layers, CheckSquare, ListTodo, Menu, X, CalendarDays, BrainCircuit, Sliders } from 'lucide-vue-next';
+import { BookOpen, FolderArchive, BarChart3, Layers, CheckSquare, ListTodo, Menu, X, CalendarDays, BrainCircuit, Sliders, ScrollText } from 'lucide-vue-next';
 import { useTaskManager } from '../composables/useTaskManager';
 import { useAuth } from '../composables/useAuth';
 
 const { activeCount, toggleDrawer } = useTaskManager();
 const auth = useAuth();
 const router = useRouter();
+
+/** 日志页依赖桌面端受限 IPC 通道，浏览器版本不显示该入口（避免出现空白页）。 */
+const isDesktop = computed(() =>
+  Boolean(typeof window !== 'undefined' && window.desktopAPI?.isDesktop && window.desktopAPI?.queryLogs)
+);
 const logout = async () => { try { await auth.logout(); await router.replace({ name: 'login' }); } catch { alert(auth.errorMessage.value); } };
 const mobileMenuOpen = ref(false);
 
-const mobileLinks: Array<{ to: string; label: string; icon: Component }> = [
+const mobileLinks = computed<Array<{ to: string; label: string; icon: Component }>>(() => [
   { to: '/today', label: '今日学习', icon: CalendarDays },
   { to: '/recall', label: '回忆卡库', icon: BrainCircuit },
   { to: '/materials', label: '资料与真题', icon: FolderArchive },
   { to: '/analysis', label: '考点分析', icon: BarChart3 },
   { to: '/cards', label: '考点讲义', icon: Layers },
   { to: '/practice', label: '模拟与批改', icon: CheckSquare },
+  ...(isDesktop.value ? [{ to: '/logs', label: '日志', icon: ScrollText }] : []),
   { to: '/settings', label: '设置', icon: Sliders },
-];
+]);
 </script>
 
 <style scoped>

@@ -1,6 +1,18 @@
 import sys
 import os
+
+# Make `app.*` importable no matter how this file was launched.
+#   * `python -m app.main` (cwd = backend) already resolves it;
+#   * `python <repo>/backend/app/main.py` — which is exactly how
+#     desktop/src/backend-manager.ts spawns the DEVELOPMENT backend — puts `backend/app`
+#     on sys.path instead, so every `from app...` import would raise ModuleNotFoundError.
+# PyInstaller builds are unaffected: the bootloader already exposes the bundle root.
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
 import json
+import logging
 import threading
 
 # 1. Immediate dispatch for offline utility commands (T3: backup/restore offline mode)
@@ -50,24 +62,58 @@ def bootstrap_desktop(input_stream=None):
     settings.apply_desktop_payload(bootstrap_data)
 
 from app.config import settings
-import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import init_db
-from app.services.task_worker import TaskWorker
-from app.services.http_client import HttpClientProvider
-from app.routers import materials, questions, analysis, cards, practice, learning
-from app.routers import auth
-from app.auth import init_auth_db, enabled_user_ids
-from app.access import AccessMiddleware
-from app.desktop import desktop_router, DesktopAccessMiddleware, setup_desktop_static_serving
-from app.tenancy import tenant_scope
-from app.services.request_operations import stop_operations
 
-from app.diagnostics import setup_diagnostics, shutdown_diagnostics
+# --- Startup ordering guarantee (T1) -------------------------------------------------
+# Desktop configuration and the diagnostics subsystem MUST be initialized before any
+# business module below is imported: an import-time failure (missing module, broken
+# dependency) then still lands in backend.jsonl instead of dying on stderr only.
+# `bootstrap_desktop()` stays gated on script execution so importing this module (tests,
+# uvicorn --reload child, tooling) can never block on reading stdin.
+_running_as_script = __name__ == "__main__"
+if _running_as_script and ("--desktop" in sys.argv or os.environ.get("RAG_DESKTOP_MODE") == "1"):
+    bootstrap_desktop()
+
+from app.diagnostics import (
+    setup_diagnostics,
+    shutdown_diagnostics,
+    log_diagnostic,
+    extract_safe_exception_info,
+    sanitize_endpoint,
+)
 
 setup_diagnostics()
+log_diagnostic(
+    "startup.diagnostics.ready",
+    message="桌面配置与日志系统已初始化（先于业务模块导入）",
+    phase="bootstrap",
+)
+
+try:
+    from app.database import init_db
+    from app.services.task_worker import TaskWorker
+    from app.services.http_client import HttpClientProvider
+    from app.routers import materials, questions, analysis, cards, practice, learning
+    from app.routers import auth
+    from app.auth import init_auth_db, enabled_user_ids
+    from app.access import AccessMiddleware
+    from app.desktop import desktop_router, DesktopAccessMiddleware, setup_desktop_static_serving
+    from app.tenancy import tenant_scope
+    from app.services.request_operations import stop_operations
+except BaseException as _import_exc:  # noqa: BLE001 - must be recorded before propagating
+    log_diagnostic(
+        "startup.import_failed",
+        level=logging.ERROR,
+        message="业务模块导入失败，后台无法启动",
+        phase="import",
+        error_type=type(_import_exc).__name__,
+        exception_info=extract_safe_exception_info(_import_exc, "import"),
+    )
+    raise
+
+log_diagnostic("startup.imports.ok", message="业务模块导入完成", phase="import")
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
@@ -75,6 +121,7 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_diagnostics()
     logger.info("Initializing database...")
+    log_diagnostic("startup.lifespan.begin", message="后台应用启动流程开始", phase="lifespan")
     if settings.PUBLIC_MODE:
         from urllib.parse import urlsplit
         origin = urlsplit(settings.PUBLIC_ORIGIN)
@@ -91,14 +138,24 @@ async def lifespan(app: FastAPI):
     else:
         init_db()
     await HttpClientProvider.start()
+    log_diagnostic("startup.database.ready", message="数据库初始化完成", phase="database")
     logger.info("Starting background TaskWorker...")
     if settings.PUBLIC_MODE:
         TaskWorker.start_all()
     else:
         TaskWorker.start()
+    log_diagnostic(
+        "startup.ready",
+        message="后台服务已就绪",
+        phase="ready",
+        service="backend",
+        model=settings.LLM_MODEL,
+        endpoint=sanitize_endpoint(settings.LLM_BASE_URL),
+    )
     try:
         yield
     finally:
+        log_diagnostic("shutdown.begin", message="后台服务开始停机", phase="shutdown")
         logger.info("Stopping background TaskWorker...")
         if settings.PUBLIC_MODE:
             await TaskWorker.stop_all()
@@ -106,6 +163,7 @@ async def lifespan(app: FastAPI):
             TaskWorker.stop()
         await stop_operations()
         await HttpClientProvider.close()
+        log_diagnostic("shutdown.ready", message="后台服务已停机", phase="shutdown")
         shutdown_diagnostics()
 
 app = FastAPI(
@@ -182,6 +240,14 @@ if __name__ == "__main__":
     from app.config import settings
     host = args.host or settings.HOST
     port = args.port or settings.PORT
+
+    log_diagnostic(
+        "startup.uvicorn.begin",
+        message="开始监听本地端口",
+        phase="uvicorn",
+        endpoint=f"http://{host}:{port}",
+        service="uvicorn",
+    )
 
     # Pass app instance directly in desktop/public mode to avoid re-importing and re-reading stdin
     if settings.DESKTOP_MODE or settings.PUBLIC_MODE:

@@ -5,6 +5,21 @@ import os from 'os';
 import http from 'http';
 import { CredentialsStore, CredentialsData, CredentialsUpdateRequest } from './credentials-store';
 
+export type ManagerLogLevel = 'INFO' | 'WARN' | 'ERROR';
+
+/**
+ * Optional diagnostics hook. Kept optional so existing construction sites (and tests)
+ * keep working unchanged.
+ */
+export interface BackendManagerHooks {
+  onEvent?: (
+    event: string,
+    level: ManagerLogLevel,
+    message: string,
+    fields?: Record<string, unknown>
+  ) => void;
+}
+
 export class BackendManager {
   private childProcess: ChildProcess | null = null;
   private port: number;
@@ -13,19 +28,35 @@ export class BackendManager {
   private credentialsStore: CredentialsStore;
   private isPackaged: boolean;
   private startupOutput = '';
+  private hooks: BackendManagerHooks;
 
   constructor(
     port = 18764,
     host = '127.0.0.1',
     instanceToken: string,
     credentialsStore: CredentialsStore,
-    isPackaged = false
+    isPackaged = false,
+    hooks: BackendManagerHooks = {}
   ) {
     this.port = port;
     this.host = host;
     this.instanceToken = instanceToken;
     this.credentialsStore = credentialsStore;
     this.isPackaged = isPackaged;
+    this.hooks = hooks;
+  }
+
+  private emit(
+    event: string,
+    level: ManagerLogLevel,
+    message: string,
+    fields: Record<string, unknown> = {}
+  ): void {
+    try {
+      this.hooks.onEvent?.(event, level, message, fields);
+    } catch {
+      // Diagnostics must never break process management.
+    }
   }
 
   private getBackendExecutable(): { command: string; args: string[]; cwd: string } {
@@ -101,9 +132,17 @@ export class BackendManager {
       LOG_DIR: this.getLogDir(),
       PORT: String(this.port),
       HOST: this.host,
+      // One session id per launch, shared by desktop / backend / frontend log streams.
+      RAG_SESSION_ID: process.env.RAG_SESSION_ID || '',
+      RAG_APP_VERSION: process.env.RAG_APP_VERSION || '',
     };
 
     console.log(`[BackendManager] Spawning backend: ${command} ${spawnArgs.join(' ')}`);
+    const startedAt = Date.now();
+    this.emit('startup.backend.spawn', 'INFO', '正在启动本地后台服务', {
+      service: 'backend',
+      target: command,
+    });
 
     return new Promise((resolve) => {
       let startupFailed = false;
@@ -118,6 +157,11 @@ export class BackendManager {
       this.childProcess.on('error', (err) => {
         console.error('[BackendManager] Failed to spawn backend process:', err);
         this.recordStartupOutput('spawn error', err.message);
+        this.emit('startup.backend.spawn_failed', 'ERROR', '后台进程无法启动', {
+          error_type: err.name,
+          error_message: err.message,
+          duration_ms: Date.now() - startedAt,
+        });
         startupFailed = true;
         this.childProcess = null;
         resolve(false);
@@ -128,6 +172,12 @@ export class BackendManager {
         if (code !== 0) {
           this.recordStartupOutput('process exit', `code=${String(code)} signal=${String(signal)}`);
         }
+        this.emit(
+          'backend.process.exit',
+          code === 0 || code === null ? 'INFO' : 'ERROR',
+          '后台进程已退出',
+          { exit_code: code === null ? undefined : code, signal: signal || undefined }
+        );
         this.childProcess = null;
       });
 
@@ -157,11 +207,19 @@ export class BackendManager {
       this.waitForReady(15000).then(async (ready) => {
         if (startupFailed || !ready) {
           console.error('[BackendManager] Backend process failed to become ready within timeout; ensuring termination');
+          this.emit('startup.backend.ready_timeout', 'ERROR', '后台服务未在超时时间内就绪', {
+            duration_ms: Date.now() - startedAt,
+            timeout_config: '15000ms',
+            detail: this.startupOutput.trim().slice(-2000),
+          });
           if (this.childProcess) {
             await this.forceKill();
           }
           resolve(false);
         } else {
+          this.emit('startup.backend.ready', 'INFO', '后台服务已就绪', {
+            duration_ms: Date.now() - startedAt,
+          });
           resolve(true);
         }
       });

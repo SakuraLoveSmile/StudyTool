@@ -454,18 +454,29 @@
       </div>
 
       <!-- Logs / Diagnostics -->
-      <div class="mt-6 flex items-center justify-between rounded-xl bg-slate-50 p-4">
+      <div class="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-4">
         <div class="text-xs text-slate-600">
-          如遇异常需要排查，可直接打开本地运行日志目录或使用右下角 Feedback 提交报告。
+          如遇异常需要排查，可在软件内直接查看运行日志并导出诊断包，或使用右下角 Feedback 提交报告。
         </div>
-        <button
-          type="button"
-          class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-          @click="openLogDirectory"
-        >
-          <Folder class="h-3.5 w-3.5 text-slate-500" />
-          <span>打开运行日志目录</span>
-        </button>
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- 设置页保留日志入口；主导航同时提供默认可见的「日志」标签页 -->
+          <router-link
+            v-if="isDesktop"
+            to="/logs"
+            class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+          >
+            <ScrollText class="h-3.5 w-3.5 text-slate-500" />
+            <span>查看运行日志</span>
+          </router-link>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+            @click="openLogDirectory"
+          >
+            <Folder class="h-3.5 w-3.5 text-slate-500" />
+            <span>打开运行日志目录</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -484,6 +495,7 @@ import {
   Folder,
   Loader2,
   RefreshCw,
+  ScrollText,
 } from 'lucide-vue-next';
 import { useDesktop } from '../composables/useDesktop';
 
