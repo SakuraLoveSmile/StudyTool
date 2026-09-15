@@ -44,6 +44,132 @@
   - **Actions 发布证据**：运行 `34932850914`（提交 `e42c22d`）在 Windows 2022 runner 全部通过，包含冻结后台启动、首页加载和安全退出门禁；公开 Release 为 `SakuraLoveSmile/StudyTool-Releases@desktop-v1.0.1`，包含安装包、`latest.yml`、blockmap、`RELEASE_MANIFEST.json`、`SHA256SUMS.txt`，下载后 SHA-256 校验通过。此前有问题的 `desktop-v1.0.0` Release 及源仓库标签已撤销。
 - 状态判定：本地自动化与回归全绿，已满足将软件移交朋友体验的质量标准，T1、T2、T3 本轮状态统一推进为“**待体验**”；待完成上述实机体验后最终转为“已验收”。
 
+## 测试版日志查看与 Windows Feedback 补齐计划与实施证据
+
+> 编号说明：本节 `T1`–`T4` 是本轮「日志查看 + Windows Feedback 补齐」的内部编号，与上文桌面发行 T1–T4 **不是同一组任务**，引用时须带「本轮」前缀。
+
+目标：测试用户能在软件内查看诊断日志、导出排查材料，并在 Windows 客户端使用 Feedback 提交问题。日志默认仅保存诊断元数据，不记录资料原文、提示词、模型回答或密钥。
+
+| 任务 | 状态 | 目标与当前缺口 |
+| --- | --- | --- |
+| **本轮 T1：启动失败也能留下日志** | 实现中 | 桌面主进程需在启动后台前初始化持久日志；后端需在业务模块导入前完成桌面配置与日志初始化（`backend/app/main.py` 第 57–66 行先导入 `database`/`services`/`routers`/`desktop`，`setup_diagnostics` 到第 68 行才导入、第 70 行才调用）；`desktop/src/main.ts:837-857` 目前只有 `desktop:openLogDirectory`（拼接并 `mkdir` 日志目录），主进程无任何持久日志写入，启动失败弹窗只有重试与退出，缺「打开日志目录 / 导出诊断包」 |
+| **本轮 T2：统一格式与安全存储** | 实现中 | `backend/app/diagnostics.py` 已有 JSONL 结构化日志、`StructuredJsonFormatter`、`SafeRotatingFileHandler` 与白名单脱敏，可直接复用；缺口是桌面/后台/前端三类文件分离、单文件 5 MiB（现为 `LOG_MAX_BYTES = 10485760`，即 10 MiB）、超过 7 天历史清理、前端上报限流与重复聚合、旧格式兼容读取 |
+| **本轮 T3：前端直接查看与导出** | 实现中 | 前端没有日志页面与路由（`frontend/src/router/index.ts:15-59` 共 9 条路由、`frontend/src/views/` 共 9 个视图，均无日志页；`frontend/src/components/Navbar.vue:16-34` 导航为固定的 7 个 `nav-tab`），只有 `SettingsView.vue:456-468` 的「打开运行日志目录」按钮；主进程 `desktop:openLogDirectory` 通道可复用；缺口是受限 IPC 查询/上报/导出（ZIP）与前端筛选分页 |
+| **本轮 T4：让 Windows Feedback 实际可用** | 实现中 | 反馈配置只来自构建期 `import.meta.env.VITE_FEEDBACK_API_BASE / VITE_FEEDBACK_APP_ID`（`frontend/src/composables/useFeedbackWidget.ts:72-87`），开发机由被 git 忽略的 `frontend/.env.local` 提供；`.github/workflows/windows-desktop-release.yml` 与 `desktop/scripts/build-release.py` 均未注入这两个变量，故当前 Windows 发布包不会挂载反馈组件。需在发布构建显式注入 `https://feedback.xn--fhqths51enha.cn` 与 `appId=rag`，缺失或非法即构建失败 |
+
+### 现状与复用基座（已按文件核对，非假设）
+
+| 事实 | 证据 |
+| --- | --- |
+| 后端已有 JSONL 结构化日志、轮转与脱敏 | `backend/app/diagnostics.py`（`StructuredJsonFormatter`、`SafeRotatingFileHandler`、`backend.jsonl`） |
+| 后端日志参数可注入 | `backend/app/config.py:21-24`（`LOG_LEVEL` / `LOG_DIR` / `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT`），`log_path` 属性在桌面模式下解析到 `desktop_root_path / "logs"` |
+| 一次启动的关联编号已存在 | `backend/app/diagnostics.py` 的 `INSTANCE_ID` 与 `task_id` / `unit_id` / `call_id` contextvar |
+| 主进程已有打开日志目录通道 | `desktop/src/main.ts:837-857`、`desktop/src/preload.ts:36`、`frontend/src/views/SettingsView.vue:456-468` |
+| 后端诊断日志已有测试基座 | `backend/tests/test_diagnostics.py`（可在此之上扩展桌面/后台/前端三类文件分离、轮转、限流与脱敏用例） |
+| 反馈包版本已锁定 | `frontend/package.json:12` → `"@feedback/web": "file:vendor/feedback-web-0.2.0.tgz"`（0.2.0 已随 `frontend/vendor/` 入库） |
+| 发布工作流未注入反馈变量 | `.github/workflows/windows-desktop-release.yml:17-18` 顶层 `env:` 仅含 `RELEASE_REPO`，构建步骤无 `VITE_FEEDBACK_*`；`desktop/scripts/build-release.py` 同样未注入 |
+| 反馈服务来源登记待核对 | 本机同级仓库 `Feedback/docs/closeout.md:306` 记录 `appId=rag` 的允许来源为 `http://127.0.0.1:5174`（Web 开发入口）；桌面端实际来源为 `http://127.0.0.1:18764`，故本轮 T4 必须在服务端管理端核对生产登记，且仅在缺失时补齐该来源、保留已有来源 |
+| 计划轮次的工作区状态 | 计划落盘前 `git status --short` 为空（HEAD `f8456c2`）。该轮仅改本文件；随后按本计划实施，改动清单与证据见下节《本轮实施与验证证据》 |
+
+> 复核记录（2026-09-15，HEAD `f8456c2`）：上表已逐条对照当前工作区源码重新核对，成立；相较首稿修正了 2 处行号（`desktop/src/main.ts` 由 839-856 更正为 837-857，`backend/app/main.py` 明确第 68 行导入、第 70 行调用）与 1 处已过期的「工作区无未提交改动」描述。该复核轮次为纯计划更新；实施产出见下一节。
+
+### 本轮 T1：启动失败也能留下日志
+
+- 桌面主进程在启动后台前初始化持久日志；后端在业务模块导入前完成桌面配置与日志初始化。
+- 记录启动阶段、后台退出、就绪超时、窗口加载、渲染进程退出、更新和模型调用错误。
+- 收集 Vue 错误与未处理 Promise 拒绝，不全局收集任意 console 内容。
+- 一次启动共用 `session_id`，保留现有任务、执行单元与模型调用关联编号。
+- 启动失败原生弹窗提供打开日志目录、导出诊断包和退出；导出不依赖后台或前端页面。
+
+### 本轮 T2：统一格式与安全存储
+
+- 复用后端 JSONL 实现，按桌面、后台、前端分别存文件，统一时间、级别、事件、来源、版本和关联字段。
+- 默认 INFO，每类单文件 5 MiB、保留 5 个历史文件；清理超过 7 天的历史文件，兼容读取旧格式。
+- 写入和前端上报有界、限流并聚合重复错误；日志故障不能阻断业务。
+- 白名单字段递归脱敏，过滤认证信息、URL 参数、用户路径和文件名；写入与导出均检查，禁止记录业务正文。
+
+### 本轮 T3：前端直接查看与导出
+
+- 测试版主导航增加默认可见的「日志」入口，设置页保留入口；不要求打开开发者工具或填写隐藏配置。
+- 默认显示最近 24 小时，按时间、级别、来源、会话、任务编号和关键词筛选；每页 200 条，支持详情、复制和手动刷新。
+- 自动刷新可选，每 3 秒更新，离开页面停止；默认只读，不提供删除日志按钮。
+- 主进程通过受限 IPC 提供查询、前端事件上报及导出，校验发送方与参数，不开放公共 HTTP 日志接口或任意路径读取。
+- ZIP 包含选定时段的脱敏日志和版本、平台、校验值清单；默认 24 小时、最多 7 天、原始日志上限 20 MiB，超限保留最新记录并注明截断。
+- 原生保存对话框选择目标，取消不留半成品；不打包数据库、资料或凭据。
+
+### 本轮 T4：让 Windows Feedback 实际可用
+
+- Windows 发布构建明确注入现有服务地址 `https://feedback.xn--fhqths51enha.cn` 和 `appId=rag`，不依赖开发机 `.env.local`；发布配置缺失或地址无效时构建失败。
+- 保持随应用固定打包 `@feedback/web` 0.2.0，沿用组件独立登录，不传递 RAG 凭据。
+- 核对服务端允许来源包含 `http://127.0.0.1:18764`；如缺失，仅补齐 RAG 应用来源配置，保留已有来源。
+- 验证反馈入口、独立登录、截图遮罩及外部链接打开。日志详情区域默认截图遮罩。
+- 本轮日志仍以手动导出为交付，不自动上传或自动附加给 Feedback。
+
+### 验证与交付
+
+- 推进顺序：按本轮 T1 → T2 → T3 顺序实施，T4 可独立完成。
+- 隔离数据验证：缺失模块、后台异常退出、就绪超时、前端异常、写盘失败、轮转、限流、脱敏与导出取消。
+- 前端验证：日志入口、筛选分页、详情复制与导出；Windows 打包环境验证中文路径、启动失败导出与关闭重开。
+- 发布门禁增加 Feedback 配置与实际挂载检查；真实反馈提交需使用明确授权的测试内容，分别验证文本与截图成功归档，不能用「组件文件存在」代替。
+- 交付约束：保持用户资料与既有改动，进度写入本发布记录。
+- 状态流转：必要验证未完成为「实现中」，通过后为「待体验」，用户确认后为「已验收」。**计划轮次未修改代码或服务配置；实施与验证证据见下节，当前四项状态为「实现中」。**
+
+### 本轮实施与验证证据（2026-09-15，状态：实现中）
+
+> 计划四项任务已全部落地代码与自动化验证；「实现中」而非「待体验」的原因集中在最后一小节。
+
+#### 交付物
+
+| 层 | 新增 | 修改 |
+| --- | --- | --- |
+| 后端 | `backend/tests/test_diagnostics_policy.py`、`backend/tests/test_release_feedback_config.py` | `app/main.py`（导入顺序 + 启动阶段）、`app/diagnostics.py`（统一信封/白名单/轮转/限流/聚合）、`app/config.py`（5 MiB + 7 天保留） |
+| 桌面 | `desktop/src/diagnostics.ts`、`log-store.ts`、`zip.ts`、`diagnostic-export.ts`、4 个测试文件 | `src/main.ts`（日志初始化、启动失败弹窗、4 个受限 IPC）、`src/preload.ts`、`src/backend-manager.ts`（生命周期事件 + session/版本透传） |
+| 前端 | `frontend/src/utils/diagnostics.ts`、`frontend/src/views/LogsView.vue` | `main.ts`（错误采集安装）、`components/Navbar.vue`、`router/index.ts`、`composables/useDesktop.ts`、`views/SettingsView.vue` |
+| 发布 | — | `.github/workflows/windows-desktop-release.yml`、`desktop/scripts/build-release.py` |
+
+#### 已实现的策略数值（与计划一致）
+
+- 三类文件：`desktop.jsonl` / `backend.jsonl` / `frontend.jsonl`，统一字段 `timestamp / level / source / event / message / session_id / app_version` 及任务、执行单元、调用关联编号。
+- 单文件 5 MiB、保留 5 个历史、清理超 7 天；默认 INFO；写盘失败降级为内存环形缓冲（不阻断业务）。
+- 导出 ZIP：默认 24 小时、最多 7 天、原始日志上限 20 MiB（超限保留最新并在清单标注）、临时文件 + 原子改名（取消不留半成品）。
+- 前端：主导航默认可见「日志」入口、每页 200 条、默认 24 小时、自动刷新 3 秒且离开页面停止、只读无删除按钮。
+- 受限 IPC 共 4 条（`getLogMeta` / `queryLogs` / `reportLog` / `exportDiagnostics`），全部校验发送方并夹取参数；**没有** 删除通道、公共 HTTP 日志接口或任意路径读取。
+- 转发到反馈截图的日志详情区域已加 `data-feedback-capture-mask`，默认遮罩。
+
+#### 自动化验证结果
+
+| 套件 | 命令 | 结果 |
+| --- | --- | --- |
+| 后端全量 | `python -m pytest backend/tests/` | **206 passed**（本轮新增 42 项：15 项日志策略 + 27 项发布门禁） |
+| 桌面全量 | `npm --prefix desktop run build && node --test desktop/dist/tests/*.test.js` | **38 passed**（本轮新增 24 项） |
+| 前端构建 | `VITE_FEEDBACK_*=<发行值> npm --prefix frontend run build` | vue-tsc + Vite 零报错 |
+| 发布契约 | PyYAML 解析工作流 + 校验函数矩阵 + 真实产物门禁 | 通过 |
+
+覆盖的隔离验证项：旋转/保留清理、限流丢弃与单次告警、重复错误聚合、白名单递归脱敏（含嵌套栈帧）、写盘失败降级、旧格式与非 JSON 行兼容、分页与筛选、导出截断与校验值、原子写入、路径穿越拒绝、取消不留残留。
+
+#### 端到端启动验证（真实子进程，非模拟）
+
+按 `desktop/src/backend-manager.ts` 的真实调用方式启动后端（`python app/main.py --desktop`，stdin 递送 bootstrap），隔离数据目录与日志目录，探针 `/api/desktop/status` 通过后核对 `backend.jsonl`：
+
+- 记录 12 条，启动阶段齐全：`startup.diagnostics.ready` → `startup.imports.ok` → `startup.uvicorn.begin` → `startup.lifespan.begin` → `startup.database.ready` → `startup.ready`；
+- 全部 `source=backend`、共享单一 `session_id`、`app_version=1.0.1`。
+
+#### 本轮独立复核发现并修复的缺陷
+
+1. **`sk-` 秘钥规则误伤业务标识**：`task-recon-999` 被脱敏成 `task-reco***`，任务关联编号被静默破坏（递归脱敏后才暴露）。已加词边界锚定，真实密钥仍完整掩码。
+2. **文件日志在 uvicorn 启动后静默失效**：`uvicorn.run()` 的 `logging.config.dictConfig` 会关闭所有既有 handler 但保留其挂载，幂等判断因此早退，启动阶段一条都不落盘。只有真实子进程启动才暴露，已改为「handler 仍可写」判定并重新挂载，并补子进程回归测试。
+3. **发布产物门禁引号假设错误**：真实产物内联为反引号 ``r.appId=`rag` ``，原门禁只认双/单引号，会误杀真实发布构建。已支持三种引号 + 词边界回退，并对真实 `frontend/dist` 复跑通过。
+4. **`CHECKSUMS.txt` 与实际字节不一致**：校验值原本算在未换行的字符串上，清单无法真正校验。已改为对写入归档的确切字节取摘要，测试逐行回验。
+5. **后端开发态无法启动**：`python <repo>/backend/app/main.py`（即桌面开发态启动方式）因 `sys.path` 只含 `app/` 而 `ModuleNotFoundError`。已显式加入后端根目录；打包（PyInstaller）路径不受影响。
+6. **后端 formatter 硬编码字段表**：白名单放行的 `phase`/`frames`/`dropped` 等字段被第二张硬编码表拦掉，导致阶段与栈帧丢失。已改为直接由白名单驱动透传。
+
+#### 未完成项与阻塞（因此状态仍是「实现中」）
+
+- **Windows 实机验证未做**：中文路径、启动失败弹窗导出、关闭重开、真实安装包——当前无 Windows 环境，不得以自动化结果替代。
+- **生产反馈服务来源登记未核对**：`http://127.0.0.1:18764` 是否已在 `appId=rag` 的允许来源中，需用生产管理员凭据在 `https://feedback.xn--fhqths51enha.cn/admin`（应用页）核对；如缺失，仅追加该来源并保留既有来源。此为本轮唯一需要线上配置变更的操作，须由用户授权后执行，本轮未改动任何服务端配置。
+- **反馈组件实际挂载未验证**：构建期注入与产物门禁只证明「配置已注入」，不证明组件挂载；挂载需在打包后的应用中观察（登录完成、外壳可见时才会加载）。
+- **桌面端 UI 路径未实跑**：日志页筛选/分页/详情复制/自动刷新、原生保存对话框取消路径、前端错误上报的实际落盘，均需在真实桌面客户端里跑一遍。
+
 ## 执行约束与准则
 
 1. **零外部环境依赖**：最终交付的 Windows 安装包必须开箱即用，目标机器无需安装 Python、Node.js、Docker 或任何编译工具链。
@@ -169,6 +295,13 @@
 | **发行与恢复门禁** | 覆盖升级保留数据 | 覆盖安装新版本，原有资料、学习进度、配置状态完全保留 | 待验收 |
 | | 数据备份与异机恢复 | 导出备份文件，清空后通过备份成功恢复，数据校验一致；跨机提示重新输入密钥 | 待验收 |
 | | 真实反馈归档验证 | 在桌面客户端提交 1 条文本反馈与 1 条截图反馈，Kaneo 后台成功归档 | 待验收 |
+| **测试版日志门禁**（本轮 T1/T2） | 启动失败留存日志 | 后台缺失模块、异常退出、就绪超时三种启动失败均写入日志，弹窗可打开日志目录并导出诊断包，导出不依赖后台与前端页面 | 实现中（后端已端到端验证；弹窗与导出待实机） |
+| | 格式、轮转与脱敏 | 桌面/后台/前端三类文件字段统一，单文件 5 MiB、保留 5 个历史、清理超 7 天；认证信息、URL 参数、用户路径与文件名递归脱敏；写盘失败不阻断业务 | 已通过（本地自动化） |
+| | 限流与聚合 | 前端上报与写入有界，重复错误聚合，旧格式日志可读 | 已通过（本地自动化） |
+| **测试版日志门禁**（本轮 T3） | 前端查看与筛选 | 主导航默认可见「日志」入口；默认最近 24 小时，按时间/级别/来源/会话/任务编号/关键词筛选，每页 200 条，支持详情、复制与手动刷新 | 实现中（页面与接口已实现，待桌面端实跑） |
+| | 导出与取消 | 原生保存对话框导出 ZIP（脱敏日志 + 版本/平台/校验值清单），默认 24 小时、最多 7 天、原始日志上限 20 MiB 且截断有标注；取消不留半成品，不打包数据库、资料或凭据 | 实现中（打包、截断与原子写入已测；原生对话框取消路径待实机） |
+| **Feedback 发布配置门禁**（本轮 T4） | 发布构建注入反馈配置 | Windows 发布构建显式注入 `https://feedback.xn--fhqths51enha.cn` 与 `appId=rag`，不依赖 `.env.local`；缺失或地址无效即构建失败 | 实现中（本地已校验注入与产物门禁，待 CI 实跑） |
+| | 实际挂载与截图遮罩 | 安装包内反馈入口可见、独立登录可用、日志详情区域默认截图遮罩、外部链接走系统浏览器；不得以组件文件存在替代实际挂载验证 | 实现中（日志详情已加截图遮罩；**实际挂载尚未验证**） |
 
 ---
 
