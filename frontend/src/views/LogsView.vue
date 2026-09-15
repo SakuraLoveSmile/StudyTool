@@ -294,8 +294,9 @@ async function refresh(resetPage = false): Promise<void> {
   try {
     const result = await desktop.queryLogs({
       ...rangeBounds(),
-      levels: levels.value,
-      sources: sources.value,
+      // Electron IPC cannot clone Vue's reactive array proxies.
+      levels: [...levels.value],
+      sources: [...sources.value],
       sessionId: sessionId.value || undefined,
       taskId: taskId.value || undefined,
       keyword: keyword.value || undefined,
