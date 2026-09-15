@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | **T1：安装、启动与本机数据** | 待体验 | 集中启动入口直传应用实例、原子维护屏障在途计数与 running 漏算修正、独立连接 WAL checkpoint、停机租约校验与 30s 超时安全中止（支持“继续等待”与“强制退出”循环且不自动误杀）均已修复；自动化回归全绿（含真实子进程一次启动验证）；待在干净 Windows 10/11 x64 实机环境执行安装与初次启动体验 |
 | **T2：配置模型与识别扫描件** | 待体验 | 统一凭据保存/替换/清除与就绪探针失败自动回滚旧配置、配置就绪探针失败自动清理残留进程、SQLite `system_metadata` 表持久化向量锁状态并在检索与后台任务中拦截向量追加、前端向量锁提示与无缝重建索引流程、safeStorage 禁明文降级、百度 OCR 429 熔断与多页物理页码对齐均已实现；自动化单测全绿；待在实机配置真实百度 OCR Token 进行扫描真题体验 |
-| **T3：备份、Feedback 与发行验证** | 待体验 | 离线备份显式传入实际数据目录与模型元数据、离线恢复结构化 JSON 输出严格校验（ok、restored_to、pre_restore_snapshot）、恢复后启动失败多级安全回滚与现场保留（`data-failed-restore-<timestamp>`）、构建脚本硬门禁（必须 Python 3.12 64-bit、清洗旧产物、缺失 NSIS .exe 立即报错）均已修复；Windows Actions 已生成并发布 1.0.0 安装包；待在干净 Windows 实机验证安装、覆盖升级、真实百度 OCR 与 Feedback 提交 |
-| **T4：自动更新** | 待体验 | 已接入 `electron-updater`、GitHub Releases 发布配置、Windows GitHub Actions 构建工作流、手动检查/定时检查、用户确认下载、取消下载、完整性校验后重启安装及更新状态 IPC；1.0.0 的 `latest.yml`、ASCII 安装包、blockmap、manifest 与 SHA-256 已发布并完成远端同名及校验核对；待实机验证旧版到新版更新、断网/损坏包/任务繁忙与资料密钥保留 |
+| **T3：备份、Feedback 与发行验证** | 待体验 | 离线备份显式传入实际数据目录与模型元数据、离线恢复结构化 JSON 输出严格校验（ok、restored_to、pre_restore_snapshot）、恢复后启动失败多级安全回滚与现场保留（`data-failed-restore-<timestamp>`）、构建脚本硬门禁（必须 Python 3.12 64-bit、清洗旧产物、冻结后台启动/首页/安全退出检查、缺失 NSIS .exe 立即报错）均已修复；Windows Actions 已生成并发布 1.0.1 安装包；待在干净 Windows 实机验证安装、覆盖升级、真实百度 OCR 与 Feedback 提交 |
+| **T4：自动更新** | 待体验 | 已接入 `electron-updater`、GitHub Releases 发布配置、Windows GitHub Actions 构建工作流、手动检查/定时检查、用户确认下载、取消下载、完整性校验后重启安装及更新状态 IPC；1.0.1 的 `latest.yml`、ASCII 安装包、blockmap、manifest 与 SHA-256 已发布并完成远端同名及校验核对；待实机验证旧版到新版更新、断网/损坏包/任务繁忙与资料密钥保留 |
 
 ## 本轮修复执行与验证证据（全链路缺陷修复与自动化通过，状态推进至“待体验”）
 
@@ -40,8 +40,8 @@
   - **Windows 干净实机打包与安装缺口**：当前开发宿主为 macOS ARM64，尚未在无开发环境的 Windows 10/11 x64 物理机上实际运行 `python desktop/scripts/build-release.py` 产出 `.exe` 并安装测试；
   - **真实商业级百度 OCR Token 缺口**：待配置真实有效百度 OCR Token 后，在实机导入 >10 页复杂扫描真题进行端到端识别与练习体验；
   - **桌面客户端线上 Feedback 归档缺口**：待在 Windows 实机固定来源（`http://127.0.0.1:18764`）下点击反馈组件并提交截图与文本，并在 Kaneo 平台确认归档。
-  - **自动更新外部验收缺口**：已公开发布 1.0.0 资产，但尚未在干净 Windows 实机完成旧版到新版的真实更新链路，以及断网、损坏包、任务繁忙和资料密钥保留验证。
-  - **Actions 发布证据**：运行 `34930589669`（提交 `6aab243`）在 Windows 2022 runner 全部通过；公开 Release 为 `SakuraLoveSmile/StudyTool-Releases@desktop-v1.0.0`，包含安装包、`latest.yml`、blockmap、`RELEASE_MANIFEST.json`、`SHA256SUMS.txt`，下载后 SHA-256 校验通过。
+  - **自动更新外部验收缺口**：已公开发布 1.0.1 资产，但尚未在干净 Windows 实机完成旧版到新版的真实更新链路，以及断网、损坏包、任务繁忙和资料密钥保留验证。
+  - **Actions 发布证据**：运行 `34932850914`（提交 `e42c22d`）在 Windows 2022 runner 全部通过，包含冻结后台启动、首页加载和安全退出门禁；公开 Release 为 `SakuraLoveSmile/StudyTool-Releases@desktop-v1.0.1`，包含安装包、`latest.yml`、blockmap、`RELEASE_MANIFEST.json`、`SHA256SUMS.txt`，下载后 SHA-256 校验通过。此前有问题的 `desktop-v1.0.0` Release 及源仓库标签已撤销。
 - 状态判定：本地自动化与回归全绿，已满足将软件移交朋友体验的质量标准，T1、T2、T3 本轮状态统一推进为“**待体验**”；待完成上述实机体验后最终转为“已验收”。
 
 ## 执行约束与准则
