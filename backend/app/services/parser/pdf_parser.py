@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Callable, Optional
 from app.services.parser.text_splitter import split_text_into_chunks
-from app.services.parser.ocr_service import OCRService, OCRServiceError
+from app.services.parser.ocr_service import OCRService, OCRServiceError, OCRQuotaExhaustedError
 from app.diagnostics import unit_context, log_diagnostic
 
 logger = logging.getLogger(__name__)
@@ -66,14 +66,26 @@ class PDFParser:
         if ocr_tasks_indices:
             sem = asyncio.Semaphore(2)
             completed_ocr_count = 0
+            quota_exhausted = False
 
             async def _run_ocr(p_idx: int):
-                nonlocal completed_ocr_count
+                nonlocal completed_ocr_count, quota_exhausted
                 entry = page_data[p_idx]
                 p_num = entry["page_num"]
                 async with sem:
                     unit_id = f"ocr-page-{p_num}"
                     scope_str = f"第 {p_num} 页"
+
+                    if quota_exhausted:
+                        entry["parse_error"] = "OCR 额度已耗尽，已停止后续页面识别"
+                        entry["text"] = ""
+                        if on_ocr_unit_finish:
+                            try:
+                                on_ocr_unit_finish(p_num, False, entry["parse_error"])
+                            except Exception:
+                                pass
+                        return
+
                     with unit_context(unit_id=unit_id, unit_index=p_num, scope=scope_str):
                         log_diagnostic(
                             "unit_started",
@@ -114,6 +126,25 @@ class PDFParser:
                                 unit_id=unit_id,
                                 unit_index=p_num,
                                 scope=scope_str
+                            )
+                        except OCRQuotaExhaustedError as q_exc:
+                            quota_exhausted = True
+                            entry["parse_error"] = str(q_exc)
+                            entry["text"] = ""
+                            if on_ocr_unit_finish:
+                                try:
+                                    on_ocr_unit_finish(p_num, False, str(q_exc))
+                                except Exception:
+                                    pass
+                            log_diagnostic(
+                                "unit_failed",
+                                level=logging.ERROR,
+                                message=f"第 {p_num} 页 OCR 额度耗尽熔断: {str(q_exc)}",
+                                stage="ocr",
+                                unit_id=unit_id,
+                                unit_index=p_num,
+                                scope=scope_str,
+                                exception_type="OCRQuotaExhaustedError"
                             )
                         except OCRServiceError as exc:
                             entry["parse_error"] = str(exc)

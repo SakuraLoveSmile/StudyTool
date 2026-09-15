@@ -1,0 +1,42 @@
+{
+  appId: "com.rag.studyassistant",
+  productName: "RAG备考助手",
+  directories: {
+    output: "release"
+  },
+  files: [
+    "dist/**/*",
+    "package.json"
+  ],
+  extraResources: [
+    {
+      from: "build/backend",
+      to: "backend",
+      filter: ["**/*"]
+    }
+  ],
+  win: {
+    target: [
+      {
+        target: "nsis",
+        arch: ["x64"]
+      }
+    ]
+  },
+  nsis: {
+    oneClick: false,
+    perMachine: false,
+    allowToChangeInstallationDirectory: true,
+    deleteAppDataOnUninstall: false,
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: "RAG专业课备考助手"
+  },
+  publish: {
+    provider: "github",
+    owner: "SakuraLoveSmile",
+    repo: "StudyTool-Releases",
+    releaseType: "release",
+    private: false
+  }
+}

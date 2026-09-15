@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 class OCRServiceError(RuntimeError):
     """Raised when OCR cannot produce trustworthy text."""
 
+class OCRQuotaExhaustedError(OCRServiceError):
+    """Raised when OCR quota or rate limit is exhausted (HTTP 429)."""
+
 class OCRService:
     @classmethod
     async def _emit(cls, on_event, event: str, info: Optional[Dict[str, Any]] = None):
@@ -48,10 +51,12 @@ class OCRService:
         on_event receives the same unified lifecycle as LLMClient:
         slot_wait / request_start / response_received / retry_wait.
         """
-        mode = settings.OCR_MODE.lower()
+        mode = settings.OCR_MODE.lower().strip()
         
         if mode == "vision_llm":
             return await cls._extract_via_vision_llm(image_bytes, image_format, on_event)
+        elif mode == "paddleocr_api":
+            return await cls._extract_via_paddleocr_api(image_bytes, image_format, on_event)
         elif mode == "mock" and (
             getattr(settings, "DEMO_MODE", False)
             or os.getenv("DEMO_MODE", "").lower() in {"1", "true", "yes"}
@@ -60,7 +65,7 @@ class OCRService:
             return "[演示模式 OCR 文本，占位内容，不可用于正式资料]"
         else:
             raise OCRServiceError(
-                "OCR 未配置可用服务；请配置 OCR_MODE=vision_llm，或仅在演示环境显式开启 DEMO_MODE"
+                "OCR 未配置可用服务；请配置 OCR_MODE=paddleocr_api 或 OCR_MODE=vision_llm，或仅在演示环境显式开启 DEMO_MODE"
             )
 
     @classmethod
@@ -340,3 +345,169 @@ class OCRService:
                         GlobalRateLimiter.release()
 
         raise OCRServiceError("OCR 请求失败")
+
+    @classmethod
+    async def _extract_via_paddleocr_api(
+        cls,
+        image_bytes: bytes,
+        image_format: str,
+        on_event: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        override_api_url: Optional[str] = None,
+        override_token: Optional[str] = None,
+    ) -> str:
+        api_url = (override_api_url or settings.BAIDU_OCR_API_URL or "").strip()
+        token = (override_token or settings.BAIDU_OCR_TOKEN or "").strip()
+
+        if not api_url or not token:
+            raise OCRServiceError("百度 OCR 未配置完整 API URL 或 Token")
+
+        # Never append /chat/completions; use the exact api_url provided.
+        endpoint_clean = sanitize_endpoint(api_url)
+        b64_file = base64.b64encode(image_bytes).decode("utf-8")
+
+        payload = {
+            "file": b64_file,
+            "fileType": 1,
+            "visualize": False,
+        }
+        headers = {
+            "Authorization": f"token {token}",
+            "Content-Type": "application/json",
+        }
+
+        client = HttpClientProvider.get_client()
+        max_retries = 2
+        attempt = 0
+        backoff_delays = [1.0, 2.0]
+
+        while True:
+            attempt += 1
+            call_id = f"ocr-baidu-{int(time.monotonic() * 1000)}-{attempt}"
+
+            # 1. slot_wait
+            await cls._emit(on_event, "slot_wait", {"attempt": attempt, "service": "ocr"})
+            await GlobalRateLimiter.acquire()
+            t_start = time.monotonic()
+            try:
+                # 2. request_start
+                await cls._emit(on_event, "request_start", {
+                    "attempt": attempt,
+                    "service": "ocr",
+                    "endpoint": endpoint_clean,
+                })
+
+                with call_context(call_id=call_id, attempt=attempt):
+                    try:
+                        async with stream_request_context(
+                            client,
+                            "POST",
+                            api_url,
+                            json=payload,
+                            headers=headers,
+                            timeout=60.0,
+                        ) as res:
+                            status_code = res.status_code
+                            dur_ms = (time.monotonic() - t_start) * 1000.0
+
+                            await cls._emit(on_event, "response_received", {
+                                "attempt": attempt,
+                                "service": "ocr",
+                                "status_code": status_code,
+                                "duration_ms": dur_ms,
+                            })
+
+                            if status_code == 200:
+                                res_bytes = await res.aread()
+                                try:
+                                    data = json.loads(res_bytes.decode("utf-8"))
+                                except Exception as json_err:
+                                    raise OCRServiceError(f"百度 OCR 响应 JSON 解析失败: {json_err}")
+
+                                if "errorCode" not in data and "error_code" not in data:
+                                    raise OCRServiceError("百度 OCR 响应缺少 errorCode 字段")
+
+                                err_code = data.get("errorCode", data.get("error_code"))
+                                if err_code == 429:
+                                    raise OCRQuotaExhaustedError("百度 OCR 每日额度耗尽或限流（errorCode 429）")
+                                if err_code != 0:
+                                    err_msg = data.get("errorMsg", data.get("error_msg", "未知业务错误"))
+                                    raise OCRServiceError(f"百度 OCR 返回错误（{err_code}）: {err_msg}")
+
+                                result = data.get("result")
+                                if not result or not isinstance(result, dict):
+                                    raise OCRServiceError("百度 OCR 响应缺少 result 对象")
+
+                                ocr_results = result.get("ocrResults")
+                                if not isinstance(ocr_results, list) or len(ocr_results) != 1:
+                                    count_str = len(ocr_results) if isinstance(ocr_results, list) else type(ocr_results).__name__
+                                    raise OCRServiceError(f"百度 OCR 单页识别结果数量异常（必须恰好为 1，实际为 {count_str}）")
+
+                                single_page = ocr_results[0]
+                                if not isinstance(single_page, dict):
+                                    raise OCRServiceError("百度 OCR ocrResults[0] 结构异常，必须为对象")
+
+                                pruned = single_page.get("prunedResult")
+                                if not isinstance(pruned, dict):
+                                    raise OCRServiceError("百度 OCR 响应缺少 prunedResult 结构")
+
+                                rec_texts = pruned.get("rec_texts")
+                                if not isinstance(rec_texts, list):
+                                    raise OCRServiceError("百度 OCR rec_texts 必须为数组")
+
+                                lines = []
+                                for item in rec_texts:
+                                    if not isinstance(item, str):
+                                        raise OCRServiceError(f"百度 OCR rec_texts 包含非字符串元素: {type(item).__name__}")
+                                    cleaned = item.strip()
+                                    if cleaned:
+                                        lines.append(cleaned)
+
+                                if not lines:
+                                    raise OCRServiceError("百度 OCR 识别文本为空")
+
+                                return "\n".join(lines)
+
+                            if status_code == 429:
+                                raise OCRQuotaExhaustedError("百度 OCR 每日额度耗尽或触发限流（HTTP 429）")
+
+                            if status_code in {403, 413, 422}:
+                                body_err = await res.aread()
+                                err_summary = body_err.decode("utf-8", errors="replace")[:200]
+                                raise OCRServiceError(f"百度 OCR 请求被拒绝（HTTP {status_code}）: {err_summary}")
+
+                            if 400 <= status_code < 500:
+                                raise OCRServiceError(f"百度 OCR 客户端错误（HTTP {status_code}）")
+
+                            if status_code in {500, 502, 503, 504}:
+                                if attempt > max_retries:
+                                    raise OCRServiceError(f"百度 OCR 服务端错误重试耗尽（HTTP {status_code}）")
+                                delay = backoff_delays[min(attempt - 1, len(backoff_delays) - 1)]
+                                await cls._emit(on_event, "retry_wait", {
+                                    "attempt": attempt,
+                                    "service": "ocr",
+                                    "delay": delay,
+                                    "reason": f"HTTP {status_code}",
+                                })
+                                await asyncio.sleep(delay)
+                                continue
+
+                            raise OCRServiceError(f"百度 OCR 异常状态码（HTTP {status_code}）")
+
+                    except (OCRQuotaExhaustedError, OCRServiceError):
+                        raise
+                    except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as net_err:
+                        if attempt > max_retries:
+                            raise OCRServiceError(f"百度 OCR 网络重试耗尽: {type(net_err).__name__}") from net_err
+                        delay = backoff_delays[min(attempt - 1, len(backoff_delays) - 1)]
+                        await cls._emit(on_event, "retry_wait", {
+                            "attempt": attempt,
+                            "service": "ocr",
+                            "delay": delay,
+                            "reason": type(net_err).__name__,
+                        })
+                        await asyncio.sleep(delay)
+                        continue
+                    except Exception as unk_err:
+                        raise OCRServiceError(f"百度 OCR 识别未知异常: {unk_err}") from unk_err
+            finally:
+                GlobalRateLimiter.release()

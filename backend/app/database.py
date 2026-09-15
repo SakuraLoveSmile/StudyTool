@@ -694,7 +694,15 @@ def init_db() -> None:
                 value TEXT NOT NULL
             )
         """)
-        
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # 1. Documents
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS documents (
@@ -991,3 +999,83 @@ def init_db() -> None:
             (str(CURRENT_SCHEMA_VERSION),),
         )
         logger.info("Database initialized successfully at %s (schema v%s)", settings.db_path, CURRENT_SCHEMA_VERSION)
+
+
+def get_system_metadata(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Retrieve a value from the persisted system_metadata table."""
+    try:
+        with db_session() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='system_metadata'")
+            if not cursor.fetchone():
+                return default
+            cursor.execute("SELECT value FROM system_metadata WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else default
+    except Exception:
+        return default
+
+
+def set_system_metadata(key: str, value: str) -> None:
+    """Store or update a value in the persisted system_metadata table."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute(
+            """INSERT INTO system_metadata (key, value, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+            (key, str(value)),
+        )
+
+
+def is_vector_locked() -> tuple[bool, Optional[str]]:
+    """Check if vector operations (retrieval & append) are locked.
+    Returns (is_locked: bool, reason: Optional[str]).
+    """
+    locked_val = get_system_metadata("vector_locked")
+    if locked_val and locked_val.lower() in {"true", "1", "yes"}:
+        reason = get_system_metadata("vector_lock_reason", "向量索引已锁定，请在设置中重建索引")
+        return True, reason
+
+    # Check if vectors exist in document_chunks
+    try:
+        with db_session() as conn:
+            cursor = conn.cursor()
+            has_chunks = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_chunks'"
+            ).fetchone()
+            if not has_chunks:
+                return False, None
+            row = cursor.execute(
+                "SELECT 1 FROM document_chunks WHERE embedding IS NOT NULL LIMIT 1"
+            ).fetchone()
+            if row:
+                meta_model = get_system_metadata("embedding_model")
+                meta_url = get_system_metadata("embedding_base_url")
+                if not (meta_model or "").strip():
+                    reason = "已有向量但来源信息缺失，已锁定向量检索与追加，要求在设置中重建索引后才能恢复使用"
+                    set_system_metadata("vector_locked", "true")
+                    set_system_metadata("vector_lock_reason", reason)
+                    return True, reason
+                # If current settings differ from persisted metadata, enforce lock
+                if settings.EMBEDDING_MODEL and meta_model and settings.EMBEDDING_MODEL != meta_model:
+                    reason = f"当前配置向量模型 ({settings.EMBEDDING_MODEL}) 与历史向量模型 ({meta_model}) 不一致，已锁定检索与追加"
+                    return True, reason
+                if (
+                    settings.EMBEDDING_BASE_URL
+                    and meta_url
+                    and settings.EMBEDDING_BASE_URL.rstrip("/").lower() != meta_url.rstrip("/").lower()
+                ):
+                    reason = "当前配置向量服务地址与历史向量服务地址不一致，已锁定检索与追加"
+                    return True, reason
+    except Exception as exc:
+        logger.warning("Error checking vector lock status: %s", exc)
+
+    return False, None

@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 from typing import List, Dict, Any, Optional
-from app.database import db_session
+from app.database import db_session, is_vector_locked
 from app.services.retrieval.fts_search import FTSSearchService
 from app.services.retrieval.embedding import EmbeddingService
 
@@ -61,6 +61,10 @@ class HybridSearchService:
         doc_type_filter: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Scans embeddings from document_chunks and calculates cosine similarity."""
+        locked, reason = is_vector_locked()
+        if locked:
+            raise RuntimeError(f"向量检索已被锁定: {reason}")
+
         with db_session() as conn:
             cursor = conn.cursor()
             query_sql = """

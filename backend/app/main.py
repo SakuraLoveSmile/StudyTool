@@ -1,8 +1,59 @@
+import sys
+import os
+import json
+import threading
+
+# 1. Immediate dispatch for offline utility commands (T3: backup/restore offline mode)
+if len(sys.argv) > 1 and sys.argv[1] in {"backup", "restore"}:
+    from app.backup import run_cli
+    run_cli()
+    sys.exit(0)
+
+_desktop_bootstrapped = False
+
+def bootstrap_desktop(input_stream=None):
+    """Centralized desktop bootstrap: reads configuration payload once from stdin,
+    starts parent-exit watchdog, and applies desktop settings to app config."""
+    global _desktop_bootstrapped
+    if _desktop_bootstrapped:
+        return
+    _desktop_bootstrapped = True
+    os.environ["RAG_DESKTOP_MODE"] = "1"
+
+    stream = input_stream or sys.stdin
+    line = stream.readline()
+    if not line:
+        sys.stderr.write("Fatal: Missing desktop bootstrap payload on standard input\n")
+        sys.exit(1)
+
+    try:
+        bootstrap_data = json.loads(line)
+    except Exception as exc:
+        sys.stderr.write(f"Fatal: Malformed desktop bootstrap payload: {exc}\n")
+        sys.exit(1)
+
+    # Start watchdog thread to monitor stdin EOF (closes when Electron exits)
+    def _watchdog_stdin():
+        try:
+            while True:
+                b = stream.read(1)
+                if not b:
+                    # Pipe was closed by parent process
+                    os._exit(0)
+        except Exception:
+            os._exit(0)
+
+    watchdog = threading.Thread(target=_watchdog_stdin, daemon=True)
+    watchdog.start()
+
+    from app.config import settings
+    settings.apply_desktop_payload(bootstrap_data)
+
+from app.config import settings
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
 from app.database import init_db
 from app.services.task_worker import TaskWorker
 from app.services.http_client import HttpClientProvider
@@ -10,6 +61,7 @@ from app.routers import materials, questions, analysis, cards, practice, learnin
 from app.routers import auth
 from app.auth import init_auth_db, enabled_user_ids
 from app.access import AccessMiddleware
+from app.desktop import desktop_router, DesktopAccessMiddleware, setup_desktop_static_serving
 from app.tenancy import tenant_scope
 from app.services.request_operations import stop_operations
 
@@ -66,15 +118,23 @@ app = FastAPI(
     openapi_url=None if settings.PUBLIC_MODE else "/openapi.json",
 )
 
-# CORS middleware for the local Vite frontend.
+# CORS middleware for local Vite frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://localhost:5173", "http://localhost:5174"],
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:18764",
+        "http://localhost:18764",
+    ],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(AccessMiddleware)
+app.add_middleware(DesktopAccessMiddleware)
 
 # Register Routers
 app.include_router(materials.router)
@@ -84,6 +144,7 @@ app.include_router(cards.router)
 app.include_router(practice.router)
 app.include_router(learning.router)
 app.include_router(auth.router)
+app.include_router(desktop_router)
 
 @app.get("/health")
 def health():
@@ -103,6 +164,27 @@ def get_config_status():
         "embedding_mode": settings.EMBEDDING_MODE
     }
 
+# Mount static frontend and SPA fallback when dist is present
+setup_desktop_static_serving(app)
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=not settings.PUBLIC_MODE)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--desktop", action="store_true", help="Run in desktop mode")
+    parser.add_argument("--port", type=int, default=None, help="Port to listen on")
+    parser.add_argument("--host", type=str, default=None, help="Host to listen on")
+    args, _ = parser.parse_known_args()
+
+    if args.desktop or os.environ.get("RAG_DESKTOP_MODE") == "1":
+        bootstrap_desktop()
+
+    from app.config import settings
+    host = args.host or settings.HOST
+    port = args.port or settings.PORT
+
+    # Pass app instance directly in desktop/public mode to avoid re-importing and re-reading stdin
+    if settings.DESKTOP_MODE or settings.PUBLIC_MODE:
+        uvicorn.run(app, host=host, port=port, reload=False)
+    else:
+        uvicorn.run("app.main:app", host=host, port=port, reload=True)

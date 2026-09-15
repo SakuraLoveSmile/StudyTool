@@ -1035,6 +1035,13 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         if row["parse_error"] or not row["content"].strip():
             cls.mark_task_failed(task_id, "原文切片仍为空或存在解析错误")
             return
+
+        from app.database import is_vector_locked
+        locked, lock_reason = is_vector_locked()
+        if locked:
+            cls.mark_task_failed(task_id, f"向量索引已锁定，禁止追加向量: {lock_reason}")
+            return
+
         try:
             vector = await EmbeddingService.get_embedding(row["content"])
             blob = EmbeddingService.serialize_embedding(vector)
@@ -1388,6 +1395,17 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         cls.update_task_progress(task_id, 80, "正在验证向量服务并计算语义向量...")
 
         # Compatibility probe: fail fast if remote embedding fails
+        from app.database import is_vector_locked
+        locked, lock_reason = is_vector_locked()
+        if locked:
+            cls.mark_task_failed(task_id, f"向量索引已锁定，禁止追加向量: {lock_reason}")
+            with db_session() as conn:
+                conn.execute(
+                    "UPDATE documents SET status = 'failed', error_msg = ? WHERE id = ?",
+                    (f"向量索引已锁定: {lock_reason}", doc_id),
+                )
+            return
+
         try:
             cls.upsert_exec_unit(
                 task_id, "embedding-batch",

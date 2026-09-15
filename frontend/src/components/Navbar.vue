@@ -31,6 +31,9 @@
           <router-link to="/practice" class="nav-tab" :class="{ 'nav-tab-active': $route.path === '/practice' }">
             <CheckSquare class="mr-1.5 inline h-4 w-4" />模拟与批改
           </router-link>
+          <router-link to="/settings" class="nav-tab" :class="{ 'nav-tab-active': $route.path === '/settings' }">
+            <Sliders class="mr-1.5 inline h-4 w-4" />设置
+          </router-link>
         </nav>
 
         <div class="flex shrink-0 items-center space-x-2">
@@ -83,7 +86,7 @@
 <script setup lang="ts">
 import { ref, type Component } from 'vue';
 import { useRouter } from 'vue-router';
-import { BookOpen, FolderArchive, BarChart3, Layers, CheckSquare, ListTodo, Menu, X, CalendarDays, BrainCircuit } from 'lucide-vue-next';
+import { BookOpen, FolderArchive, BarChart3, Layers, CheckSquare, ListTodo, Menu, X, CalendarDays, BrainCircuit, Sliders } from 'lucide-vue-next';
 import { useTaskManager } from '../composables/useTaskManager';
 import { useAuth } from '../composables/useAuth';
 
@@ -100,6 +103,7 @@ const mobileLinks: Array<{ to: string; label: string; icon: Component }> = [
   { to: '/analysis', label: '考点分析', icon: BarChart3 },
   { to: '/cards', label: '考点讲义', icon: Layers },
   { to: '/practice', label: '模拟与批改', icon: CheckSquare },
+  { to: '/settings', label: '设置', icon: Sliders },
 ];
 </script>
 

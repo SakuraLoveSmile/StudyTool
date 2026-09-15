@@ -1,0 +1,116 @@
+name: Windows Desktop Release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'desktop/package.json version to build (for example 1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_REPO: SakuraLoveSmile/StudyTool-Releases
+
+jobs:
+  build-and-publish:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Set up Python 3.12 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          $tagVersion = ''
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tagVersion = '${{ github.ref_name }}' -replace '^desktop-v', ''
+          } elseif ('${{ inputs.version }}') {
+            $tagVersion = '${{ inputs.version }}'
+          } else {
+            $tagVersion = $packageVersion
+          }
+          if ($packageVersion -ne $tagVersion) {
+            throw "Version mismatch: desktop/package.json is $packageVersion but requested release is $tagVersion"
+          }
+          "RELEASE_VERSION=$tagVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_TAG=desktop-v$tagVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Install locked Python release dependencies
+        run: python -m pip install --upgrade pip; python -m pip install --require-hashes -r backend/requirements.lock
+
+      - name: Install pinned PyInstaller builder
+        run: python -m pip install pyinstaller==6.16.0
+
+      - name: Build and validate Windows release
+        run: python desktop/scripts/build-release.py
+
+      - name: Upload build artifacts to the workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-study-assistant-windows-${{ env.RELEASE_VERSION }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.blockmap
+            desktop/release/latest*.yml
+            desktop/release/RELEASE_MANIFEST.json
+            desktop/release/SHA256SUMS.txt
+
+      - name: Verify release publishing credential
+        shell: pwsh
+        env:
+          RELEASE_REPO_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_REPO_TOKEN)) {
+            throw 'Missing RELEASE_REPO_TOKEN secret with write access to SakuraLoveSmile/StudyTool-Releases'
+          }
+
+      - name: Publish release files
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+        run: |
+          $files = @(Get-ChildItem desktop/release -File | Where-Object {
+            $_.Name -match '\.exe$|\.blockmap$|^latest.*\.yml$|^RELEASE_MANIFEST\.json$|^SHA256SUMS\.txt$'
+          } | ForEach-Object { $_.FullName })
+          if ($files.Count -eq 0) { throw 'No release files found' }
+
+          gh release view $env:RELEASE_TAG --repo $env:RELEASE_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @files --repo $env:RELEASE_REPO --clobber
+          } else {
+            gh release create $env:RELEASE_TAG @files --repo $env:RELEASE_REPO --title "RAG Study Assistant $env:RELEASE_VERSION" --notes "Windows x64 desktop release $env:RELEASE_VERSION"
+          }

@@ -209,9 +209,12 @@ def _ensure_learning_lifecycle_triggers(conn: sqlite3.Connection) -> None:
             candidate_set = assignments
 
     def _create(trigger_name: str, timing: str, operation: str, condition: str) -> None:
+        existing = conn.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?", (trigger_name,)).fetchone()
+        if existing:
+            return
         statements = [
             f"DROP TRIGGER IF EXISTS \"{trigger_name}\"",
-            f"CREATE TRIGGER \"{trigger_name}\" {timing} {operation} ON document_chunks WHEN {condition} BEGIN",
+            f"CREATE TRIGGER IF NOT EXISTS \"{trigger_name}\" {timing} {operation} ON document_chunks WHEN {condition} BEGIN",
             f"  UPDATE recall_card_revisions SET {', '.join(revision_set)} WHERE source_citations_json LIKE '%' || OLD.id || '%'",
             f"  UPDATE recall_cards SET {', '.join(card_assignments)} WHERE id IN (SELECT card_id FROM recall_card_revisions WHERE source_citations_json LIKE '%' || OLD.id || '%')",
         ]
