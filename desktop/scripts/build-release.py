@@ -189,8 +189,12 @@ def main():
         print(f"Generated Installer: {inst.name} ({inst.stat().st_size} bytes)")
         print(f"  SHA-256: {h}")
 
-    (release_dir / "RELEASE_MANIFEST.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    (release_dir / "SHA256SUMS.txt").write_text("\n".join(sha256_lines) + "\n", encoding="utf-8")
+    (release_dir / "RELEASE_MANIFEST.json").write_bytes(
+        json.dumps(manifest, indent=2).encode("utf-8")
+    )
+    (release_dir / "SHA256SUMS.txt").write_bytes(
+        ("\n".join(sha256_lines) + "\n").encode("utf-8")
+    )
     print("\n[Success] Release build complete! Artifacts in desktop/release/")
 
 
