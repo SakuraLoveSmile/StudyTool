@@ -7,9 +7,12 @@ import os
 #     desktop/src/backend-manager.ts spawns the DEVELOPMENT backend — puts `backend/app`
 #     on sys.path instead, so every `from app...` import would raise ModuleNotFoundError.
 # PyInstaller builds are unaffected: the bootloader already exposes the bundle root.
-_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _BACKEND_ROOT not in sys.path:
-    sys.path.insert(0, _BACKEND_ROOT)
+# Frozen builds already expose the bundle root; touching sys.path there would only risk
+# interfering with PyInstaller's own importer.
+if not getattr(sys, "frozen", False):
+    _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _BACKEND_ROOT not in sys.path:
+        sys.path.insert(0, _BACKEND_ROOT)
 
 import json
 import logging
@@ -23,10 +26,39 @@ if len(sys.argv) > 1 and sys.argv[1] in {"backup", "restore"}:
 
 _desktop_bootstrapped = False
 
+_stdin_watchdog_stream = None
+_stdin_watchdog_started = False
+
+
+def start_parent_exit_watchdog() -> None:
+    """Starts the stdin-EOF watchdog that exits when the Electron parent goes away.
+
+    Started AFTER the business modules are imported, not from bootstrap_desktop(): the
+    watchdog is only needed to notice the parent dying, and keeping the import phase
+    free of an extra thread blocked on stdin avoids a second live thread while the
+    frozen Windows build loads its native extensions.
+    """
+    global _stdin_watchdog_started
+    if _stdin_watchdog_started or _stdin_watchdog_stream is None:
+        return
+    _stdin_watchdog_started = True
+
+    def _watchdog_stdin():
+        try:
+            while True:
+                if not _stdin_watchdog_stream.read(1):
+                    # Pipe was closed by parent process
+                    os._exit(0)
+        except Exception:
+            os._exit(0)
+
+    threading.Thread(target=_watchdog_stdin, daemon=True).start()
+
+
 def bootstrap_desktop(input_stream=None):
-    """Centralized desktop bootstrap: reads configuration payload once from stdin,
-    starts parent-exit watchdog, and applies desktop settings to app config."""
-    global _desktop_bootstrapped
+    """Centralized desktop bootstrap: reads the configuration payload once from stdin
+    and applies it to app config, before any business module is imported."""
+    global _desktop_bootstrapped, _stdin_watchdog_stream
     if _desktop_bootstrapped:
         return
     _desktop_bootstrapped = True
@@ -44,19 +76,8 @@ def bootstrap_desktop(input_stream=None):
         sys.stderr.write(f"Fatal: Malformed desktop bootstrap payload: {exc}\n")
         sys.exit(1)
 
-    # Start watchdog thread to monitor stdin EOF (closes when Electron exits)
-    def _watchdog_stdin():
-        try:
-            while True:
-                b = stream.read(1)
-                if not b:
-                    # Pipe was closed by parent process
-                    os._exit(0)
-        except Exception:
-            os._exit(0)
-
-    watchdog = threading.Thread(target=_watchdog_stdin, daemon=True)
-    watchdog.start()
+    # Remembered here; started later by start_parent_exit_watchdog().
+    _stdin_watchdog_stream = stream
 
     from app.config import settings
     settings.apply_desktop_payload(bootstrap_data)
@@ -100,7 +121,7 @@ if _running_as_script:
     try:
         import faulthandler
 
-        faulthandler.dump_traceback_later(60, repeat=False, exit=False)
+        faulthandler.dump_traceback_later(20, repeat=True, exit=False)
         _startup_dump_armed = True
     except Exception:  # pragma: no cover - diagnostics must never block startup
         _startup_dump_armed = False
@@ -153,6 +174,7 @@ except BaseException as _import_exc:  # noqa: BLE001 - must be recorded before p
     raise
 
 log_diagnostic("startup.imports.ok", message="业务模块导入完成", phase="import")
+start_parent_exit_watchdog()
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
