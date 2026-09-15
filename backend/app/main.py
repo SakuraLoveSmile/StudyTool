@@ -91,16 +91,41 @@ log_diagnostic(
     phase="bootstrap",
 )
 
+def _importing(module_name: str) -> None:
+    """Records which business module import is in progress.
+
+    A frozen build that never becomes ready leaves no traceback, so "it stopped at
+    module X" is the difference between a one-line diagnosis and a guessing game. The
+    call is placed BEFORE each import: the last recorded target is the import that
+    hung.
+    """
+    log_diagnostic(
+        "startup.import.step",
+        message=f"正在导入业务模块：{module_name}",
+        phase="import",
+        target=module_name,
+    )
+
+
+_importing("app.database")
 try:
     from app.database import init_db
+    _importing("app.services.task_worker")
     from app.services.task_worker import TaskWorker
+    _importing("app.services.http_client")
     from app.services.http_client import HttpClientProvider
+    _importing("app.routers")
     from app.routers import materials, questions, analysis, cards, practice, learning
     from app.routers import auth
+    _importing("app.auth")
     from app.auth import init_auth_db, enabled_user_ids
+    _importing("app.access")
     from app.access import AccessMiddleware
+    _importing("app.desktop")
     from app.desktop import desktop_router, DesktopAccessMiddleware, setup_desktop_static_serving
+    _importing("app.tenancy")
     from app.tenancy import tenant_scope
+    _importing("app.services.request_operations")
     from app.services.request_operations import stop_operations
 except BaseException as _import_exc:  # noqa: BLE001 - must be recorded before propagating
     log_diagnostic(
