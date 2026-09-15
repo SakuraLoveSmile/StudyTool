@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -336,3 +337,61 @@ print(json.dumps(events))
     assert "after.reconfig" in events, (
         "file logging must be re-armed after uvicorn's dictConfig closes the handler"
     )
+
+
+# --------------------------------------------------------------------------------------
+# Console encoding safety (Windows code pages)
+# --------------------------------------------------------------------------------------
+
+def test_console_handler_never_raises_on_unencodable_output(capsys):
+    """
+    Regression for the Windows CI failure: the console/pipe encoding there is the locale
+    code page (cp1252 on an English install), so a Chinese record raised UnicodeEncodeError
+    inside `logging`. The framework's default handleError then dumped a traceback plus a
+    stack for EVERY affected record, which buried the frozen backend's real startup output.
+    """
+    import io
+
+    from app.diagnostics import SafeStreamHandler
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict", write_through=True)
+    handler = SafeStreamHandler(stream)
+    handler.setFormatter(diag.SanitizedConsoleFormatter())
+    record = logging.LogRecord("app.test", logging.INFO, __file__, 1, "中文日志消息", (), None)
+
+    SafeStreamHandler._encoding_warning_emitted = False
+    handler.emit(record)  # must not raise
+
+    err = capsys.readouterr().err
+    assert "Traceback" not in err, "no framework traceback dump for an encoding failure"
+    assert "Call stack" not in err
+    assert "could not be encoded" in err, "the problem is reported once, in ASCII"
+
+
+def test_encoding_safe_streams_substitute_instead_of_raising():
+    """`errors="replace"` keeps the native code page but never raises for Chinese text."""
+    import io
+
+    from app.diagnostics import _make_streams_encoding_safe
+
+    class FakeStream:
+        def __init__(self):
+            self.encoding_calls = []
+
+        def reconfigure(self, **kwargs):
+            self.encoding_calls.append(kwargs)
+
+    fake = FakeStream()
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = fake, FakeStream()
+    try:
+        _make_streams_encoding_safe()
+    finally:
+        sys.stdout, sys.stderr = original_stdout, original_stderr
+
+    assert fake.encoding_calls == [{"errors": "replace"}]
+
+    # End to end: a cp1252 stream with errors="replace" writes without raising.
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="replace", write_through=True)
+    stream.write("中文日志消息")
+    assert stream.encoding.lower().startswith("cp1252")

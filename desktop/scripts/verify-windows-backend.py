@@ -43,6 +43,44 @@ def tail(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")[-6000:].strip()
 
 
+def backend_log_tail(logs_dir: Path, limit: int = 15) -> str:
+    """
+    Renders the last structured backend records.
+
+    This is the single most useful artifact when the frozen backend fails to start: the
+    startup phase events say exactly how far it got. Omitting it once turned a one-line
+    diagnosis into a guessing game, so every failure path prints it now.
+    """
+    path = logs_dir / "backend.jsonl"
+    if not path.is_file():
+        return f"(no backend log file at {path})"
+    lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+    if not lines:
+        return f"(backend log is empty: {path})"
+    rendered: list[str] = []
+    for line in lines[-limit:]:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            rendered.append(f"  {line[:160]}")
+            continue
+        rendered.append(
+            f"  {entry.get('timestamp', '')} {str(entry.get('level', '')):<5} "
+            f"{str(entry.get('source', '')):<8} {entry.get('event', '')} "
+            f"phase={entry.get('phase')} | {str(entry.get('message', ''))[:70]}"
+        )
+    return "\n".join(rendered)
+
+
+def failure_report(logs_dir: Path, stdout_path: Path, stderr_path: Path) -> str:
+    """Everything needed to diagnose a startup failure, in one printable block."""
+    return (
+        f"--- backend log tail ({logs_dir / 'backend.jsonl'}) ---\n{backend_log_tail(logs_dir)}\n"
+        f"--- backend stdout tail ---\n{tail(stdout_path) or '(empty)'}\n"
+        f"--- backend stderr tail ---\n{tail(stderr_path) or '(empty)'}"
+    )
+
+
 def main() -> int:
     if os.name != "nt":
         raise RuntimeError("verify-windows-backend.py must run on Windows")
@@ -85,12 +123,19 @@ def main() -> int:
                 proc.stdin.flush()
 
             base_url = f"http://127.0.0.1:{port}"
-            deadline = time.monotonic() + 30
+            # 90s, not 30s: a cold PyInstaller onedir start on a fresh Windows runner
+            # (UPX-compressed exe, first-run AV scanning, heavy imports) can be slow,
+            # and patience here must not be mistaken for a gate. The gate still requires
+            # readiness, index.html serving and a clean shutdown exit code.
+            deadline = time.monotonic() + 90
             status = None
             last_error = ""
             while time.monotonic() < deadline:
                 if proc.poll() is not None:
-                    raise RuntimeError(f"backend exited with code {proc.returncode}: {tail(stderr_path)}")
+                    raise RuntimeError(
+                        f"backend exited with code {proc.returncode}\n"
+                        + failure_report(logs, stdout_path, stderr_path)
+                    )
                 try:
                     status = request_json(f"{base_url}/api/desktop/status", token)
                     break
@@ -98,7 +143,10 @@ def main() -> int:
                     last_error = str(exc)
                     time.sleep(0.35)
             if status is None:
-                raise RuntimeError(f"backend readiness timeout: {last_error}\n{tail(stderr_path)}")
+                raise RuntimeError(
+                    f"backend readiness timeout: {last_error}\n"
+                    + failure_report(logs, stdout_path, stderr_path)
+                )
             if status.get("desktop_mode") is not True:
                 raise RuntimeError(f"desktop status is not enabled: {status}")
 
@@ -117,7 +165,10 @@ def main() -> int:
             request_json(f"{base_url}/api/desktop/drain", token, "POST", {"lease_id": lease_id})
             request_json(f"{base_url}/api/desktop/shutdown", token, "POST", {"lease_id": lease_id})
             if proc.wait(timeout=15) != 0:
-                raise RuntimeError(f"backend shutdown returned {proc.returncode}: {tail(stderr_path)}")
+                raise RuntimeError(
+                    f"backend shutdown returned {proc.returncode}\n"
+                    + failure_report(logs, stdout_path, stderr_path)
+                )
             print(f"Windows backend smoke test passed on port {port}")
             return 0
         finally:
@@ -128,7 +179,7 @@ def main() -> int:
                 except subprocess.TimeoutExpired:
                     proc.kill()
             if proc is not None and proc.returncode not in (None, 0):
-                print(tail(stderr_path), file=sys.stderr)
+                print(failure_report(logs, stdout_path, stderr_path), file=sys.stderr)
 
 
 if __name__ == "__main__":

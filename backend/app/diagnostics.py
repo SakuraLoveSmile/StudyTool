@@ -645,6 +645,47 @@ _diagnostics_console_handler: Optional[logging.Handler] = None
 _diagnostics_initialized: bool = False
 
 
+class SafeStreamHandler(logging.StreamHandler):
+    """
+    Console handler that can never take the application down.
+
+    Windows consoles and pipes use the locale code page (cp1252 on an English install), so
+    writing a Chinese log message raises UnicodeEncodeError from inside `logging`. The
+    framework's default `handleError` then dumps a full traceback plus stack to stderr for
+    every affected record. That noise made the frozen backend's startup output unreadable
+    and is worth suppressing at the source: report it once, in ASCII, and move on.
+    """
+
+    _encoding_warning_emitted: bool = False
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        if SafeStreamHandler._encoding_warning_emitted:
+            return
+        SafeStreamHandler._encoding_warning_emitted = True
+        try:
+            err = sys.exc_info()[1]
+            sys.stderr.write(
+                "[DIAGNOSTICS] console output could not be encoded "
+                f"({type(err).__name__}); further console encoding errors are suppressed. "
+                "The UTF-8 log file is unaffected.\n"
+            )
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+
+def _make_streams_encoding_safe() -> None:
+    """
+    Keeps the native console encoding but substitutes unmappable characters instead of
+    raising, so a Chinese message cannot abort a console write on a non-UTF-8 code page.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
 def _handler_is_open(handler: Optional[logging.Handler]) -> bool:
     """
     True only while a handler can still actually write.
@@ -700,6 +741,8 @@ def setup_diagnostics(
     bc = backup_count if backup_count is not None else getattr(settings, "LOG_BACKUP_COUNT", 5)
     rd = retention_days if retention_days is not None else getattr(settings, "LOG_RETENTION_DAYS", LOG_RETENTION_DAYS)
 
+    _make_streams_encoding_safe()
+
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     _drop_dead_handlers(root_logger)
@@ -732,7 +775,7 @@ def setup_diagnostics(
         for h in root_logger.handlers
     )
     if not has_console:
-        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler = SafeStreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(SanitizedConsoleFormatter())
         root_logger.addHandler(console_handler)
