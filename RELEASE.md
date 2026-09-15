@@ -265,6 +265,24 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
 
 断言返回 `204` 且 `access-control-allow-origin` 精确等于 `http://127.0.0.1:18764`；同时用一个未登记来源断言其被拒绝（不得返回匹配的 CORS 头）。
 
+#### 1.0.4 诊断发布（2026-09-15）
+
+**发布结果**：`SakuraLoveSmile/StudyTool-Releases@desktop-v1.0.4`，已是 Latest；源仓库附注标签 `desktop-v1.0.4`（GPG 签名，GPG 校验通过）指向 `a9e2bf1`（版本提交）。工作流运行 `34989595125` 在 Windows 2022 runner 一次通过（4 分 29 秒），步骤含版本校验、反馈配置校验、前端依赖、锁定 Python 依赖、PyInstaller 6.16.0、`build-release.py` 冻结后台冒烟与发布。
+
+| 资产 | 大小 | 校验 |
+| --- | --- | --- |
+| `rag-study-assistant-desktop-setup-1.0.4.exe` | 143,035,587 B | 下载后 `shasum -a 256 -c SHA256SUMS.txt` → OK；SHA-512 与 `latest.yml` 内声明逐字节一致 |
+| `latest.yml` | 383 B | 声明 `version: 1.0.4`，可覆盖更新 1.0.1 / 1.0.2 / 1.0.3 |
+| `rag-study-assistant-desktop-setup-1.0.4.exe.blockmap` | 150,235 B | 增量更新用 |
+| `RELEASE_MANIFEST.json` | 407 B | 版本 1.0.4、安装包大小与 SHA-256 与下载产物一致 |
+| `SHA256SUMS.txt` | 110 B | 对下载产物校验通过 |
+
+**本版内容**：LLM 连接测试失败可定位（`call_id` + `error_type`，上游摘要脱敏限长，桌面端区分本地后端不可达与 LLM 探测失败，缺失密钥返回结构化失败而非空文案）；反馈服务来源预检的只读排查结论一并记录于本文档。
+
+**发布前门禁（本机实测，macOS ARM64，Python 3.12 临时环境）**：后端全量 `pytest` **233 passed**；桌面 `tsc` 构建 + `node --test` **46 passed**；前端 `vue-tsc + vite build` 零报错。与上文 T2 记录的自动化结果一致。
+
+**这次发布证明了什么、没证明什么**：已证明 Windows 真实构建、冻结后台冒烟与发布链路在 1.0.4 上可复现，且公开产物与清单校验一致；未证明真实密钥下的 LLM 探测交互、反馈组件实际挂载、Windows 实机安装体验——这些仍列于下方未完成项。
+
 #### 未完成项与阻塞（因此状态仍是「实现中」）
 
 - **Windows 实机安装未做**：1.0.2 已在 Windows runner 上完成构建与冻结后台冒烟（就绪/首页/干净退出），但「在干净 Windows 10/11 x64 机器上安装并运行」仍未做——中文路径、启动失败弹窗导出、关闭重开、覆盖升级保留资料，均不得以 CI 结果替代。
