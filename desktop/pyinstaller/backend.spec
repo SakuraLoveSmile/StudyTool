@@ -16,6 +16,7 @@ if not frontend_dist.is_dir() or not (frontend_dist / "index.html").is_file():
 
 datas = []
 datas += collect_data_files('jieba')
+datas += collect_data_files('tzdata')
 datas.append((str(frontend_dist), 'frontend_dist'))
 if (repo_root / 'deploy').is_dir():
     datas.append((str(repo_root / 'deploy'), 'deploy'))
@@ -43,6 +44,7 @@ hiddenimports = [
     'fastapi',
     'pydantic',
     'pydantic_settings',
+    'tzdata',
     'httpx',
     'app.main',
     'app.config',

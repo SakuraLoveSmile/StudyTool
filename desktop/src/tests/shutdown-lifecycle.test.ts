@@ -89,3 +89,21 @@ test('BackendManager: forceKill reports failure and keeps tracking an unconfirme
   assert.strictEqual(killed, false);
   assert.strictEqual((manager as any).childProcess, mockProc);
 });
+
+test('BackendManager: startup failure details retain the cause without exposing secrets', () => {
+  const store = new CredentialsStore('/tmp', {
+    isEncryptionAvailable: () => true,
+    encryptString: (s) => Buffer.from(s),
+    decryptString: (b) => b.toString(),
+  });
+  const manager = new BackendManager(18764, '127.0.0.1', 'token-test', store);
+
+  (manager as any).recordStartupOutput(
+    'stderr',
+    "ZoneInfoNotFoundError: 'No time zone found with key Asia/Shanghai' api_key=real-secret"
+  );
+  const detail = manager.getStartupFailureDetail();
+  assert.match(detail, /ZoneInfoNotFoundError/);
+  assert.doesNotMatch(detail, /real-secret/);
+  assert.match(detail, /api_key=\[REDACTED\]/);
+});

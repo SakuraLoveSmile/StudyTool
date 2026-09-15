@@ -12,6 +12,7 @@ export class BackendManager {
   private instanceToken: string;
   private credentialsStore: CredentialsStore;
   private isPackaged: boolean;
+  private startupOutput = '';
 
   constructor(
     port = 18764,
@@ -66,6 +67,7 @@ export class BackendManager {
     }
 
     const { command, args, cwd } = this.getBackendExecutable();
+    this.startupOutput = '';
     let creds: CredentialsData = {};
     try {
       creds = this.credentialsStore.load();
@@ -93,6 +95,10 @@ export class BackendManager {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       RAG_DESKTOP_MODE: '1',
+      // Keep packaged diagnostics and data out of the read-only application
+      // resources directory, including before the backend consumes stdin.
+      RAG_DESKTOP_DATA_DIR: path.dirname(this.getDataDir()),
+      LOG_DIR: this.getLogDir(),
       PORT: String(this.port),
       HOST: this.host,
     };
@@ -111,6 +117,7 @@ export class BackendManager {
 
       this.childProcess.on('error', (err) => {
         console.error('[BackendManager] Failed to spawn backend process:', err);
+        this.recordStartupOutput('spawn error', err.message);
         startupFailed = true;
         this.childProcess = null;
         resolve(false);
@@ -118,6 +125,9 @@ export class BackendManager {
 
       this.childProcess.on('exit', (code, signal) => {
         console.log(`[BackendManager] Process exited with code ${code}, signal ${signal}`);
+        if (code !== 0) {
+          this.recordStartupOutput('process exit', `code=${String(code)} signal=${String(signal)}`);
+        }
         this.childProcess = null;
       });
 
@@ -129,7 +139,9 @@ export class BackendManager {
       });
 
       this.childProcess.stderr?.on('data', (data) => {
-        console.error(`[Backend stderr]: ${data.toString().trim()}`);
+        const text = data.toString();
+        this.recordStartupOutput('stderr', text);
+        console.error(`[Backend stderr]: ${text.trim()}`);
       });
 
       // Write bootstrap payload to stdin
@@ -154,6 +166,18 @@ export class BackendManager {
         }
       });
     });
+  }
+
+  private recordStartupOutput(source: string, output: string): void {
+    const sanitized = String(output)
+      .replace(/(api[_-]?key|token|authorization|secret|password)[^=:\n]*[=:]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+      .trim();
+    if (!sanitized) return;
+    this.startupOutput = `${this.startupOutput}\n[${source}] ${sanitized}`.slice(-6000);
+  }
+
+  public getStartupFailureDetail(): string {
+    return this.startupOutput.trim() || '后台进程未返回错误信息。';
   }
 
   /**
@@ -298,6 +322,8 @@ export class BackendManager {
         env: {
           ...process.env,
           RAG_DESKTOP_MODE: '1',
+          RAG_DESKTOP_DATA_DIR: path.dirname(this.getDataDir()),
+          LOG_DIR: this.getLogDir(),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

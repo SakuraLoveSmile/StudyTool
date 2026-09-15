@@ -437,6 +437,7 @@ app.whenReady().then(async () => {
     });
 
     if (choice === 1) {
+      isQuitting = true;
       app.quit();
       return;
     }
@@ -444,15 +445,26 @@ app.whenReady().then(async () => {
   }
 
   // Start backend process
-  const backendStarted = await backendManager!.start();
+  let backendStarted = false;
+  let backendStartupError = '';
+  try {
+    backendStarted = await backendManager!.start();
+  } catch (err: any) {
+    backendStartupError = err?.message || String(err);
+  }
   if (!backendStarted) {
     dialog.showMessageBoxSync({
       type: 'error',
       title: '后台启动失败',
       message: '无法启动本地后台服务或未通过就绪验证。',
-      detail: '请检查端口占用或杀毒软件拦截策略。',
+      detail: [
+        backendStartupError || backendManager!.getStartupFailureDetail(),
+        `日志目录：${backendManager!.getLogDir()}`,
+        '请修复日志中指出的问题后重新启动。',
+      ].join('\n'),
       buttons: ['确定'],
     });
+    isQuitting = true;
     app.quit();
     return;
   }
@@ -462,7 +474,24 @@ app.whenReady().then(async () => {
   setupAutoUpdater();
 
   // Create Window
-  await createWindow();
+  try {
+    await createWindow();
+  } catch (err: any) {
+    dialog.showMessageBoxSync({
+      type: 'error',
+      title: '窗口启动失败',
+      message: '本地后台已启动，但桌面窗口无法加载。',
+      detail: [
+        err?.message || String(err),
+        `日志目录：${backendManager!.getLogDir()}`,
+      ].join('\n'),
+      buttons: ['确定'],
+    });
+    await backendManager!.forceKill();
+    isQuitting = true;
+    app.quit();
+    return;
+  }
   if (app.isPackaged) {
     setTimeout(() => void checkForUpdates(), 1500);
     updateTimer = setInterval(() => void checkForUpdates(), 6 * 60 * 60 * 1000);

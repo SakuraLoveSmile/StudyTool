@@ -120,6 +120,13 @@ def main():
     if not backend_out.is_dir():
         raise RuntimeError(f"PyInstaller build failed: {backend_out} does not exist!")
 
+    if sys.platform == "win32" or os.environ.get("FORCE_BUILD_WIN"):
+        run_command(
+            [sys.executable, str(script_dir / "verify-windows-backend.py"), str(backend_out / "backend.exe")],
+            desktop_dir,
+            "Starting frozen backend and validating desktop readiness",
+        )
+
     # 4. Compile desktop TypeScript
     run_command([npm_executable(), "run", "build"], desktop_dir, "Compiling desktop TypeScript")
 
