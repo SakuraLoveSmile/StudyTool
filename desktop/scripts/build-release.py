@@ -120,7 +120,11 @@ def main():
 
     # 6. Package with electron-builder
     if sys.platform == "win32" or os.environ.get("FORCE_BUILD_WIN"):
-        run_command([npx_executable(), "electron-builder", "--win", "--x64"], desktop_dir, "Packaging Windows installer (NSIS)")
+        run_command(
+            [npx_executable(), "electron-builder", "--win", "--x64", "--publish", "never"],
+            desktop_dir,
+            "Packaging Windows installer (NSIS)",
+        )
     else:
         print("\n[Notice] 当前主机系统不是 Windows (为 " + sys.platform + ")。")
         print("[Notice] 非 Windows 环境绝不宣称生成 Windows 发行版，跳过 NSIS 安装包生成。")
