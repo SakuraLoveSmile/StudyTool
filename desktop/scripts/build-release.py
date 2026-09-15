@@ -29,6 +29,16 @@ def run_command(cmd: list[str], cwd: Path, description: str) -> None:
     subprocess.check_call(cmd, cwd=cwd)
 
 
+def npm_executable() -> str:
+    """Return the executable name that Python can launch on each host OS."""
+    return "npm.cmd" if os.name == "nt" else "npm"
+
+
+def npx_executable() -> str:
+    """Return the executable name that Python can launch on each host OS."""
+    return "npx.cmd" if os.name == "nt" else "npx"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -87,7 +97,7 @@ def main():
             print(f"  Removed: {d}")
 
     # 2. Build fresh frontend
-    run_command(["npm", "run", "build"], frontend_dir, "Building frontend assets (Vite + vue-tsc)")
+    run_command([npm_executable(), "run", "build"], frontend_dir, "Building frontend assets (Vite + vue-tsc)")
     dist_html = frontend_dir / "dist" / "index.html"
     if not dist_html.is_file():
         raise RuntimeError("Frontend build failed: dist/index.html is missing!")
@@ -103,14 +113,14 @@ def main():
         raise RuntimeError(f"PyInstaller build failed: {backend_out} does not exist!")
 
     # 4. Compile desktop TypeScript
-    run_command(["npm", "run", "build"], desktop_dir, "Compiling desktop TypeScript")
+    run_command([npm_executable(), "run", "build"], desktop_dir, "Compiling desktop TypeScript")
 
     # 5. Run desktop unit tests
-    run_command(["npm", "test"], desktop_dir, "Running desktop unit tests")
+    run_command([npm_executable(), "test"], desktop_dir, "Running desktop unit tests")
 
     # 6. Package with electron-builder
     if sys.platform == "win32" or os.environ.get("FORCE_BUILD_WIN"):
-        run_command(["npx", "electron-builder", "--win", "--x64"], desktop_dir, "Packaging Windows installer (NSIS)")
+        run_command([npx_executable(), "electron-builder", "--win", "--x64"], desktop_dir, "Packaging Windows installer (NSIS)")
     else:
         print("\n[Notice] 当前主机系统不是 Windows (为 " + sys.platform + ")。")
         print("[Notice] 非 Windows 环境绝不宣称生成 Windows 发行版，跳过 NSIS 安装包生成。")

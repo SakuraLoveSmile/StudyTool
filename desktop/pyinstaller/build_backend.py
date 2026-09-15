@@ -15,7 +15,8 @@ def main():
     print("=== Step 1: Ensure frontend is built ===")
     if not frontend_dist.is_dir() or not (frontend_dist / "index.html").is_file():
         print("Frontend dist not found, building frontend...")
-        subprocess.check_call(["npm", "run", "build"], cwd=repo_root / "frontend")
+        npm = "npm.cmd" if os.name == "nt" else "npm"
+        subprocess.check_call([npm, "run", "build"], cwd=repo_root / "frontend")
 
     print("=== Step 2: Running PyInstaller ===")
     dist_dir = desktop_dir / "build"
