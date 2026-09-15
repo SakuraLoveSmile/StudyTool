@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -150,8 +151,20 @@ def main():
             "构建错误：缺少 electron-updater 所需的 latest*.yml 或 .blockmap，禁止发布不完整更新包"
         )
     package_version = json.loads((desktop_dir / "package.json").read_text(encoding="utf-8"))["version"]
-    if not any(f"version: {package_version}" in p.read_text(encoding="utf-8") for p in update_manifests):
-        raise RuntimeError(f"构建错误：latest.yml 未声明当前版本 {package_version}")
+    installer_names = {installer.name for installer in installers}
+    for update_manifest in update_manifests:
+        manifest_text = update_manifest.read_text(encoding="utf-8")
+        if f"version: {package_version}" not in manifest_text:
+            raise RuntimeError(f"构建错误：{update_manifest.name} 未声明当前版本 {package_version}")
+        referenced_files = {
+            match.group(1).strip().strip("'\"")
+            for match in re.finditer(r"^\s*(?:url|path):\s*(.+?)\s*$", manifest_text, re.MULTILINE)
+        }
+        missing_files = sorted(referenced_files - installer_names)
+        if missing_files:
+            raise RuntimeError(
+                f"构建错误：{update_manifest.name} 引用的安装包不存在: {', '.join(missing_files)}"
+            )
     missing_blockmaps = [inst.name for inst in installers if not (release_dir / f"{inst.name}.blockmap").is_file()]
     if missing_blockmaps:
         raise RuntimeError(f"构建错误：安装包缺少对应 blockmap: {', '.join(missing_blockmaps)}")

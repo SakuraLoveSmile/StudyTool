@@ -24,6 +24,7 @@
     ]
   },
   nsis: {
+    artifactName: "rag-study-assistant-desktop-setup-${version}.${ext}",
     oneClick: false,
     perMachine: false,
     allowToChangeInstallationDirectory: true,
