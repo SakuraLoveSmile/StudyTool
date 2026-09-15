@@ -16,6 +16,13 @@ permissions:
 
 env:
   RELEASE_REPO: SakuraLoveSmile/StudyTool-Releases
+  # Feedback widget build configuration (@feedback/web 0.2.0). The frontend only mounts the
+  # feedback entry when BOTH of these are non-empty, and they are inlined at build time.
+  # The release must never depend on the git-ignored frontend/.env.local.
+  # These two values MUST stay identical to the release constants in
+  # desktop/scripts/build-release.py, which re-validates and re-injects them.
+  VITE_FEEDBACK_API_BASE: "https://feedback.xn--fhqths51enha.cn"
+  VITE_FEEDBACK_APP_ID: "rag"
 
 jobs:
   build-and-publish:
@@ -60,6 +67,33 @@ jobs:
           "RELEASE_VERSION=$tagVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "RELEASE_TAG=desktop-v$tagVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Validate feedback widget configuration
+        shell: pwsh
+        env:
+          FEEDBACK_API_BASE: ${{ env.VITE_FEEDBACK_API_BASE }}
+          FEEDBACK_APP_ID: ${{ env.VITE_FEEDBACK_APP_ID }}
+        run: |
+          # Cheap pre-flight gate: a misconfigured release must fail in seconds, before
+          # dependency install and packaging, not silently ship without the feedback entry.
+          $expectedApiBase = 'https://feedback.xn--fhqths51enha.cn'
+          $expectedAppId = 'rag'
+          if ([string]::IsNullOrWhiteSpace($env:FEEDBACK_API_BASE)) {
+            throw 'Missing VITE_FEEDBACK_API_BASE: the release must inject the feedback API base explicitly (frontend/.env.local is git-ignored and never available in CI).'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:FEEDBACK_APP_ID)) {
+            throw 'Missing VITE_FEEDBACK_APP_ID: the release must inject the feedback app id explicitly.'
+          }
+          if ($env:FEEDBACK_API_BASE -notmatch '^https://[A-Za-z0-9.\-]+$') {
+            throw "Invalid VITE_FEEDBACK_API_BASE '$env:FEEDBACK_API_BASE': expected an absolute https:// origin with no path, query, fragment or trailing slash."
+          }
+          if ($env:FEEDBACK_API_BASE -ne $expectedApiBase) {
+            throw "Invalid VITE_FEEDBACK_API_BASE '$env:FEEDBACK_API_BASE': releases must point at $expectedApiBase."
+          }
+          if ($env:FEEDBACK_APP_ID -ne $expectedAppId) {
+            throw "Invalid VITE_FEEDBACK_APP_ID '$env:FEEDBACK_APP_ID': releases must use '$expectedAppId'."
+          }
+          Write-Host "Feedback widget configuration OK: $env:FEEDBACK_API_BASE (appId=$env:FEEDBACK_APP_ID)"
+
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
@@ -75,6 +109,11 @@ jobs:
         run: python -m pip install pyinstaller==6.16.0
 
       - name: Build and validate Windows release
+        env:
+          # Explicit contract for this step: the frontend production build performed inside
+          # build-release.py inherits these and inlines them into the bundle.
+          VITE_FEEDBACK_API_BASE: ${{ env.VITE_FEEDBACK_API_BASE }}
+          VITE_FEEDBACK_APP_ID: ${{ env.VITE_FEEDBACK_APP_ID }}
         run: python desktop/scripts/build-release.py
 
       - name: Upload build artifacts to the workflow
