@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   // There is deliberately no delete/clear channel — logs stay append-only for the user.
   getLogMeta: () => ipcRenderer.invoke('desktop:getLogMeta'),
   queryLogs: (params: any) => ipcRenderer.invoke('desktop:queryLogs', params),
+  /** Stops a running query in the worker; the renderer still guards against stale replies. */
+  cancelLogQuery: (requestId: string) => ipcRenderer.invoke('desktop:cancelLogQuery', requestId),
   reportLog: (entries: any) => ipcRenderer.invoke('desktop:reportLog', entries),
   exportDiagnostics: (params: any) => ipcRenderer.invoke('desktop:exportDiagnostics', params),
 });

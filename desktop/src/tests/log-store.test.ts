@@ -200,3 +200,173 @@ test('parseLogLine tolerates malformed JSON without throwing', () => {
   const parsed = parseLogLine('{"broken": ', 'desktop');
   assert.strictEqual(parsed!.event, 'legacy.text');
 });
+
+// --- Scale and long-text regressions -------------------------------------------------
+// Each of these used to be a freeze: a 200 KiB plain line hit a quadratic file-name
+// regex, a huge field was scanned in full, and a few hundred thousand entries were
+// handed to `Array.prototype.push` via spread, which overflows the call stack.
+
+test('a line over the 256 KiB ceiling is skipped, counted and never shown', () => {
+  const dir = tempDir();
+  const now = Date.now();
+  const huge = 'y'.repeat(300 * 1024);
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl'),
+    [
+      JSON.stringify(entry({ event: 'before.huge', timestamp: new Date(now - 2000).toISOString() })),
+      JSON.stringify({ ...entry({ event: 'huge.line' }), message: huge }),
+      JSON.stringify(entry({ event: 'after.huge', timestamp: new Date(now).toISOString() })),
+      '',
+    ].join('\n')
+  );
+
+  const result = queryLogs({ dir, from: 0, to: now + 1000, sources: ['desktop'] });
+  assert.strictEqual(result.skippedLines, 1, 'the oversized line is accounted for');
+  assert.strictEqual(result.total, 2, 'the rest of the file is still served');
+  assert.ok(
+    !result.entries.some((e) => String(e.message).includes('yyyy')),
+    'no unscrubbed prefix of the skipped line may reach the viewer'
+  );
+  assert.deepStrictEqual(
+    result.entries.map((e) => e.event).sort(),
+    ['after.huge', 'before.huge']
+  );
+});
+
+test('an oversized field is replaced wholesale instead of being scrubbed in full', () => {
+  const dir = tempDir();
+  const now = Date.now();
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl'),
+    `${JSON.stringify({
+      ...entry({ timestamp: new Date(now).toISOString() }),
+      message: 'tail-marker-abcdef',
+      detail: 'd'.repeat(9000),
+    })}\n`
+  );
+
+  const result = queryLogs({ dir, from: 0, to: now + 1000, sources: ['desktop'] });
+  assert.strictEqual(result.total, 1);
+  const detail = String(result.entries[0].detail);
+  assert.match(detail, /omitted: oversized string/, 'replaced by the omission marker');
+  assert.ok(!detail.includes('dddd'), 'not even a scrubbed prefix of the oversized field survives');
+});
+
+test('long separator-free text does not make the scrubber backtrack', () => {
+  const dir = tempDir();
+  const now = Date.now();
+  // 200 KiB of dots and near-miss extensions: the old unbounded file-name pattern was
+  // quadratic here, and this call ran on the UI thread.
+  const pathological = `${'a.'.repeat(100 * 1024)}pdfx`;
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), `${pathological}\n`);
+
+  const started = Date.now();
+  const result = queryLogs({ dir, from: 0, to: now + 1000, sources: ['desktop'] });
+  const elapsed = Date.now() - started;
+  assert.strictEqual(result.total, 1);
+  assert.ok(elapsed < 2000, `scrubbing stayed linear (took ${elapsed} ms)`);
+});
+
+test('hundreds of thousands of entries are appended without overflowing the stack', () => {
+  const dir = tempDir();
+  const base = Date.now();
+  const total = 150_000;
+  const lines = new Array<string>(total);
+  for (let i = 0; i < total; i += 1) {
+    lines[i] = JSON.stringify(
+      entry({ timestamp: new Date(base + i).toISOString(), event: `bulk.${i}`, message: 'x' })
+    );
+  }
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), `${lines.join('\n')}\n`);
+
+  const result = queryLogs({ dir, from: 0, to: base + total + 1000, sources: ['desktop'], page: 1 });
+  assert.strictEqual(result.total, total);
+  assert.strictEqual(result.entries.length, 200);
+  assert.strictEqual(result.entries[0].event, `bulk.${total - 1}`, 'newest first');
+  assert.strictEqual(result.hasMore, true);
+});
+
+test('a rotated file is still readable while the active file is being written', () => {
+  const dir = tempDir();
+  const now = Date.now();
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl.1'),
+    `${JSON.stringify(entry({ timestamp: new Date(now - 10_000).toISOString(), event: 'rotated.older' }))}\n`
+  );
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl'),
+    `${JSON.stringify(entry({ timestamp: new Date(now).toISOString(), event: 'active.newer' }))}\n`
+  );
+
+  const result = queryLogs({ dir, from: 0, to: now + 1000, sources: ['desktop'] });
+  assert.strictEqual(result.total, 2);
+  assert.deepStrictEqual(
+    result.entries.map((e) => e.event),
+    ['active.newer', 'rotated.older'],
+    'newest first across the rotation boundary'
+  );
+});
+
+test('corrupt lines, CRLF endings and a missing source never fail the whole query', () => {
+  const dir = tempDir();
+  const now = Date.now();
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl'),
+    [
+      JSON.stringify(entry({ event: 'ok.crlf', timestamp: new Date(now).toISOString() })),
+      '{"truncated": ',
+      '',
+      JSON.stringify(entry({ event: 'ok.after.corrupt', timestamp: new Date(now - 1000).toISOString() })),
+    ].join('\r\n')
+  );
+
+  const result = queryLogs({
+    dir,
+    from: 0,
+    to: now + 1000,
+    sources: ['desktop', 'backend', 'frontend'],
+  });
+
+  assert.strictEqual(result.ok, true, 'one bad line cannot fail the query');
+  assert.deepStrictEqual(result.unavailable, ['backend', 'frontend'], 'missing sources are reported, not fatal');
+  assert.ok(result.entries.some((e) => e.event === 'ok.crlf'), 'CRLF endings are handled');
+  assert.ok(result.entries.some((e) => e.event === 'ok.after.corrupt'), 'parsing resumes after a corrupt line');
+  assert.ok(result.entries.some((e) => e.event === 'legacy.text'), 'the corrupt JSON line degrades to plain text');
+});
+
+test('the scan budget keeps the newest records and flags truncation', () => {
+  const dir = tempDir();
+  const base = Date.now();
+  // Two rotated generations, each large enough that the active file alone cannot fit
+  // under a deliberately small budget.
+  const filler = (prefix: string, count: number, offset: number) =>
+    Array.from({ length: count }, (_, i) =>
+      JSON.stringify(
+        entry({
+          timestamp: new Date(base + offset + i).toISOString(),
+          event: `${prefix}.${i}`,
+          message: 'z'.repeat(400),
+        })
+      )
+    ).join('\n');
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), `${filler('active', 400, 10_000)}\n`);
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl.1'), `${filler('rotated', 400, 0)}\n`);
+
+  const result = queryLogs({
+    dir,
+    from: 0,
+    to: base + 100_000,
+    sources: ['desktop'],
+    page: 1,
+    pageSize: 500,
+    maxScanBytes: 4096,
+  });
+  assert.strictEqual(result.scanTruncated, true, 'a partial read is reported');
+  assert.ok(result.scannedBytes > 0 && result.scannedBytes <= 4096);
+  assert.ok(result.total > 0, 'the newest records are still served');
+  assert.ok(
+    result.entries.length > 0 && result.entries[0].event.startsWith('active'),
+    'newest-first ordering survives across rotated files'
+  );
+});
+

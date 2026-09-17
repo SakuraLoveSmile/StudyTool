@@ -8,6 +8,14 @@
     "dist/**/*",
     "package.json"
   ],
+  // worker_threads has no asar support: a Worker cannot even be constructed from a path
+  // inside app.asar, and a worker that was unpacked on its own still cannot require the
+  // modules left inside it. So the whole compiled directory is unpacked — it is a few
+  // hundred KB of JS, and it removes the "works in dev, breaks in the installer" failure
+  // mode entirely. `defaultWorkerPath()` in src/log-workers.ts resolves the unpacked copy.
+  asarUnpack: [
+    "dist/**/*"
+  ],
   extraResources: [
     {
       from: "build/backend",

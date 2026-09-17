@@ -61,10 +61,20 @@ export interface DesktopLogEntry {
   message: string;
   session_id: string | null;
   task_id?: string;
+  /**
+   * 主进程为每条成功读取的记录分配的稳定标识（成功结果里每条都有）。
+   * 仍按可选处理：旧版主进程或降级路径可能没有该字段。
+   */
+  record_id?: string;
   [key: string]: unknown;
 }
 
 export interface DesktopLogQuery {
+  /**
+   * 渲染进程提议的请求编号（主进程只接受 /^[A-Za-z0-9_-]{1,64}$/，不合法时自行生成）。
+   * 预先提供编号，查询在途时才可能用 cancelLogQuery 精确取消它。
+   */
+  requestId?: string;
   from: number;
   to: number;
   levels?: string[];
@@ -78,6 +88,9 @@ export interface DesktopLogQuery {
 
 export interface DesktopLogQueryResult {
   ok: boolean;
+  /** 本次请求编号；失败结果里同样存在。 */
+  requestId?: string;
+  /** 失败时为空数组：失败结果仍是完整结构。 */
   entries: DesktopLogEntry[];
   total: number;
   page: number;
@@ -86,6 +99,15 @@ export interface DesktopLogQueryResult {
   scannedBytes: number;
   scanTruncated: boolean;
   unavailable: string[];
+  /** 超大/损坏行被跳过的条数。 */
+  skippedLines?: number;
+  elapsedMs?: number;
+  /** 失败时的错误码，如 LOG_QUERY_TIMEOUT / LOG_QUERY_CANCELED / LOG_QUERY_SUPERSEDED。 */
+  code?: string;
+  /** 失败时的中文说明。 */
+  message?: string;
+  /** 失败是否可重试（超时、被取代、Worker 崩溃为 true）。 */
+  retryable?: boolean;
 }
 
 export interface DesktopDiagnosticExportResult {
@@ -94,6 +116,8 @@ export interface DesktopDiagnosticExportResult {
   path?: string;
   entries?: number;
   truncated?: boolean;
+  code?: string;
+  elapsedMs?: number;
   message?: string;
 }
 
@@ -122,6 +146,8 @@ declare global {
       /** Diagnostics (test build). Read-only: there is no delete/clear channel. */
       getLogMeta?(): Promise<DesktopLogMeta>;
       queryLogs?(params: DesktopLogQuery): Promise<DesktopLogQueryResult>;
+      /** 取消在途查询；未暴露该接口时调用方必须忽略（可选链调用）。 */
+      cancelLogQuery?(requestId: string): Promise<{ ok: boolean; canceled: boolean }>;
       reportLog?(entries: unknown[]): Promise<{ ok: boolean; accepted: number; dropped: number }>;
       exportDiagnostics?(params: { from: number; to: number }): Promise<DesktopDiagnosticExportResult>;
     };

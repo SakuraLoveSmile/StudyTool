@@ -4,23 +4,36 @@
  * One reader serves both the in-app viewer (IPC query) and the diagnostic export (ZIP),
  * so "what you see" and "what you send" can never diverge.
  *
- * Two gates live here:
+ * Three gates live here:
  *  - legacy compatibility: old records (no source / asctime / non-JSON lines) are
  *    normalized instead of being dropped;
  *  - export re-scrubbing: every entry is passed through the whitelist + scrubber again
- *    on read, so a file written by an older build cannot leak through the export path.
+ *    on read, so a file written by an older build cannot leak through the export path;
+ *  - bounded work: files are streamed in fixed-size chunks and pathological lines are
+ *    skipped whole, so a 48 MiB scan cannot blow up the call stack, the heap, or the
+ *    regex engine. Each of those three was a real freeze in this reader.
  */
 
 import fs from 'fs';
-import path from 'path';
-import { FIELD_WHITELIST, LOG_BACKUP_COUNT, scrubRecord, scrubString, logFilePath, type LogSource } from './diagnostics';
+import { StringDecoder } from 'string_decoder';
+import { LOG_BACKUP_COUNT, scrubRecord, scrubString, logFilePath, type LogSource } from './diagnostics';
 
 export const ALL_SOURCES: LogSource[] = ['desktop', 'backend', 'frontend'];
 export const DEFAULT_PAGE_SIZE = 200;
 /** Never read more than this much raw text per query/export, to bound memory and latency. */
-const MAX_SCAN_BYTES = 48 * 1024 * 1024;
+export const MAX_SCAN_BYTES = 48 * 1024 * 1024;
 /** Export cap for raw log payload (release gate: 20 MiB, newest records win). */
 export const EXPORT_MAX_RAW_BYTES = 20 * 1024 * 1024;
+/** One read() never asks for more than this, so a 48 MiB scan never becomes one string. */
+const READ_CHUNK_BYTES = 1024 * 1024;
+/** Lines longer than this are skipped whole and counted — never rendered as a prefix. */
+export const MAX_LINE_BYTES = 256 * 1024;
+/**
+ * Below this code-unit count a line cannot exceed MAX_LINE_BYTES: UTF-8 encodes at most
+ * 3 bytes per UTF-16 code unit, so 256 KiB / 4 is a safe fast path and the exact byte
+ * measurement only ever runs on genuinely large lines.
+ */
+const LINE_BYTES_PROBE_CHARS = Math.floor(MAX_LINE_BYTES / 4);
 
 export interface LogEntry {
   timestamp: string;
@@ -30,6 +43,8 @@ export interface LogEntry {
   event: string;
   message: string;
   session_id: string | null;
+  /** Viewer-only stable identity for list keys; never written to the export payload. */
+  record_id?: string;
   [key: string]: unknown;
 }
 
@@ -44,11 +59,18 @@ export interface LogQueryOptions {
   keyword?: string;
   page?: number;
   pageSize?: number;
+  /**
+   * Overrides MAX_SCAN_BYTES. Never set from IPC — the renderer cannot raise or lower
+   * the scan ceiling — it exists so the truncation path can be exercised without
+   * materialising a 48 MiB fixture on every test run.
+   */
+  maxScanBytes?: number;
 }
 
 export interface LogQueryResult {
   ok: boolean;
   entries: LogEntry[];
+  /** Entries matching the filters *within this scan* — never a full-history count. */
   total: number;
   page: number;
   pageSize: number;
@@ -56,6 +78,18 @@ export interface LogQueryResult {
   scannedBytes: number;
   scanTruncated: boolean;
   unavailable: string[];
+  /** Lines dropped for exceeding MAX_LINE_BYTES; surfaced so the loss is never silent. */
+  skippedLines: number;
+  /**
+   * Correlation id, echoed back to the renderer so it can cancel and can discard a
+   * response that a newer request has already replaced. Set by the main process.
+   */
+  requestId?: string;
+  /** Failure classification — present only when `ok` is false. */
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+  elapsedMs?: number;
 }
 
 function normalizeLevel(raw: unknown): string {
@@ -133,12 +167,140 @@ interface SourceReadResult {
   bytes: number;
   truncated: boolean;
   unavailable: boolean;
+  skippedLines: number;
+}
+
+interface LineStreamResult {
+  bytesRead: number;
+  skippedLines: number;
+  /** A read error mid-file (rotation, deletion) — the caller degrades, it never throws. */
+  failed: boolean;
+}
+
+/**
+ * Streams the byte range [start, size) of one file as whole lines.
+ *
+ * Chunked reads plus `StringDecoder` replace the old "read the whole range, then
+ * `raw.split(/\r?\n/)`" approach: that allocated a second full-size string plus a
+ * huge array of fragments, which is what made a large log fatal. Memory here is
+ * bounded by READ_CHUNK_BYTES regardless of file size.
+ *
+ * A line longer than MAX_LINE_BYTES is discarded in place — nothing of it is ever
+ * handed to the parser or the viewer — and counted exactly once.
+ */
+function streamLines(
+  file: string,
+  start: number,
+  size: number,
+  onLine: (line: string) => void
+): LineStreamResult {
+  const result: LineStreamResult = { bytesRead: 0, skippedLines: 0, failed: false };
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch {
+    result.failed = true;
+    return result;
+  }
+
+  try {
+    const decoder = new StringDecoder('utf8');
+    const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, Math.max(1, size - start)));
+    // When we only take the tail, the first fragment is half a line: drop it.
+    let droppingFirstFragment = start > 0;
+    let droppingLongLine = false;
+    let pending = '';
+    let position = start;
+
+    const tooLong = (line: string): boolean =>
+      line.length > LINE_BYTES_PROBE_CHARS && Buffer.byteLength(line, 'utf8') > MAX_LINE_BYTES;
+
+    while (position < size) {
+      const want = Math.min(chunk.length, size - position);
+      let read = 0;
+      try {
+        read = fs.readSync(fd, chunk, 0, want, position);
+      } catch {
+        result.failed = true;
+        break;
+      }
+      if (read <= 0) break;
+      position += read;
+      result.bytesRead += read;
+      pending += decoder.write(chunk.subarray(0, read));
+
+      for (;;) {
+        const newline = pending.indexOf('\n');
+        if (newline === -1) break;
+        let line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (droppingFirstFragment) {
+          // Half a line that began before our window: not a record, not a skip.
+          droppingFirstFragment = false;
+          continue;
+        }
+        if (droppingLongLine) {
+          droppingLongLine = false;
+          continue;
+        }
+        if (line.endsWith('\r')) line = line.slice(0, -1);
+        if (tooLong(line)) {
+          result.skippedLines += 1;
+          continue;
+        }
+        onLine(line);
+      }
+
+      if (droppingFirstFragment) {
+        // Still inside the leading fragment and it is already huge: keep dropping.
+        if (pending.length > LINE_BYTES_PROBE_CHARS) pending = '';
+      } else if (!droppingLongLine && tooLong(pending)) {
+        // No newline in sight and the carry already exceeds the limit: stop buffering.
+        droppingLongLine = true;
+        result.skippedLines += 1;
+        pending = '';
+      }
+    }
+
+    pending += decoder.end();
+    if (!droppingFirstFragment && !droppingLongLine && pending) {
+      const line = pending.endsWith('\r') ? pending.slice(0, -1) : pending;
+      if (tooLong(line)) result.skippedLines += 1;
+      else onLine(line);
+    }
+  } catch {
+    result.failed = true;
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed / never opened */
+    }
+  }
+  return result;
+}
+
+export interface ReadSourceOptions {
+  /** Hard byte budget for this source, shared across its rotated files. */
+  byteBudget: number;
+  /** Drops entries while streaming, so filtered-out records are never accumulated. */
+  accept?: (entry: LogEntry) => boolean;
+  /** Rotated files are older, so export needs a per-source sort; the viewer sorts once at the end. */
+  sort?: boolean;
+  /** Viewer-only: a stable per-record id so duplicate content cannot collide in list keys. */
+  withRecordId?: boolean;
 }
 
 /** Reads the active file plus rotated history for one source, newest first. */
-function readSource(dir: string, source: string, byteBudget: number): SourceReadResult {
+function readSource(dir: string, source: string, options: ReadSourceOptions): SourceReadResult {
   const active = logFilePath(dir, source as LogSource);
-  const result: SourceReadResult = { entries: [], bytes: 0, truncated: false, unavailable: false };
+  const result: SourceReadResult = {
+    entries: [],
+    bytes: 0,
+    truncated: false,
+    unavailable: false,
+    skippedLines: 0,
+  };
   if (!fs.existsSync(active)) {
     result.unavailable = true;
     return result;
@@ -146,53 +308,54 @@ function readSource(dir: string, source: string, byteBudget: number): SourceRead
 
   // Read newest first: active file, then .1 … .N.
   const candidates = [active, ...Array.from({ length: LOG_BACKUP_COUNT }, (_, i) => `${active}.${i + 1}`)];
-  let budget = byteBudget;
-  const collected: LogEntry[] = [];
-  let sawBytes = 0;
+  let budget = options.byteBudget;
 
-  for (const candidate of candidates) {
+  for (let fileIndex = 0; fileIndex < candidates.length; fileIndex += 1) {
     if (budget <= 0) {
       result.truncated = true;
       break;
     }
+    const candidate = candidates[fileIndex];
     if (!fs.existsSync(candidate)) continue;
+
+    let size = 0;
     try {
-      const stat = fs.statSync(candidate);
-      const take = Math.min(stat.size, budget);
-      if (stat.size > take) result.truncated = true;
-      const start = stat.size - take;
-      const fd = fs.openSync(candidate, 'r');
-      let raw = '';
-      try {
-        const buffer = Buffer.alloc(take);
-        fs.readSync(fd, buffer, 0, take, start);
-        raw = buffer.toString('utf8');
-      } finally {
-        fs.closeSync(fd);
-      }
-      budget -= take;
-      sawBytes += take;
-      // A partial read can start mid-line; drop the first fragment when we skipped bytes.
-      const lines = raw.split(/\r?\n/);
-      if (start > 0) lines.shift();
-      for (const line of lines) {
-        const entry = parseLogLine(line, source);
-        if (entry) collected.push(entry);
-      }
+      size = fs.statSync(candidate).size;
     } catch {
+      // Rotated away between the existence check and the stat: keep going.
       result.unavailable = true;
+      continue;
     }
+    const take = Math.min(size, budget);
+    if (size > take) result.truncated = true;
+    const start = size - take;
+
+    let lineIndex = 0;
+    const stream = streamLines(candidate, start, size, (line) => {
+      lineIndex += 1;
+      const entry = parseLogLine(line, source);
+      if (!entry) return;
+      if (options.accept && !options.accept(entry)) return;
+      if (options.withRecordId) entry.record_id = `${source}#${fileIndex}#${lineIndex}`;
+      result.entries.push(entry);
+    });
+
+    budget -= stream.bytesRead;
+    result.bytes += stream.bytesRead;
+    result.skippedLines += stream.skippedLines;
+    if (stream.failed) result.unavailable = true;
   }
 
-  // Rotated files are older; sorting by time yields a correct newest-first view.
-  collected.sort((a, b) => b.timestamp_ms - a.timestamp_ms);
-  result.entries = collected;
-  result.bytes = sawBytes;
+  // Only export needs this order (its byte cap keeps the newest records); the viewer
+  // sorts the merged result once instead of sorting every source and then sorting again.
+  if (options.sort) {
+    result.entries.sort((a, b) => b.timestamp_ms - a.timestamp_ms);
+  }
   return result;
 }
 
-function matchesKeyword(entry: LogEntry, keyword: string): boolean {
-  const needle = keyword.toLowerCase();
+/** `needle` must already be lower-cased so the per-entry scan does not re-do it. */
+function matchesKeyword(entry: LogEntry, needle: string): boolean {
   if (entry.message.toLowerCase().includes(needle)) return true;
   if (entry.event.toLowerCase().includes(needle)) return true;
   try {
@@ -214,35 +377,43 @@ export function queryLogs(options: LogQueryOptions): LogQueryResult {
     keyword,
     page = 1,
     pageSize = DEFAULT_PAGE_SIZE,
+    maxScanBytes,
   } = options;
 
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safePageSize = Math.min(500, Math.max(1, Math.floor(pageSize) || DEFAULT_PAGE_SIZE));
   const levelFilter = levels && levels.length ? new Set(levels.map((l) => l.toUpperCase())) : null;
+  const needle = keyword ? keyword.toLowerCase() : null;
 
   const unavailable: string[] = [];
-  const all: LogEntry[] = [];
+  const filtered: LogEntry[] = [];
   let scannedBytes = 0;
   let scanTruncated = false;
-  let budget = MAX_SCAN_BYTES;
+  let skippedLines = 0;
+  let budget =
+    Number.isFinite(maxScanBytes) && (maxScanBytes as number) > 0 ? Math.floor(maxScanBytes as number) : MAX_SCAN_BYTES;
 
-  for (const source of sources) {
-    const read = readSource(dir, source, budget);
-    budget -= read.bytes;
-    scannedBytes += read.bytes;
-    if (read.truncated) scanTruncated = true;
-    if (read.unavailable) unavailable.push(source);
-    all.push(...read.entries);
-  }
-
-  const filtered = all.filter((entry) => {
+  const accept = (entry: LogEntry): boolean => {
     if (entry.timestamp_ms < from || entry.timestamp_ms > to) return false;
     if (levelFilter && !levelFilter.has(entry.level.toUpperCase())) return false;
     if (sessionId && entry.session_id !== sessionId) return false;
-    if (taskId && String((entry as any).task_id ?? '') !== taskId) return false;
-    if (keyword && !matchesKeyword(entry, keyword)) return false;
+    if (taskId && String(entry.task_id ?? '') !== taskId) return false;
+    if (needle && !matchesKeyword(entry, needle)) return false;
     return true;
-  });
+  };
+
+  for (let i = 0; i < sources.length; i += 1) {
+    const source = sources[i];
+    const read = readSource(dir, source, { byteBudget: budget, accept, withRecordId: true });
+    budget -= read.bytes;
+    scannedBytes += read.bytes;
+    skippedLines += read.skippedLines;
+    if (read.truncated) scanTruncated = true;
+    if (read.unavailable) unavailable.push(source);
+    // Appended one by one on purpose: `filtered.push(...read.entries)` overflows the
+    // call stack once a source contributes a few hundred thousand entries.
+    for (let e = 0; e < read.entries.length; e += 1) filtered.push(read.entries[e]);
+  }
 
   filtered.sort((a, b) => b.timestamp_ms - a.timestamp_ms);
   const start = (safePage - 1) * safePageSize;
@@ -258,6 +429,7 @@ export function queryLogs(options: LogQueryOptions): LogQueryResult {
     scannedBytes,
     scanTruncated,
     unavailable,
+    skippedLines,
   };
 }
 
@@ -269,6 +441,8 @@ export interface ExportSelection {
   perSource: Record<string, number>;
   truncated: boolean;
   note: string;
+  /** Lines dropped for exceeding MAX_LINE_BYTES; reported in the note so it is not silent. */
+  skippedLines: number;
 }
 
 /**
@@ -288,12 +462,17 @@ export function collectExportEntries(options: {
 
   const perSourceEntries = new Map<string, LogEntry[]>();
   let totalAvailable = 0;
+  let skippedLines = 0;
 
   for (const source of sources) {
-    const read = readSource(dir, source, MAX_SCAN_BYTES);
-    const inWindow = read.entries.filter((e) => e.timestamp_ms >= from && e.timestamp_ms <= to);
-    totalAvailable += inWindow.length;
-    perSourceEntries.set(source, inWindow);
+    const read = readSource(dir, source, {
+      byteBudget: MAX_SCAN_BYTES,
+      accept: (entry) => entry.timestamp_ms >= from && entry.timestamp_ms <= to,
+      sort: true,
+    });
+    skippedLines += read.skippedLines;
+    totalAvailable += read.entries.length;
+    perSourceEntries.set(source, read.entries);
   }
 
   // Memory fallback: only used when a source produced nothing from disk (e.g. the log
@@ -345,6 +524,9 @@ export function collectExportEntries(options: {
   if (truncated) {
     note += `；原始日志超过 ${Math.round(maxRaw / (1024 * 1024))} MiB 上限，已仅保留最新记录`;
   }
+  if (skippedLines > 0) {
+    note += `；已跳过 ${skippedLines} 条超过 ${Math.round(MAX_LINE_BYTES / 1024)} KiB 的超长记录`;
+  }
   if (usedMemory) {
     note += '；磁盘日志不可用，桌面日志取自当前进程内存缓冲';
   }
@@ -352,5 +534,5 @@ export function collectExportEntries(options: {
     note += `；时段内共 ${totalAvailable} 条，已导出 ${totalEntries} 条`;
   }
 
-  return { files, totalEntries, totalBytes, perSource, truncated, note };
+  return { files, totalEntries, totalBytes, perSource, truncated, note, skippedLines };
 }

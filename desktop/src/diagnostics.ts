@@ -26,6 +26,18 @@ export const LOG_RETENTION_DAYS = 7;
 /** Hard caps so one bad caller cannot blow up a log file. */
 const MAX_STRING_LENGTH = 2000;
 const MAX_MESSAGE_LENGTH = 500;
+/**
+ * Strings above this are never handed to the scrubber at all. Every pattern below is
+ * linear in the text it scans, so this ceiling is what keeps one pathological record
+ * (a 10 MiB stack trace, a minified bundle dumped into a field) from stalling the
+ * whole process — and it keeps the fallback cost of a regex misbehaving bounded.
+ */
+export const MAX_SCRUB_STRING_LENGTH = 8 * 1024;
+/**
+ * Replacement for an oversized string. Deliberately NOT a prefix of the original:
+ * an unscrubbed prefix must never reach the log file, the viewer or the export bundle.
+ */
+export const OMITTED_STRING_MARKER = '…<omitted: oversized string>';
 const MAX_ARRAY_ITEMS = 20;
 const MAX_DEPTH = 4;
 const MEMORY_RING_SIZE = 500;
@@ -74,20 +86,28 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
 
 /** Absolute user paths: drive letters, UNC, macOS/Linux home, and `~`. */
 const USER_PATH_PATTERNS: RegExp[] = [
-  /[A-Za-z]:\\(?:[^\\\s"']+\\)*[^\\\s"']*/g,
-  /\\\\[^\s"']+/g,
-  /\/(?:Users|home)\/[^\s"':]+(?:\/[^\s"':]*)*/g,
-  /(?:\/Users|\/home)\/[^\s/]+/g,
-  /~\/[^\s"']*/g,
-  /(?:AppData|LOCALAPPDATA|APPDATA)[\\/][^\s"']*/gi,
+  /[A-Za-z]:\\(?:[^\\\s"']{1,255}\\)*[^\\\s"']{0,255}/g,
+  /\\\\[^\s"']{1,255}/g,
+  // Anchored on `\/(Users|home)\/`, then each further segment requires its own `/`.
+  // The segment body excludes `/`, so the group cannot split one path several ways —
+  // that ambiguity is what used to make a long path an exponential backtracking trap.
+  /\/(?:Users|home)\/[^\s"':/]{1,255}(?:\/[^\s"':/]{1,255})*/g,
+  /(?:\/Users|\/home)\/[^\s/]{1,255}/g,
+  /~\/[^\s"']{0,255}/g,
+  /(?:AppData|LOCALAPPDATA|APPDATA)[\\/][^\s"']{0,255}/gi,
 ];
 
 /**
  * Document/media file names are user content — never persist them.
  * Source-code extensions are deliberately excluded: module names such as `llm.py`
  * are legitimate diagnostics and carry no user data.
+ *
+ * The base-name run is length-bounded on purpose. With an unbounded `+` the engine
+ * retries every prefix of a long separator-free run at every offset, which is
+ * quadratic: a single 200 KiB minified line was enough to freeze the window. 255
+ * characters is the Windows file-name limit, so nothing real is missed.
  */
-const DOC_FILENAME = /[^\s"'\\/:*?<>|]+\.(?:pdf|docx?|pptx?|xlsx?|csv|md|markdown|txt|rtf|png|jpe?g|webp|gif|bmp|tiff?|zip|rar|7z|tar|tgz|gz|epub|mobi)\b/gi;
+const DOC_FILENAME = /[^\s"'\\/:*?<>|]{1,255}\.(?:pdf|docx?|pptx?|xlsx?|csv|md|markdown|txt|rtf|png|jpe?g|webp|gif|bmp|tiff?|zip|rar|7z|tar|tgz|gz|epub|mobi)\b/gi;
 
 /** URLs: keep scheme/host/path (ids templated), always strip query and fragment. */
 function scrubUrl(raw: string): string {
@@ -107,7 +127,11 @@ const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>]+/gi;
 /** Scrubs one string value: secrets, URLs, user paths and document file names. */
 export function scrubString(input: unknown): string {
   if (input === null || input === undefined) return '';
-  let s = typeof input === 'string' ? input : String(input);
+  const raw = typeof input === 'string' ? input : String(input);
+  // Size gate BEFORE any regex runs: this is the difference between "one big record
+  // costs a few milliseconds" and "one big record freezes the process".
+  if (raw.length > MAX_SCRUB_STRING_LENGTH) return OMITTED_STRING_MARKER;
+  let s = raw;
   s = s.replace(URL_PATTERN, (match) => scrubUrl(match));
   for (const [pattern, repl] of SECRET_PATTERNS) {
     s = s.replace(pattern, repl);

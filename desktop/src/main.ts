@@ -11,7 +11,6 @@ import { BackendManager } from './backend-manager';
 import {
   ALL_SOURCES,
   DEFAULT_PAGE_SIZE,
-  queryLogs,
   type LogQueryOptions,
   type LogQueryResult,
 } from './log-store';
@@ -21,7 +20,8 @@ import {
   initDiagnostics,
   type LogLevel,
 } from './diagnostics';
-import { buildDiagnosticArchive, writeArchiveAtomically } from './diagnostic-export';
+import { writeArchiveAtomically } from './diagnostic-export';
+import { LogWorkerService, type LogJobError } from './log-workers';
 import {
   classifyConnectionTestTransportFailure,
   normalizeConnectionTestResult,
@@ -237,6 +237,8 @@ const DEFAULT_RANGE_MS = 24 * 60 * 60 * 1000;
 const EXPORT_MAX_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
 const LOG_LEVELS = new Set(['DEBUG', 'INFO', 'WARN', 'ERROR']);
 const LOG_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+/** Request ids are minted by this process; anything else from the renderer is ignored. */
+const LOG_REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 /** Upper bound on records a single frontend report call may carry. */
 const FRONTEND_REPORT_MAX_BATCH = 100;
 
@@ -272,6 +274,31 @@ function currentLogDir(): string {
 }
 
 /**
+ * Log/export worker pool.
+ *
+ * Reading, parsing, scrubbing, sorting and archive building all happen off the main
+ * thread, so a 48 MiB scan cannot stall IPC, repaint or navigation. Built *before* the
+ * backend starts so the startup-failure export path can use it too — both channels are
+ * plain worker threads and need neither the backend nor a renderer page.
+ */
+const logWorkers = new LogWorkerService({
+  report: (event, message, fields) => {
+    if (event === 'diagnostics.worker.timeout' || event === 'diagnostics.worker.crashed') {
+      diagWarn(event, message, fields);
+    } else {
+      diagInfo(event, message, fields);
+    }
+  },
+});
+
+let requestCounter = 0;
+/** Monotonic, per-launch request id: lets the renderer cancel and the main process match. */
+function nextRequestId(prefix: string): string {
+  requestCounter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${requestCounter.toString(36)}`;
+}
+
+/**
  * Normalizes an untrusted time range from the renderer: defaults to 24h, never extends
  * beyond 7 days, and never reaches into the future.
  */
@@ -303,9 +330,46 @@ function logMeta(): Record<string, unknown> {
   };
 }
 
-/** Validates and bounds every viewer query parameter before it touches the filesystem. */
-function handleQueryLogs(params: unknown): LogQueryResult {
+/**
+ * A failed viewer query still answers with the full success shape, so the renderer has
+ * one code path for rendering and one field (`code`) for deciding what to say.
+ */
+function failedQueryResult(
+  requestId: string,
+  error: LogJobError,
+  page: number,
+  pageSize: number
+): LogQueryResult {
+  return {
+    ok: false,
+    entries: [],
+    total: 0,
+    page,
+    pageSize,
+    hasMore: false,
+    scannedBytes: 0,
+    scanTruncated: false,
+    unavailable: [],
+    skippedLines: 0,
+    requestId,
+    code: error.code,
+    message: error.message,
+    retryable: error.retryable,
+    elapsedMs: error.elapsedMs,
+  };
+}
+
+/**
+ * Validates and bounds every viewer query parameter, then hands the actual reading,
+ * parsing, scrubbing and sorting to the worker thread. The main process never touches
+ * the log files on this path, which is what keeps the window responsive.
+ */
+async function handleQueryLogs(params: unknown): Promise<LogQueryResult> {
   const source = (params ?? {}) as Record<string, unknown>;
+  const requestId =
+    typeof source.requestId === 'string' && LOG_REQUEST_ID_PATTERN.test(source.requestId)
+      ? source.requestId
+      : nextRequestId('q');
 
   const sources = Array.isArray(source.sources)
     ? (source.sources as unknown[]).filter(
@@ -335,11 +399,12 @@ function handleQueryLogs(params: unknown): LogQueryResult {
     ? Math.min(500, Math.max(1, Math.floor(Number(source.pageSize))))
     : DEFAULT_PAGE_SIZE;
 
+  const range = normalizeRange(source);
   const options: LogQueryOptions = {
     dir: currentLogDir(),
     sources: sources.length ? sources : ALL_SOURCES,
-    from: normalizeRange(source).from,
-    to: normalizeRange(source).to,
+    from: range.from,
+    to: range.to,
     levels,
     sessionId,
     taskId,
@@ -347,7 +412,26 @@ function handleQueryLogs(params: unknown): LogQueryResult {
     page,
     pageSize,
   };
-  return queryLogs(options);
+
+  const outcome = await logWorkers.query(requestId, options);
+  if (!outcome.ok) {
+    // Cancelled and superseded requests are normal control flow, not incidents: the
+    // renderer asked for them and must not see an error banner.
+    if (outcome.error.code !== 'LOG_QUERY_CANCELED' && outcome.error.code !== 'LOG_QUERY_SUPERSEDED') {
+      diagWarn('diagnostics.query.failed', '日志查询失败', {
+        code: outcome.error.code,
+        error_message: outcome.error.message,
+        duration_ms: outcome.error.elapsedMs,
+      });
+    }
+    return failedQueryResult(requestId, outcome.error, page, pageSize);
+  }
+
+  return {
+    ...outcome.value,
+    requestId,
+    elapsedMs: outcome.elapsedMs,
+  };
 }
 
 /**
@@ -377,8 +461,15 @@ function handleReportLog(entries: unknown): { ok: boolean; accepted: number; dro
 }
 
 /**
- * Builds and saves a diagnostic bundle. Runs entirely in the main process so it also
- * works when the backend never started and no renderer page exists.
+ * Builds and saves a diagnostic bundle.
+ *
+ * The heavy half (read + scrub + ZIP) runs in a worker thread with a 60 s budget, so a
+ * huge or pathological log can neither freeze the window nor occupy the main thread.
+ * The native save dialog stays here, and the file is still written atomically — a
+ * timeout or a failure never leaves a half-written archive behind.
+ *
+ * Deliberately independent of the backend and of any renderer page, so it also works
+ * from the startup-failure dialog.
  */
 async function exportDiagnostics(range: {
   from: number;
@@ -390,6 +481,8 @@ async function exportDiagnostics(range: {
   entries?: number;
   truncated?: boolean;
   message?: string;
+  code?: string;
+  elapsedMs?: number;
 }> {
   const logger = getDiagnostics();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -408,34 +501,55 @@ async function exportDiagnostics(range: {
   // destination is confirmed, and the write itself is atomic.
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
 
-  try {
-    const archive = buildDiagnosticArchive({
-      dir: currentLogDir(),
-      appVersion: app.getVersion(),
-      sessionId: SESSION_ID,
-      from: range.from,
-      to: range.to,
-      memoryFallback: logger?.getMemoryEntries() ?? [],
+  const requestId = nextRequestId('e');
+  const outcome = await logWorkers.exportArchive(requestId, {
+    dir: currentLogDir(),
+    appVersion: app.getVersion(),
+    sessionId: SESSION_ID,
+    from: range.from,
+    to: range.to,
+    memoryFallback: logger?.getMemoryEntries() ?? [],
+  });
+
+  if (!outcome.ok) {
+    diagError('diagnostics.export.failed', '诊断包导出失败', {
+      code: outcome.error.code,
+      error_message: outcome.error.message,
+      duration_ms: outcome.error.elapsedMs,
     });
-    writeArchiveAtomically(result.filePath, archive.buffer);
+    return {
+      ok: false,
+      code: outcome.error.code,
+      message: outcome.error.message,
+      elapsedMs: outcome.error.elapsedMs,
+    };
+  }
+
+  try {
+    // Structured clone delivers a plain Uint8Array; only the main process writes files.
+    const buffer = Buffer.from(outcome.value.buffer as unknown as Uint8Array);
+    writeArchiveAtomically(result.filePath, buffer);
     diagInfo('diagnostics.export.ok', '诊断包导出完成', {
-      entries: archive.entries,
-      bytes: archive.buffer.length,
-      truncated: archive.truncated,
-      note: archive.note,
+      entries: outcome.value.entries,
+      bytes: buffer.length,
+      truncated: outcome.value.truncated,
+      note: outcome.value.note,
     });
     return {
       ok: true,
       path: result.filePath,
-      entries: archive.entries,
-      truncated: archive.truncated,
+      entries: outcome.value.entries,
+      truncated: outcome.value.truncated,
+      elapsedMs: outcome.elapsedMs,
     };
   } catch (err: any) {
-    diagError('diagnostics.export.failed', '诊断包导出失败', {
+    // writeArchiveAtomically removes its own temp file on failure; keep the contract
+    // explicit here so a failure can never leave a partial archive at the target path.
+    diagError('diagnostics.export.write_failed', '诊断包写入失败', {
       error_type: err?.name,
       error_message: err?.message,
     });
-    return { ok: false, message: err?.message || String(err) };
+    return { ok: false, code: 'LOG_EXPORT_FAILED', message: err?.message || String(err) };
   }
 }
 
@@ -1258,6 +1372,20 @@ function setupIpcHandlers() {
     return handleQueryLogs(params);
   });
 
+  // Cancellation is a first-class part of the query contract: the renderer discards a
+  // superseded response, but only the main process can actually stop the worker.
+  ipcMain.handle('desktop:cancelLogQuery', (event, requestId: unknown) => {
+    validateIpcSender(event);
+    if (typeof requestId !== 'string' || !LOG_REQUEST_ID_PATTERN.test(requestId)) {
+      return { ok: false, canceled: false };
+    }
+    const canceled = logWorkers.cancelQuery(requestId);
+    if (canceled) {
+      diagInfo('diagnostics.query.canceled', '日志查询已取消', { request_id: requestId });
+    }
+    return { ok: true, canceled };
+  });
+
   ipcMain.handle('desktop:reportLog', (event, entries: unknown) => {
     validateIpcSender(event);
     return handleReportLog(entries);
@@ -1285,6 +1413,12 @@ app.on('before-quit', (e) => {
 });
 
 app.on('will-quit', () => {
+  // Release the worker threads first: an abandoned scan must not outlive the app.
+  try {
+    logWorkers.shutdown();
+  } catch {
+    /* ignore */
+  }
   // Flush aggregated duplicates and close both writers so nothing is lost on exit.
   try {
     getDiagnostics()?.close();
