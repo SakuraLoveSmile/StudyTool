@@ -1,12 +1,14 @@
 {
   "name": "rag-study-assistant-desktop",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "RAG 备考助手 Windows 桌面版",
   "main": "dist/main.js",
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test dist/tests/*.test.js",
+    "test:stress": "node --expose-gc --test dist/stress/*.test.js",
+    "test:ui": "electron scripts/verify-logs-ui-timing.js",
     "start": "electron dist/main.js",
     "pack": "electron-builder --win --x64",
     "release": "python scripts/build-release.py"
