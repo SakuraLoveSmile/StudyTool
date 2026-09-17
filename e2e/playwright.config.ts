@@ -10,7 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
  * 因此用 webServer 的 `env` 传参即可，**无需改动 frontend/vite.config.ts 或任何产品文件**。
  *
  * 依赖独立：本目录自带 package.json/node_modules；@feedback/web 只读引用
- * frontend/vendor 的 0.2.0 tarball。不写 frontend/package.json、package-lock.json、vendor/。
+ * frontend/vendor 的 tarball。不写 frontend/package.json、package-lock.json、vendor/。
  */
 
 const FRONTEND_DIR = '../frontend';

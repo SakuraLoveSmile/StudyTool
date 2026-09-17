@@ -3,10 +3,10 @@
     <!-- Top Header -->
     <div class="page-toolbar">
       <div>
-        <h2 class="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+        <h2 class="font-display text-base sm:text-lg font-bold text-stone-900 tracking-tight">
           四维考点学习卡与答题模板
         </h2>
-        <p class="text-xs text-slate-500 mt-0.5">
+        <p class="text-xs text-stone-500 mt-0.5">
           精简背诵版 · 答题骨架模型 · 展开论述版 · 易混辨析与真实案例（杜绝虚构）
         </p>
       </div>
@@ -32,7 +32,7 @@
       <div class="lg:col-span-4 space-y-3">
         <div class="surface p-4 space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-slate-700">知识点目录 ({{ filteredKPs.length }})</span>
+            <span class="text-xs font-semibold text-stone-700">知识点目录 ({{ filteredKPs.length }})</span>
           </div>
 
           <!-- Search Input -->
@@ -43,11 +43,11 @@
               placeholder="搜索考点或章节..."
               class="field py-1.5 text-xs pl-8 min-h-[36px]"
             />
-            <Search class="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
+            <Search class="w-4 h-4 text-stone-400 absolute left-2.5 top-2.5" />
           </div>
 
           <!-- KP List -->
-          <div v-if="filteredKPs.length === 0" class="py-8 text-center text-slate-400 text-xs">
+          <div v-if="filteredKPs.length === 0" class="py-8 text-center text-stone-400 text-xs">
             未找到匹配的考点
           </div>
           <div v-else class="space-y-1.5 max-h-[calc(100vh-20rem)] overflow-y-auto pr-1">
@@ -56,11 +56,11 @@
               :key="kp.id"
               type="button"
               class="w-full text-left p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-1"
-              :class="selectedKpId === kp.id ? 'border-blue-500 bg-blue-50/60 shadow-xs' : 'border-slate-100 hover:border-slate-200 bg-white hover:bg-slate-50/50'"
+              :class="selectedKpId === kp.id ? 'border-brand-500 bg-brand-50/60 shadow-xs' : 'border-stone-100 hover:border-stone-200 bg-white hover:bg-stone-50/50'"
               @click="handleSelectKp(kp.id)"
             >
               <div class="flex items-center justify-between gap-1">
-                <span class="font-semibold text-xs sm:text-sm text-slate-800 truncate">
+                <span class="font-semibold text-xs sm:text-sm text-stone-800 truncate">
                   {{ kp.name }}
                 </span>
                 <span
@@ -70,7 +70,7 @@
                   {{ priorityBadgeLabel(kp.priority_tag) }}
                 </span>
               </div>
-              <span class="text-xs text-slate-400 truncate">
+              <span class="text-xs text-stone-400 truncate">
                 {{ kp.chapter || '未分类章节' }}
               </span>
             </button>
@@ -85,21 +85,21 @@
         </div>
 
         <div v-else-if="isLoadingCard" class="surface p-12 text-center">
-          <div class="w-12 h-12 mx-auto rounded-full bg-blue-50 flex items-center justify-center text-blue-600 mb-3">
+          <div class="w-12 h-12 mx-auto rounded-full bg-brand-50 flex items-center justify-center text-brand-600 mb-3">
             <Loader2 class="w-6 h-6 animate-spin" />
           </div>
-          <p class="text-sm font-medium text-slate-700">正在加载学习卡...</p>
+          <p class="text-sm font-medium text-stone-700">正在加载学习卡...</p>
         </div>
 
         <div v-else-if="!card" class="surface p-12 text-center space-y-4">
-          <div class="w-12 h-12 mx-auto rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+          <div class="w-12 h-12 mx-auto rounded-full bg-brand-50 flex items-center justify-center text-brand-600">
             <Sparkles class="w-6 h-6" />
           </div>
           <div>
-            <h4 class="text-base font-semibold text-slate-800">
+            <h4 class="text-base font-semibold text-stone-800">
               「{{ selectedKp?.name }}」尚未生成学习卡
             </h4>
-            <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+            <p class="text-xs text-stone-500 mt-1 max-w-sm mx-auto">
               基于已上传的教材切片与考情，一键生成精简背诵版、答题结构与展开论述。
             </p>
           </div>
@@ -135,17 +135,17 @@
           </div>
 
           <!-- Section 1: 精简背诵版 -->
-          <div class="surface p-5 sm:p-6 border-l-4 border-l-blue-600 space-y-3">
+          <div class="surface p-5 sm:p-6 border-l-4 border-l-brand-600 space-y-3">
             <div class="flex items-center justify-between">
-              <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
-                <Bookmark class="w-4 h-4 text-blue-600" />
+              <h3 class="text-base font-bold text-stone-800 flex items-center gap-2">
+                <Bookmark class="w-4 h-4 text-brand-600" />
                 一、精简背诵版（核心定义 · 口诀要点 · 关键词）
               </h3>
-              <span class="text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">
+              <span class="text-xs px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-medium">
                 考前速记
               </span>
             </div>
-            <div class="reading-content whitespace-pre-wrap bg-slate-50/70 p-4 rounded-xl border border-slate-100 font-mono text-slate-800">
+            <div class="reading-content whitespace-pre-wrap bg-stone-50/70 p-4 rounded-xl border border-stone-100 font-mono text-stone-800">
               {{ card.concise_content }}
             </div>
           </div>
@@ -153,7 +153,7 @@
           <!-- Section 2: 答题结构规范 -->
           <div class="surface p-5 sm:p-6 border-l-4 border-l-amber-500 space-y-3">
             <div class="flex items-center justify-between">
-              <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
+              <h3 class="text-base font-bold text-stone-800 flex items-center gap-2">
                 <GitFork class="w-4 h-4 text-amber-600" />
                 二、答题结构模型（概念 → 特征 → 适用条件 → 案例）
               </h3>
@@ -161,7 +161,7 @@
                 答题骨架
               </span>
             </div>
-            <div class="reading-content whitespace-pre-wrap bg-amber-50/30 p-4 rounded-xl border border-amber-100/60 text-slate-800">
+            <div class="reading-content whitespace-pre-wrap bg-amber-50/30 p-4 rounded-xl border border-amber-100/60 text-stone-800">
               {{ card.answer_structure }}
             </div>
           </div>
@@ -169,7 +169,7 @@
           <!-- Section 3: 展开答题版 -->
           <div class="surface p-5 sm:p-6 border-l-4 border-l-emerald-500 space-y-3">
             <div class="flex items-center justify-between">
-              <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
+              <h3 class="text-base font-bold text-stone-800 flex items-center gap-2">
                 <FileText class="w-4 h-4 text-emerald-600" />
                 三、展开答题版（按教材规范组织完整论述）
               </h3>
@@ -177,7 +177,7 @@
                 大题论述
               </span>
             </div>
-            <div class="reading-content whitespace-pre-wrap bg-slate-50/50 p-4 rounded-xl border border-slate-100 text-slate-800">
+            <div class="reading-content whitespace-pre-wrap bg-stone-50/50 p-4 rounded-xl border border-stone-100 text-stone-800">
               {{ card.detailed_content }}
             </div>
           </div>
@@ -185,7 +185,7 @@
           <!-- Section 4: 易混点与真实案例 -->
           <div class="surface p-5 sm:p-6 border-l-4 border-l-purple-500 space-y-3">
             <div class="flex items-center justify-between">
-              <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
+              <h3 class="text-base font-bold text-stone-800 flex items-center gap-2">
                 <Split class="w-4 h-4 text-purple-600" />
                 四、易混点辨析与教材真实案例（杜绝虚构）
               </h3>
@@ -193,7 +193,7 @@
                 拉开差距
               </span>
             </div>
-            <div class="reading-content whitespace-pre-wrap bg-purple-50/20 p-4 rounded-xl border border-purple-100/50 text-slate-800">
+            <div class="reading-content whitespace-pre-wrap bg-purple-50/20 p-4 rounded-xl border border-purple-100/50 text-stone-800">
               {{ card.confusing_points_and_cases }}
             </div>
           </div>
@@ -201,12 +201,12 @@
           <!-- Citations Bar -->
           <div class="surface p-4 space-y-2.5">
             <div class="flex items-center justify-between">
-              <h4 class="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                <Quote class="w-4 h-4 text-slate-400" />
+              <h4 class="text-xs font-semibold text-stone-700 flex items-center gap-1.5">
+                <Quote class="w-4 h-4 text-stone-400" />
                 学习卡依据的教材切片与原题引用 ({{ card.citations.length }} 处)
               </h4>
             </div>
-            <div v-if="card.citations.length === 0" class="text-xs text-slate-400 italic">
+            <div v-if="card.citations.length === 0" class="text-xs text-stone-400 italic">
               暂无切片引用明细
             </div>
             <div v-else class="flex flex-wrap gap-2">
@@ -217,20 +217,20 @@
                 class="btn btn-sm btn-secondary text-xs flex items-center gap-1.5 cursor-pointer"
                 @click="openQuote(cite)"
               >
-                <span class="font-medium text-slate-800">{{ cite.doc_name }}</span>
-                <span class="text-blue-600">[{{ cite.page_or_ref }}]</span>
+                <span class="font-medium text-stone-800">{{ cite.doc_name }}</span>
+                <span class="text-brand-600">[{{ cite.page_or_ref }}]</span>
               </button>
             </div>
           </div>
 
           <!-- Question Answering Assistant (Collapsible / Bottom Card) -->
           <div class="surface p-5 space-y-4">
-            <div class="border-b border-slate-100 pb-3">
-              <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
-                <HelpCircle class="w-4 h-4 text-blue-600" />
+            <div class="border-b border-stone-100 pb-3">
+              <h3 class="text-base font-bold text-stone-800 flex items-center gap-2">
+                <HelpCircle class="w-4 h-4 text-brand-600" />
                 考点真题解题问答助手
               </h3>
-              <p class="text-xs text-slate-500 mt-1">
+              <p class="text-xs text-stone-500 mt-1">
                 选择已收录真题或输入自定义问题，结合教材切片与参考答案生成破题思路与规范解题。
               </p>
             </div>
@@ -271,15 +271,15 @@
             </div>
 
             <!-- Assistant Output -->
-            <div v-if="assistantResult" class="space-y-3 pt-3 border-t border-slate-100 text-xs sm:text-sm">
-              <div v-if="assistantResult.official_answer" class="surface p-4 space-y-1 bg-slate-50/70">
-                <span class="font-bold text-slate-700 block">已收录参考答案：</span>
-                <p class="text-slate-700 whitespace-pre-wrap leading-relaxed">{{ assistantResult.official_answer }}</p>
+            <div v-if="assistantResult" class="space-y-3 pt-3 border-t border-stone-100 text-xs sm:text-sm">
+              <div v-if="assistantResult.official_answer" class="surface p-4 space-y-1 bg-stone-50/70">
+                <span class="font-bold text-stone-700 block">已收录参考答案：</span>
+                <p class="text-stone-700 whitespace-pre-wrap leading-relaxed">{{ assistantResult.official_answer }}</p>
               </div>
 
-              <div class="surface p-4 space-y-1 bg-blue-50/40 border-blue-100">
-                <span class="font-bold text-blue-900 block">答题思路与切入点：</span>
-                <p class="text-blue-900 whitespace-pre-wrap leading-relaxed">{{ assistantResult.thought_process }}</p>
+              <div class="surface p-4 space-y-1 bg-brand-50/40 border-brand-100">
+                <span class="font-bold text-brand-900 block">答题思路与切入点：</span>
+                <p class="text-brand-900 whitespace-pre-wrap leading-relaxed">{{ assistantResult.thought_process }}</p>
               </div>
 
               <div class="surface p-4 space-y-1 bg-emerald-50/40 border-emerald-100">
@@ -355,8 +355,8 @@ const filteredKPs = computed(() => {
 const priorityBadgeClass = (priority?: string) => {
   switch (priority) {
     case 'important': return 'bg-rose-100 text-rose-800';
-    case 'deferred': return 'bg-slate-100 text-slate-500';
-    default: return 'bg-blue-100 text-blue-800';
+    case 'deferred': return 'bg-stone-100 text-stone-500';
+    default: return 'bg-brand-100 text-brand-800';
   }
 };
 

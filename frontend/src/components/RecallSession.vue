@@ -3,10 +3,10 @@
     <div class="surface p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
       <div>
         <div class="flex items-center gap-2">
-          <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">今日回忆</span>
-          <span v-if="attempt && attempt.chapter_name" class="text-xs text-slate-500">{{ attempt.chapter_name }}</span>
+          <span class="inline-flex items-center rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700">今日回忆</span>
+          <span v-if="attempt && attempt.chapter_name" class="text-xs text-stone-500">{{ attempt.chapter_name }}</span>
         </div>
-        <h2 id="recall-session-title" class="mt-1 text-lg font-bold tracking-tight text-slate-900">
+        <h2 id="recall-session-title" class="mt-1 text-lg font-bold tracking-tight text-stone-900">
           {{ attempt ? `第 ${attempt.position || 1} / ${attempt.total || 1} 张` : '准备开始' }}
         </h2>
       </div>
@@ -17,41 +17,43 @@
     </div>
 
     <div v-if="!attempt" class="surface p-8 sm:p-12 text-center">
-      <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500">✓</div>
-      <h3 class="text-base font-semibold text-slate-800">今日回忆已完成</h3>
-      <p class="mt-1 text-xs text-slate-500">可以返回卡片库整理内容，或稍后再来复习。</p>
+      <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+        <Check class="h-6 w-6" />
+      </div>
+      <h3 class="font-display text-lg font-semibold text-stone-800">今日回忆已完成</h3>
+      <p class="mt-1 text-xs text-stone-500">可以返回卡片库整理内容，或稍后再来复习。</p>
     </div>
 
     <template v-else>
-      <div class="surface overflow-hidden border-t-4 border-t-blue-600">
+      <div class="surface overflow-hidden border-t-4 border-t-brand-600">
         <div class="p-5 sm:p-8 space-y-5">
           <div class="flex items-start justify-between gap-3">
-            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">问题</span>
+            <span class="text-xs font-semibold uppercase tracking-wider text-stone-400">问题</span>
             <span v-if="attempt.rating" class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
               {{ ratingLabel(attempt.rating) }}
             </span>
           </div>
-          <p class="whitespace-pre-wrap break-words text-base sm:text-xl font-semibold leading-relaxed text-slate-900">{{ attempt.prompt }}</p>
+          <p class="whitespace-pre-wrap break-words font-display text-base sm:text-xl font-semibold leading-relaxed text-stone-900">{{ attempt.prompt }}</p>
 
-          <div v-if="!attempt.revealed" class="rounded-xl border border-dashed border-blue-200 bg-blue-50/60 p-4 sm:p-5">
-            <p class="text-sm leading-relaxed text-blue-900">先在心里或纸上作答，再揭示参考答案。主动回忆比重复阅读更有效。</p>
-            <p v-if="attempt.hint" class="mt-2 text-xs text-blue-700"><span class="font-semibold">提示：</span>{{ attempt.hint }}</p>
+          <div v-if="!attempt.revealed" class="rounded-xl border border-dashed border-brand-200 bg-brand-50/60 p-4 sm:p-5">
+            <p class="text-sm leading-relaxed text-brand-900">先在心里或纸上作答，再揭示参考答案。主动回忆比重复阅读更有效。</p>
+            <p v-if="attempt.hint" class="mt-2 text-xs text-brand-700"><span class="font-semibold">提示：</span>{{ attempt.hint }}</p>
             <button type="button" class="btn btn-primary mt-4 w-full sm:w-auto" :disabled="busy" @click="emit('reveal')">
               {{ busy ? '处理中…' : '揭示答案' }}
             </button>
           </div>
 
-          <div v-else class="space-y-4 border-t border-slate-100 pt-5">
+          <div v-else class="space-y-4 border-t border-stone-100 pt-5">
             <div>
-              <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">参考答案</span>
-              <p class="mt-2 whitespace-pre-wrap break-words text-sm sm:text-base leading-relaxed text-slate-800">{{ attempt.answer || '暂无参考答案' }}</p>
+              <span class="text-xs font-semibold uppercase tracking-wider text-stone-400">参考答案</span>
+              <p class="mt-2 whitespace-pre-wrap break-words text-sm sm:text-base leading-relaxed text-stone-800">{{ attempt.answer || '暂无参考答案' }}</p>
             </div>
             <div v-if="sourceExcerpt" class="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3.5 text-xs text-emerald-900">
               <span class="font-semibold">来源摘录：</span>
               <span class="whitespace-pre-wrap">{{ sourceExcerpt }}</span>
             </div>
             <div>
-              <p class="mb-2 text-xs font-semibold text-slate-600">这次回忆的结果</p>
+              <p class="mb-2 text-xs font-semibold text-stone-600">这次回忆的结果</p>
               <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <button
                   v-for="option in ratingOptions"
@@ -71,10 +73,10 @@
       </div>
 
       <div class="surface p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div class="text-xs text-slate-500">
+        <div class="text-xs text-stone-500">
           <span>完成进度</span>
-          <div class="mt-1.5 h-2 w-full min-w-[180px] overflow-hidden rounded-full bg-slate-100 sm:w-64">
-            <div class="h-full rounded-full bg-blue-600 transition-all" :style="{ width: `${progress}%` }" />
+          <div class="mt-1.5 h-2 w-full min-w-[180px] overflow-hidden rounded-full bg-stone-100 sm:w-64">
+            <div class="h-full rounded-full bg-brand-600 transition-all" :style="{ width: `${progress}%` }" />
           </div>
         </div>
         <button v-if="attempt.revealed && (attempt.completed || attempt.status === 'rated')" type="button" class="btn btn-primary" :disabled="busy" @click="emit('next')">
@@ -87,6 +89,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { Check } from 'lucide-vue-next';
 import type { AttemptRating, TodayAttempt } from '../types/learning';
 
 interface Props {

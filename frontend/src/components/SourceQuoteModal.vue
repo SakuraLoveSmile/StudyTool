@@ -1,72 +1,80 @@
 <template>
-  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-    <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-      <!-- Modal Header -->
-      <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
-        <div class="flex items-center space-x-2">
-          <FileText class="w-5 h-5 text-indigo-600" />
-          <h3 class="font-semibold text-slate-800">资料原文与定位溯源</h3>
-        </div>
-        <button @click="close" class="text-slate-400 hover:text-slate-600 p-1 rounded-md">
-          <X class="w-5 h-5" />
-        </button>
-      </div>
-
-      <!-- Modal Body -->
-      <div class="p-6 space-y-4">
-        <!-- Metadata pills -->
-        <div class="flex flex-wrap gap-2 text-xs">
-          <span class="px-2.5 py-1 rounded bg-indigo-50 text-indigo-700 font-medium">
-            来源文件: {{ docName }}
-          </span>
-          <span class="px-2.5 py-1 rounded bg-amber-50 text-amber-700 font-medium">
-            定位位置: {{ locationRef }}
-          </span>
-          <span v-if="heading" class="px-2.5 py-1 rounded bg-slate-100 text-slate-700 font-medium">
-            章节: {{ heading }}
-          </span>
-          <a v-if="fileUrl" :href="fileUrl" target="_blank" rel="noreferrer" class="px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 font-medium hover:underline">
-            打开原文件
-          </a>
-        </div>
-
-        <!-- Content Area / Editable Area -->
-        <div>
-          <div class="flex justify-between items-center mb-1.5">
-            <label class="text-xs font-medium text-slate-600">原文切片内容{{ readOnly ? '' : '（支持人工校对与修改）' }}：</label>
-            <span v-if="savedSuccess" class="text-xs text-emerald-600 font-medium flex items-center">
-              <Check class="w-3.5 h-3.5 mr-0.5" /> 已保存修改并更新检索索引
-            </span>
+  <Teleport to="body">
+    <Transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/50 backdrop-blur-sm p-4" @click.self="close">
+        <div class="bg-white rounded-2xl shadow-pop w-full max-w-2xl overflow-hidden border border-stone-200">
+          <!-- Modal Header -->
+          <div class="px-6 py-4 border-b border-stone-100 flex items-center justify-between bg-stone-50/60">
+            <div class="flex items-center space-x-2">
+              <FileText class="w-5 h-5 text-brand-600" />
+              <h3 class="font-display font-semibold text-stone-800">资料原文与定位溯源</h3>
+            </div>
+            <button @click="close" class="text-stone-400 hover:text-stone-600 p-1.5 rounded-lg hover:bg-stone-100 transition-colors" aria-label="关闭">
+              <X class="w-5 h-5" />
+            </button>
           </div>
-          <textarea
-            v-model="editableContent"
-            rows="8"
-            :readonly="readOnly"
-            class="w-full text-sm p-3.5 rounded-lg border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed bg-slate-50/50"
-          ></textarea>
+
+          <!-- Modal Body -->
+          <div class="p-6 space-y-4">
+            <!-- Metadata pills -->
+            <div class="flex flex-wrap gap-2 text-xs">
+              <span class="px-2.5 py-1 rounded-full bg-brand-50 text-brand-700 font-medium">
+                来源文件: {{ docName }}
+              </span>
+              <span class="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium">
+                定位位置: {{ locationRef }}
+              </span>
+              <span v-if="heading" class="px-2.5 py-1 rounded-full bg-stone-100 text-stone-700 font-medium">
+                章节: {{ heading }}
+              </span>
+              <a v-if="fileUrl" :href="fileUrl" target="_blank" rel="noreferrer" class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-medium hover:underline">
+                打开原文件
+              </a>
+            </div>
+
+            <!-- Content Area / Editable Area -->
+            <div>
+              <div class="flex justify-between items-center mb-1.5">
+                <label class="field-label mb-0">原文切片内容{{ readOnly ? '' : '（支持人工校对与修改）' }}</label>
+                <span v-if="savedSuccess" class="text-xs text-emerald-600 font-medium flex items-center">
+                  <Check class="w-3.5 h-3.5 mr-0.5" /> 已保存修改并更新检索索引
+                </span>
+              </div>
+              <textarea
+                v-model="editableContent"
+                rows="8"
+                :readonly="readOnly"
+                class="field font-mono text-sm leading-relaxed bg-stone-50/50"
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- Modal Footer -->
+          <div class="px-6 py-3.5 bg-stone-50/60 border-t border-stone-100 flex justify-end gap-2">
+            <button @click="close" class="btn btn-secondary">
+              关闭
+            </button>
+            <button
+              v-if="!readOnly"
+              @click="handleSave"
+              :disabled="isSaving"
+              class="btn btn-primary"
+            >
+              <Loader2 v-if="isSaving" class="w-4 h-4 mr-1.5 animate-spin" />
+              保存校对修改
+            </button>
+          </div>
         </div>
       </div>
-
-      <!-- Modal Footer -->
-      <div class="px-6 py-3 bg-slate-50 border-t border-slate-100 flex justify-end space-x-2">
-        <button
-          @click="close"
-          class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-200 rounded-lg transition"
-        >
-          关闭
-        </button>
-        <button
-          v-if="!readOnly"
-          @click="handleSave"
-          :disabled="isSaving"
-          class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition shadow-sm font-medium flex items-center"
-        >
-          <Loader2 v-if="isSaving" class="w-4 h-4 mr-1.5 animate-spin" />
-          保存校对修改
-        </button>
-      </div>
-    </div>
-  </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup lang="ts">

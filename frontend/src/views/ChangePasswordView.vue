@@ -1,17 +1,32 @@
 <template>
-  <div class="mx-auto mt-12 max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-    <h1 class="text-2xl font-bold text-slate-900">修改密码</h1>
-    <p class="mt-2 text-sm text-slate-500">首次登录需要设置新密码</p>
-    <form class="mt-6 space-y-4" @submit.prevent="submit">
-      <label class="block text-sm font-medium text-slate-700">当前密码<input v-model="currentPassword" required type="password" autocomplete="current-password" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
-      <label class="block text-sm font-medium text-slate-700">新密码<input v-model="newPassword" required minlength="8" type="password" autocomplete="new-password" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
-      <p v-if="error" role="alert" class="text-sm text-red-600">{{ error }}</p>
-      <button :disabled="loading" class="w-full rounded-lg bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50">{{ loading ? '保存中...' : '保存新密码' }}</button>
-    </form>
+  <div class="mx-auto flex min-h-[72vh] max-w-md flex-col items-center justify-center px-2">
+    <div class="mb-8 flex flex-col items-center text-center">
+      <div class="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift shadow-brand-600/30">
+        <KeyRound class="h-7 w-7" />
+      </div>
+      <h1 class="font-display text-2xl font-bold tracking-tight text-stone-900 sm:text-3xl">设置新密码</h1>
+      <p class="mt-2 text-sm text-stone-500">首次登录需要设置新密码</p>
+    </div>
+
+    <div class="surface w-full p-8">
+      <form class="space-y-4" @submit.prevent="submit">
+        <div>
+          <label class="field-label" for="cp-current">当前密码</label>
+          <input id="cp-current" v-model="currentPassword" required type="password" autocomplete="current-password" class="field" />
+        </div>
+        <div>
+          <label class="field-label" for="cp-new">新密码</label>
+          <input id="cp-new" v-model="newPassword" required minlength="8" type="password" autocomplete="new-password" class="field" />
+          <p class="mt-1 text-[11px] text-stone-400">至少 8 个字符</p>
+        </div>
+        <p v-if="error" role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ error }}</p>
+        <button type="submit" :disabled="loading" class="btn btn-primary w-full">{{ loading ? '保存中...' : '保存新密码' }}</button>
+      </form>
+    </div>
   </div>
 </template>
 <script setup lang="ts">
-import { ref } from 'vue'; import { useRoute, useRouter } from 'vue-router'; import { useAuth } from '../composables/useAuth';
+import { ref } from 'vue'; import { useRoute, useRouter } from 'vue-router'; import { KeyRound } from 'lucide-vue-next'; import { useAuth } from '../composables/useAuth';
 const currentPassword = ref(''); const newPassword = ref(''); const error = ref(''); const router = useRouter(); const route = useRoute(); const auth = useAuth(); const loading = auth.loading;
 const submit = async () => { error.value = ''; try { await auth.changePassword(currentPassword.value, newPassword.value); await router.replace(String(route.query.redirect || '/today')); } catch (e) { error.value = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '修改密码失败'; } };
 </script>

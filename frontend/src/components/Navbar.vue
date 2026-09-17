@@ -1,14 +1,14 @@
 <template>
-  <header class="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-xs">
+  <header class="sticky top-0 z-30 border-b border-stone-200/80 bg-white/80 shadow-xs backdrop-blur-md">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
       <div class="flex h-16 items-center justify-between gap-3">
         <router-link to="/today" class="flex min-w-0 items-center space-x-3" aria-label="返回今日学习">
-          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-200">
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-md shadow-brand-600/25">
             <BookOpen class="h-5 w-5" />
           </div>
           <div class="min-w-0">
-            <h1 class="truncate text-base font-bold tracking-tight text-slate-900 sm:text-lg">考研专业课备考助手</h1>
-            <p class="hidden text-xs text-slate-400 sm:block">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
+            <h1 class="truncate font-display text-base font-bold tracking-tight text-stone-900 sm:text-lg">考研专业课备考助手</h1>
+            <p class="hidden text-xs text-stone-400 sm:block">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
           </div>
         </router-link>
 
@@ -48,13 +48,13 @@
         <div class="flex shrink-0 items-center space-x-2">
           <button
             type="button"
-            class="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors"
-            :class="activeCount > 0 ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'"
+            class="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+            :class="activeCount > 0 ? 'border-brand-300 bg-brand-50 text-brand-700 hover:bg-brand-100' : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'"
             @click="toggleDrawer"
           >
-            <ListTodo class="h-4 w-4" :class="{ 'animate-pulse text-blue-600': activeCount > 0 }" />
+            <ListTodo class="h-4 w-4" :class="{ 'animate-pulse text-brand-600': activeCount > 0 }" />
             <span>任务</span>
-            <span v-if="activeCount > 0" class="flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-[10px] font-bold text-white">{{ activeCount }}</span>
+            <span v-if="activeCount > 0" class="flex h-4 w-4 items-center justify-center rounded-full bg-brand-600 text-[10px] font-bold text-white">{{ activeCount }}</span>
           </button>
           <!--
             账号名称与退出按钮属于身份敏感区：标注 data-feedback-capture-mask 后，
@@ -66,23 +66,23 @@
             data-feedback-capture-mask
             class="flex items-center space-x-2"
           >
-            <span v-if="auth.user.value" class="hidden text-xs text-slate-500 sm:inline">{{ auth.user.value.username }}</span>
-            <button v-if="auth.authRequired.value" type="button" class="rounded-lg px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-100" @click="logout">退出</button>
+            <span v-if="auth.user.value" class="hidden text-xs text-stone-500 sm:inline">{{ auth.user.value.username }}</span>
+            <button v-if="auth.authRequired.value" type="button" class="rounded-lg px-2 py-1.5 text-xs text-stone-600 hover:bg-stone-100" @click="logout">退出</button>
           </span>
-          <button type="button" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 md:hidden" aria-label="打开导航菜单" @click="mobileMenuOpen = !mobileMenuOpen">
+          <button type="button" class="rounded-lg p-2 text-stone-500 hover:bg-stone-100 md:hidden" aria-label="打开导航菜单" @click="mobileMenuOpen = !mobileMenuOpen">
             <Menu v-if="!mobileMenuOpen" class="h-5 w-5" />
             <X v-else class="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      <nav v-if="mobileMenuOpen" class="space-y-1 border-t border-slate-100 py-3 md:hidden" aria-label="移动端主导航">
+      <nav v-if="mobileMenuOpen" class="space-y-1 border-t border-stone-100 py-3 md:hidden" aria-label="移动端主导航">
         <router-link
           v-for="item in mobileLinks"
           :key="item.to"
           :to="item.to"
-          class="block rounded-lg px-3 py-2 text-sm font-medium"
-          :class="$route.path === item.to ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-50'"
+          class="block rounded-xl px-3 py-2 text-sm font-medium"
+          :class="$route.path === item.to ? 'bg-brand-50 text-brand-700' : 'text-stone-600 hover:bg-stone-50'"
           @click="mobileMenuOpen = false"
         >
           <component :is="item.icon" class="mr-2 inline h-4 w-4" />{{ item.label }}
@@ -124,9 +124,9 @@ const mobileLinks = computed<Array<{ to: string; label: string; icon: Component 
 
 <style scoped>
 .nav-tab {
-  @apply inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900;
+  @apply inline-flex items-center rounded-full px-3.5 py-2 text-sm font-medium text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900;
 }
 .nav-tab-active {
-  @apply bg-blue-50 font-semibold text-blue-700 hover:bg-blue-100 hover:text-blue-800;
+  @apply bg-brand-50 font-semibold text-brand-700 hover:bg-brand-100 hover:text-brand-800;
 }
 </style>

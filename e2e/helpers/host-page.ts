@@ -4,7 +4,7 @@
  * 宿主的 `/api/*` 一律拦截：**不依赖真实 backend**，也不调用真实登录接口。
  * 反馈服务的跨 origin 请求由 feedback-mock.ts 处理。
  *
- * 选择器来自组件 0.2.0 的实际 Shadow DOM（实测结构见 README）：
+ * 选择器来自组件的实际 Shadow DOM（0.4.0 源码核对一致，结构见 README）：
  *   启动入口 `button`（文案「反馈」）/ 面板 `#fb-panel` / 草稿框 `#fb-textarea`
  *   截图区按钮「截取当前页面」「重新截图」「移除截图」
  *   底部提交按钮「登录并提交」
@@ -314,11 +314,12 @@ export async function loginFormVisible(page: Page): Promise<boolean> {
   return page.locator('feedback-widget').locator('input[type="password"]:visible').count().then((n) => n > 0);
 }
 
-/** 在组件内登录表单里填账号密码（绝不使用真实凭据）。 */
+/** 在组件内登录表单里填账号密码（绝不使用真实凭据）。
+ *  0.4.0 起面板内多了日志附件 input[type=file]，必须按 class 定位登录输入框。 */
 export async function fillWidgetLogin(page: Page, username = 'tester', password = 'not-a-real-password') {
-  const inputs = page.locator('feedback-widget').locator('input');
-  await inputs.nth(0).fill(username);
-  await inputs.nth(1).fill(password);
+  const root = page.locator('feedback-widget');
+  await root.locator('input.fb-login-username').fill(username);
+  await root.locator('input.fb-login-password').fill(password);
 }
 
 /** 确认登录（登录表单内的 `button.fb-login-confirm`）。 */

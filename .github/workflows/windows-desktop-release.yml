@@ -16,7 +16,7 @@ permissions:
 
 env:
   RELEASE_REPO: SakuraLoveSmile/StudyTool-Releases
-  # Feedback widget build configuration (@feedback/web 0.2.0). The frontend only mounts the
+  # Feedback widget build configuration (@feedback/web 0.4.0). The frontend only mounts the
   # feedback entry when BOTH of these are non-empty, and they are inlined at build time.
   # The release must never depend on the git-ignored frontend/.env.local.
   # These two values MUST stay identical to the release constants in

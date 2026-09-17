@@ -12,6 +12,6 @@
     "@playwright/test": "1.63.0"
   },
   "dependencies": {
-    "@feedback/web": "file:../frontend/vendor/feedback-web-0.2.0.tgz"
+    "@feedback/web": "file:../frontend/vendor/feedback-web-0.4.0.tgz"
   }
 }

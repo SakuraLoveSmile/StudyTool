@@ -10,18 +10,18 @@ import { expect, test } from '@playwright/test';
  *  - **同一个实例**上 api-base 运行时切换后的身份世代行为（宿主固定构建期地址，换不了）；
  *  - 「清洗身份」的归一化陷阱：api-base 属性本来不存在时 removeAttribute 不触发回调。
  *
- * 组件产物来源固定性由本文件的 Node 侧断言保证（0.2.0 + tarball sha256 与核验清单一致）。
+ * 组件产物来源固定性由本文件的 Node 侧断言保证（版本 + tarball sha256 与核验清单一致）。
  */
 
 const FIXTURE = 'http://127.0.0.1:5276/widget-fixture.html';
 const FEEDBACK_BASE = 'http://127.0.0.1:5199';
 const FEEDBACK_BASE_B = 'http://127.0.0.1:5198';
-const VENDOR_TARBALL = '../../frontend/vendor/feedback-web-0.2.0.tgz';
-const EXPECTED_SHA256 = '578eb1db7fb7ef9814f3852cf603acca6718a107f5b192a90a5bdbbe3a216c0d';
+const VENDOR_TARBALL = '../../frontend/vendor/feedback-web-0.4.0.tgz';
+const EXPECTED_SHA256 = '2c22aa3110cb2e84780786ee37dc263ff766b3e6ada9699597a8e79f8b0d5533';
 
-test('依赖来源固定：@feedback/web 实装 0.2.0，且与核验清单 sha256 一致', async () => {
+test('依赖来源固定：@feedback/web 实装 0.4.0，且与核验清单 sha256 一致', async () => {
   const pkg = JSON.parse(await readFile(new URL('../node_modules/@feedback/web/package.json', import.meta.url), 'utf8')) as { version: string };
-  expect(pkg.version, 'fixture 必须测 0.2.0，防止静默退化到 0.1.0').toBe('0.2.0');
+  expect(pkg.version, 'fixture 必须测 0.4.0，防止静默退化到旧版本').toBe('0.4.0');
 
   const tarball = await readFile(new URL(VENDOR_TARBALL, import.meta.url));
   const digest = createHash('sha256').update(tarball).digest('hex');
@@ -154,11 +154,12 @@ test.describe('同一实例上的身份世代（运行时切换 api-base）', ()
     await page.evaluate(() => (window as unknown as { __fixture: { el: { startLogin: () => void } } }).__fixture.el.startLogin());
     await page.evaluate(() => {
       const root = (window as unknown as { __fixture: { el: HTMLElement } }).__fixture.el.shadowRoot!;
-      const inputs = Array.from(root.querySelectorAll('input')) as HTMLInputElement[];
-      inputs[0].value = 'fixture-user';
-      inputs[1].value = 'fixture-pass';
-      inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-      inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+      const username = root.querySelector('input.fb-login-username') as HTMLInputElement;
+      const password = root.querySelector('input.fb-login-password') as HTMLInputElement;
+      username.value = 'fixture-user';
+      password.value = 'fixture-pass';
+      username.dispatchEvent(new Event('input', { bubbles: true }));
+      password.dispatchEvent(new Event('input', { bubbles: true }));
       (root.querySelector('button.fb-login-confirm') as HTMLButtonElement).click();
     });
 

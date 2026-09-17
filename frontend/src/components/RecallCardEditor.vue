@@ -1,11 +1,11 @@
 <template>
   <form class="surface p-4 sm:p-5 space-y-4" @submit.prevent="submitForm">
-    <div class="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+    <div class="flex items-start justify-between gap-3 border-b border-stone-100 pb-3">
       <div>
-        <h3 class="text-base font-semibold text-slate-900">{{ card ? '编辑回忆卡' : '新建回忆卡' }}</h3>
-        <p class="text-xs text-slate-500 mt-1">用清晰的问题触发主动回忆，答案只在揭示后显示。</p>
+        <h3 class="text-base font-semibold text-stone-900">{{ card ? '编辑回忆卡' : '新建回忆卡' }}</h3>
+        <p class="text-xs text-stone-500 mt-1">用清晰的问题触发主动回忆，答案只在揭示后显示。</p>
       </div>
-      <span v-if="card" class="text-[11px] text-slate-400 font-mono">{{ card.id.slice(0, 8) }}</span>
+      <span v-if="card" class="text-[11px] text-stone-400 font-mono">{{ card.id.slice(0, 8) }}</span>
     </div>
 
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">

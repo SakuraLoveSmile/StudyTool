@@ -8,24 +8,24 @@
   >
     <!-- Step Indicator -->
     <div class="mb-6">
-      <div class="flex items-center justify-between text-xs font-medium text-slate-500 max-w-md mx-auto">
-        <div class="flex items-center gap-1.5" :class="{ 'text-blue-600 font-semibold': step === 'select' }">
-          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'select' ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-300'">1</span>
+      <div class="flex items-center justify-between text-xs font-medium text-stone-500 max-w-md mx-auto">
+        <div class="flex items-center gap-1.5" :class="{ 'text-brand-600 font-semibold': step === 'select' }">
+          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'select' ? 'border-brand-600 bg-brand-50 text-brand-600' : 'border-stone-300'">1</span>
           <span>选择资料</span>
         </div>
-        <div class="w-8 h-px bg-slate-200" />
-        <div class="flex items-center gap-1.5" :class="{ 'text-blue-600 font-semibold': step === 'processing' }">
-          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'processing' ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-300'">2</span>
+        <div class="w-8 h-px bg-stone-200" />
+        <div class="flex items-center gap-1.5" :class="{ 'text-brand-600 font-semibold': step === 'processing' }">
+          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'processing' ? 'border-brand-600 bg-brand-50 text-brand-600' : 'border-stone-300'">2</span>
           <span>AI 梳理</span>
         </div>
-        <div class="w-8 h-px bg-slate-200" />
-        <div class="flex items-center gap-1.5" :class="{ 'text-blue-600 font-semibold': step === 'review' }">
-          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'review' ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-300'">3</span>
+        <div class="w-8 h-px bg-stone-200" />
+        <div class="flex items-center gap-1.5" :class="{ 'text-brand-600 font-semibold': step === 'review' }">
+          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'review' ? 'border-brand-600 bg-brand-50 text-brand-600' : 'border-stone-300'">3</span>
           <span>核对候选</span>
         </div>
-        <div class="w-8 h-px bg-slate-200" />
-        <div class="flex items-center gap-1.5" :class="{ 'text-blue-600 font-semibold': step === 'linking' }">
-          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'linking' ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-300'">4</span>
+        <div class="w-8 h-px bg-stone-200" />
+        <div class="flex items-center gap-1.5" :class="{ 'text-brand-600 font-semibold': step === 'linking' }">
+          <span class="w-5 h-5 rounded-full flex items-center justify-center border text-[11px]" :class="step === 'linking' ? 'border-brand-600 bg-brand-50 text-brand-600' : 'border-stone-300'">4</span>
           <span>真题关联</span>
         </div>
       </div>
@@ -33,35 +33,35 @@
 
     <!-- Step 1: Select Documents -->
     <div v-if="step === 'select'" class="space-y-4">
-      <p class="text-sm text-slate-600">
+      <p class="text-sm text-stone-600">
         请选择用于提取考点的参考教材或补充资料。系统将分析资料切片并梳理核心概念。
       </p>
 
-      <div v-if="loadingDocs" class="py-8 text-center text-slate-400 text-sm">
+      <div v-if="loadingDocs" class="py-8 text-center text-stone-400 text-sm">
         正在加载资料列表...
       </div>
-      <div v-else-if="availableDocs.length === 0" class="py-8 text-center text-slate-500 text-sm">
+      <div v-else-if="availableDocs.length === 0" class="py-8 text-center text-stone-500 text-sm">
         暂无已解析完成的教材或补充资料，请先前往资料库上传。
       </div>
       <div v-else class="space-y-2 max-h-60 overflow-y-auto pr-1">
         <label
           v-for="doc in availableDocs"
           :key="doc.id"
-          class="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-blue-300 bg-white hover:bg-blue-50/30 cursor-pointer transition-all"
+          class="flex items-center justify-between p-3 rounded-xl border border-stone-200 hover:border-brand-300 bg-white hover:bg-brand-50/30 cursor-pointer transition-all"
         >
           <div class="flex items-center gap-3">
             <input
               type="checkbox"
               :value="doc.id"
               v-model="selectedDocIds"
-              class="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+              class="w-4 h-4 text-brand-600 rounded border-stone-300 focus:ring-brand-500"
             >
             <div>
-              <p class="text-sm font-medium text-slate-800">{{ doc.filename }}</p>
-              <p class="text-xs text-slate-400">{{ doc.file_type === 'textbook' ? '参考教材' : '补充资料' }} · 共 {{ doc.page_count || 0 }} 页</p>
+              <p class="text-sm font-medium text-stone-800">{{ doc.filename }}</p>
+              <p class="text-xs text-stone-400">{{ doc.file_type === 'textbook' ? '参考教材' : '补充资料' }} · 共 {{ doc.page_count || 0 }} 页</p>
             </div>
           </div>
-          <span class="text-xs text-slate-400 font-mono">已解析</span>
+          <span class="text-xs text-stone-400 font-mono">已解析</span>
         </label>
       </div>
 
@@ -72,27 +72,27 @@
 
     <!-- Step 2: Processing -->
     <div v-else-if="step === 'processing'" class="py-8 text-center space-y-4">
-      <div class="w-12 h-12 mx-auto rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+      <div class="w-12 h-12 mx-auto rounded-full bg-brand-50 flex items-center justify-center text-brand-600">
         <svg class="w-6 h-6 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
       </div>
       <div>
-        <h4 class="text-base font-semibold text-slate-800">正在分析资料并梳理考点</h4>
-        <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+        <h4 class="text-base font-semibold text-stone-800">正在分析资料并梳理考点</h4>
+        <p class="text-xs text-stone-500 mt-1 max-w-sm mx-auto">
           {{ taskStatusMessage || '正在按切片分批分析，提取核心概念与原文依据...' }}
         </p>
       </div>
 
       <!-- Progress Bar -->
       <div class="max-w-md mx-auto space-y-1">
-        <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+        <div class="w-full bg-stone-100 rounded-full h-2 overflow-hidden">
           <div
-            class="bg-blue-600 h-2 rounded-full transition-all duration-300"
+            class="bg-brand-600 h-2 rounded-full transition-all duration-300"
             :style="{ width: `${taskProgress}%` }"
           />
         </div>
-        <div class="flex justify-between text-xs text-slate-400">
+        <div class="flex justify-between text-xs text-stone-400">
           <span>切片校验中</span>
           <span>{{ taskProgress }}%</span>
         </div>
@@ -102,21 +102,21 @@
     <!-- Step 3: Review Candidates -->
     <div v-else-if="step === 'review'" class="space-y-4">
       <div class="flex items-center justify-between">
-        <p class="text-xs text-slate-500">
-          已从资料中提取出 <span class="font-bold text-slate-800">{{ candidates.length }}</span> 个考点候选。请逐项核对并确认：
+        <p class="text-xs text-stone-500">
+          已从资料中提取出 <span class="font-bold text-stone-800">{{ candidates.length }}</span> 个考点候选。请逐项核对并确认：
         </p>
         <div class="flex items-center gap-2">
           <button
             type="button"
-            class="text-xs text-blue-600 hover:underline cursor-pointer"
+            class="text-xs text-brand-600 hover:underline cursor-pointer"
             @click="setAllAction('accept')"
           >
             全部采纳
           </button>
-          <span class="text-slate-300">|</span>
+          <span class="text-stone-300">|</span>
           <button
             type="button"
-            class="text-xs text-slate-500 hover:underline cursor-pointer"
+            class="text-xs text-stone-500 hover:underline cursor-pointer"
             @click="setAllAction('ignore')"
           >
             全部忽略
@@ -129,23 +129,23 @@
           v-for="cand in candidates"
           :key="cand.id"
           class="p-3.5 rounded-xl border transition-all text-sm"
-          :class="getDecision(cand.id).action === 'ignore' ? 'border-slate-200 bg-slate-50 opacity-60' : 'border-slate-200 bg-white shadow-xs'"
+          :class="getDecision(cand.id).action === 'ignore' ? 'border-stone-200 bg-stone-50 opacity-60' : 'border-stone-200 bg-white shadow-xs'"
         >
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1 space-y-1">
               <div class="flex items-center gap-2 flex-wrap">
-                <span class="font-semibold text-slate-800">{{ cand.name }}</span>
+                <span class="font-semibold text-stone-800">{{ cand.name }}</span>
                 <span
                   class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
                   :class="getMatchBadgeClass(cand.match_type)"
                 >
                   {{ getMatchBadgeLabel(cand.match_type) }}
                 </span>
-                <span v-if="cand.chapter" class="text-xs text-slate-400">
+                <span v-if="cand.chapter" class="text-xs text-stone-400">
                   {{ cand.chapter }}
                 </span>
               </div>
-              <p v-if="cand.definition" class="text-xs text-slate-600 leading-relaxed">
+              <p v-if="cand.definition" class="text-xs text-stone-600 leading-relaxed">
                 {{ cand.definition }}
               </p>
             </div>
@@ -154,7 +154,7 @@
             <div class="flex items-center gap-1.5 shrink-0">
               <select
                 v-model="getDecision(cand.id).action"
-                class="text-xs rounded-lg border-slate-300 py-1 px-2 focus:ring-blue-500"
+                class="text-xs rounded-lg border-stone-300 py-1 px-2 focus:ring-brand-500"
               >
                 <option value="accept">采纳入库</option>
                 <option value="merge">合并至现有</option>
@@ -164,11 +164,11 @@
           </div>
 
           <!-- Merge target dropdown if merge is selected -->
-          <div v-if="getDecision(cand.id).action === 'merge'" class="mt-2.5 pt-2 border-t border-slate-100 flex items-center gap-2">
-            <span class="text-xs text-slate-500">选择合并目标:</span>
+          <div v-if="getDecision(cand.id).action === 'merge'" class="mt-2.5 pt-2 border-t border-stone-100 flex items-center gap-2">
+            <span class="text-xs text-stone-500">选择合并目标:</span>
             <select
               v-model="getDecision(cand.id).target_kp_id"
-              class="text-xs rounded-lg border-slate-300 py-1 px-2 flex-1 focus:ring-blue-500"
+              class="text-xs rounded-lg border-stone-300 py-1 px-2 flex-1 focus:ring-brand-500"
             >
               <option value="">-- 请选择目标考点 --</option>
               <option v-for="kp in existingKPs" :key="kp.id" :value="kp.id">
@@ -178,16 +178,16 @@
           </div>
 
           <!-- Citations View -->
-          <div v-if="cand.citations && cand.citations.length > 0" class="mt-2.5 pt-2 border-t border-slate-100">
-            <details class="text-xs text-slate-500 group">
-              <summary class="cursor-pointer font-medium hover:text-blue-600 flex items-center gap-1">
+          <div v-if="cand.citations && cand.citations.length > 0" class="mt-2.5 pt-2 border-t border-stone-100">
+            <details class="text-xs text-stone-500 group">
+              <summary class="cursor-pointer font-medium hover:text-brand-600 flex items-center gap-1">
                 <span>查看看出处依据 ({{ cand.citations.length }} 处)</span>
               </summary>
-              <div class="mt-2 space-y-1.5 pl-2 border-l-2 border-slate-200">
+              <div class="mt-2 space-y-1.5 pl-2 border-l-2 border-stone-200">
                 <div v-for="(cit, cIdx) in cand.citations" :key="cIdx" class="text-xs">
-                  <span class="font-medium text-slate-700">{{ cit.doc_name }}</span>
-                  <span v-if="cit.page_number" class="text-slate-400 ml-1">P{{ cit.page_number }}</span>
-                  <p class="text-slate-600 italic mt-0.5 bg-slate-50 p-1.5 rounded">
+                  <span class="font-medium text-stone-700">{{ cit.doc_name }}</span>
+                  <span v-if="cit.page_number" class="text-stone-400 ml-1">P{{ cit.page_number }}</span>
+                  <p class="text-stone-600 italic mt-0.5 bg-stone-50 p-1.5 rounded">
                     “{{ cit.quote }}”
                   </p>
                 </div>
@@ -201,47 +201,47 @@
     <!-- Step 4: Suggest Question Links -->
     <div v-else-if="step === 'linking'" class="space-y-4">
       <div v-if="questionLinksData?.total_confirmed_questions === 0" class="py-6 text-center space-y-2">
-        <div class="w-10 h-10 mx-auto rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+        <div class="w-10 h-10 mx-auto rounded-full bg-stone-100 flex items-center justify-center text-stone-400">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </div>
-        <p class="text-sm font-semibold text-slate-700">当前题库暂无已确认真题</p>
-        <p class="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+        <p class="text-sm font-semibold text-stone-700">当前题库暂无已确认真题</p>
+        <p class="text-xs text-stone-500 max-w-md mx-auto leading-relaxed">
           考点已成功入库。系统严格保证数据真实性，未凭空捏造虚假真题考查记录。您可随时在资料库导入真题后再进行关联。
         </p>
       </div>
 
       <div v-else-if="questionLinksData && questionLinksData.links.length === 0" class="py-6 text-center space-y-2">
-        <p class="text-sm font-medium text-slate-700">未发现与新入库考点直接匹配的真题</p>
-        <p class="text-xs text-slate-400">新考点已入库，后续可手动在题库中关联考点。</p>
+        <p class="text-sm font-medium text-stone-700">未发现与新入库考点直接匹配的真题</p>
+        <p class="text-xs text-stone-400">新考点已入库，后续可手动在题库中关联考点。</p>
       </div>
 
       <div v-else-if="questionLinksData && questionLinksData.links.length > 0" class="space-y-3">
-        <p class="text-xs text-slate-600">
+        <p class="text-xs text-stone-600">
           检测到以下已确认真题与新考点高度相关，建议建立关联：
         </p>
         <div class="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
           <label
             v-for="(link, lIdx) in questionLinksData.links"
             :key="lIdx"
-            class="flex items-start gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:border-blue-200 cursor-pointer text-xs"
+            class="flex items-start gap-3 p-3 rounded-xl border border-stone-200 bg-white hover:border-brand-200 cursor-pointer text-xs"
           >
             <input
               type="checkbox"
               v-model="selectedLinkIndexes"
               :value="lIdx"
-              class="w-4 h-4 mt-0.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+              class="w-4 h-4 mt-0.5 text-brand-600 rounded border-stone-300 focus:ring-brand-500"
             >
             <div class="min-w-0 flex-1 space-y-1">
-              <div class="flex items-center gap-2 font-medium text-slate-800">
+              <div class="flex items-center gap-2 font-medium text-stone-800">
                 <span>{{ link.year ? `${link.year}年` : '' }} {{ link.session_name || '' }} {{ link.question_num || '' }}</span>
-                <span class="text-blue-600">关联至 ➔「{{ link.knowledge_point_name }}」</span>
+                <span class="inline-flex items-center gap-1 text-brand-600">关联至<ArrowRight class="h-3 w-3" />「{{ link.knowledge_point_name }}」</span>
               </div>
-              <p class="text-slate-600 line-clamp-2">
+              <p class="text-stone-600 line-clamp-2">
                 {{ link.question_stem }}
               </p>
-              <p v-if="link.reason" class="text-[11px] text-slate-400">
+              <p v-if="link.reason" class="text-[11px] text-stone-400">
                 匹配依据: {{ link.reason }}
               </p>
             </div>
@@ -300,6 +300,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue';
+import { ArrowRight } from 'lucide-vue-next';
 import { apiClient } from '../api/client';
 import type { DocumentItem, ExtractionCandidate, KnowledgePoint, QuestionLinkSuggestionResponse } from '../types';
 import BaseModal from './BaseModal.vue';
@@ -462,7 +463,7 @@ const getMatchBadgeClass = (type: string) => {
   switch (type) {
     case 'existing': return 'bg-emerald-100 text-emerald-800';
     case 'deleted_or_ignored': return 'bg-amber-100 text-amber-800';
-    default: return 'bg-blue-100 text-blue-800';
+    default: return 'bg-brand-100 text-brand-800';
   }
 };
 

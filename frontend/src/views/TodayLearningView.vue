@@ -1,21 +1,21 @@
 <template>
   <div class="page-stack">
-    <header class="surface p-5 sm:p-6 space-y-4">
+    <header class="surface p-5 sm:p-6 space-y-5">
       <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div class="flex flex-wrap items-center gap-2">
-            <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">RAG V1</span>
-            <span v-if="today.round" class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{{ roundLabel(today.round) }}</span>
+            <span class="chip bg-brand-50 font-semibold text-brand-700">RAG V1</span>
+            <span v-if="today.round" class="chip bg-stone-100 text-stone-600">{{ roundLabel(today.round) }}</span>
             <span
               v-if="today.status !== 'idle'"
-              class="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium"
+              class="chip"
               :class="statusClass(today.status)"
             >
               {{ statusLabel(today.status) }}
             </span>
           </div>
-          <h1 class="mt-2 text-xl sm:text-2xl font-bold tracking-tight text-slate-900">今日学习</h1>
-          <p class="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500">
+          <h1 class="mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight text-stone-900">今日学习</h1>
+          <p class="mt-1 max-w-2xl text-sm leading-relaxed text-stone-500">
             按章节范围安排主动回忆。先回想，再揭示答案，最后用难度反馈帮助系统调整下一次复习。
           </p>
         </div>
@@ -36,26 +36,26 @@
       </div>
 
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
-          <span class="text-xs text-slate-500">今日总量</span>
-          <strong class="mt-1 block text-xl text-slate-900">{{ today.total }}</strong>
+        <div class="rounded-xl border border-stone-200/70 bg-stone-50/80 px-4 py-3.5">
+          <span class="text-xs font-medium text-stone-500">今日总量</span>
+          <strong class="mt-1 block text-2xl font-bold tracking-tight text-stone-900">{{ today.total }}</strong>
         </div>
-        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
-          <span class="text-xs text-slate-500">已完成</span>
-          <strong class="mt-1 block text-xl text-emerald-600">{{ today.completed }}</strong>
+        <div class="rounded-xl border border-emerald-200/60 bg-emerald-50/50 px-4 py-3.5">
+          <span class="text-xs font-medium text-emerald-700/80">已完成</span>
+          <strong class="mt-1 block text-2xl font-bold tracking-tight text-emerald-600">{{ today.completed }}</strong>
         </div>
-        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
-          <span class="text-xs text-slate-500">待复习</span>
-          <strong class="mt-1 block text-xl text-blue-600">{{ today.remaining }}</strong>
+        <div class="rounded-xl border border-brand-200/60 bg-brand-50/50 px-4 py-3.5">
+          <span class="text-xs font-medium text-brand-700/80">待复习</span>
+          <strong class="mt-1 block text-2xl font-bold tracking-tight text-brand-600">{{ today.remaining }}</strong>
         </div>
-        <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
-          <span class="text-xs text-slate-500">新卡 / 复习</span>
-          <strong class="mt-1 block text-xl text-amber-600">{{ today.new_count }} / {{ today.review_count }}</strong>
+        <div class="rounded-xl border border-amber-200/60 bg-amber-50/50 px-4 py-3.5">
+          <span class="text-xs font-medium text-amber-700/80">新卡 / 复习</span>
+          <strong class="mt-1 block text-2xl font-bold tracking-tight text-amber-600">{{ today.new_count }} / {{ today.review_count }}</strong>
         </div>
       </div>
 
-      <div class="h-2 overflow-hidden rounded-full bg-slate-100" aria-label="今日学习进度">
-        <div class="h-full rounded-full bg-gradient-to-r from-indigo-500 to-blue-600 transition-all" :style="{ width: `${completionPercent}%` }" />
+      <div class="h-2 overflow-hidden rounded-full bg-stone-100" aria-label="今日学习进度">
+        <div class="h-full rounded-full bg-gradient-to-r from-brand-400 to-brand-600 transition-all" :style="{ width: `${completionPercent}%` }" />
       </div>
     </header>
 
@@ -81,29 +81,29 @@
         <section class="surface p-4 sm:p-5">
           <div class="flex items-center justify-between gap-2">
             <div>
-              <h2 class="text-sm font-semibold text-slate-800">学习范围</h2>
-              <p class="mt-1 text-xs text-slate-500">选择今天参与队列的章节</p>
+              <h2 class="text-sm font-semibold text-stone-800">学习范围</h2>
+              <p class="mt-1 text-xs text-stone-500">选择今天参与队列的章节</p>
             </div>
-            <button type="button" class="text-xs font-medium text-blue-600 hover:underline disabled:opacity-50" :disabled="savingScope" @click="saveScope">
+            <button type="button" class="text-xs font-medium text-brand-600 hover:underline disabled:opacity-50" :disabled="savingScope" @click="saveScope">
               {{ savingScope ? '保存中…' : '保存' }}
             </button>
           </div>
-          <div v-if="chapters.length === 0" class="mt-4 rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400">
+          <div v-if="chapters.length === 0" class="mt-4 rounded-lg bg-stone-50 px-3 py-3 text-xs text-stone-400">
             暂无章节，请先在回忆卡页面创建章节或导入内容。
           </div>
           <div v-else class="mt-4 max-h-64 space-y-1.5 overflow-y-auto pr-1">
             <label
               v-for="chapter in chapters"
               :key="chapter.id"
-              class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors hover:bg-slate-50"
+              class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors hover:bg-stone-50"
             >
-              <input v-model="selectedChapterIds" type="checkbox" :value="chapter.id" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-              <span class="min-w-0 flex-1 truncate text-slate-700">{{ chapter.name }}</span>
-              <span class="shrink-0 text-[11px] text-slate-400">{{ chapter.card_count }}</span>
+              <input v-model="selectedChapterIds" type="checkbox" :value="chapter.id" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
+              <span class="min-w-0 flex-1 truncate text-stone-700">{{ chapter.name }}</span>
+              <span class="shrink-0 text-[11px] text-stone-400">{{ chapter.card_count }}</span>
             </label>
           </div>
-          <label class="mt-3 flex cursor-pointer items-center gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
-            <input v-model="includeUnassigned" type="checkbox" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+          <label class="mt-3 flex cursor-pointer items-center gap-2 border-t border-stone-100 pt-3 text-xs text-stone-600">
+            <input v-model="includeUnassigned" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
             包含未分类卡片
           </label>
         </section>
@@ -111,10 +111,10 @@
         <section class="surface p-4 sm:p-5">
           <div class="flex items-center justify-between gap-2">
             <div>
-              <h2 class="text-sm font-semibold text-slate-800">今日设置</h2>
-              <p class="mt-1 text-xs text-slate-500">限制每次打开的学习量</p>
+              <h2 class="text-sm font-semibold text-stone-800">今日设置</h2>
+              <p class="mt-1 text-xs text-stone-500">限制每次打开的学习量</p>
             </div>
-            <button type="button" class="text-xs font-medium text-blue-600 hover:underline disabled:opacity-50" :disabled="savingSettings" @click="saveSettings">
+            <button type="button" class="text-xs font-medium text-brand-600 hover:underline disabled:opacity-50" :disabled="savingSettings" @click="saveSettings">
               {{ savingSettings ? '保存中…' : '保存' }}
             </button>
           </div>
@@ -127,37 +127,37 @@
               <span class="field-label">每日复习上限（1–100）</span>
               <input v-model.number="settings.daily_review_limit" type="number" min="1" max="100" class="field" placeholder="未配置" />
             </label>
-            <label class="flex cursor-pointer items-center gap-2 text-slate-600">
-              <input v-model="settings.auto_advance" type="checkbox" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <label class="flex cursor-pointer items-center gap-2 text-stone-600">
+              <input v-model="settings.auto_advance" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
               评分后自动进入下一张
             </label>
-            <label class="flex cursor-pointer items-center gap-2 text-slate-600">
-              <input v-model="settings.show_hints" type="checkbox" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <label class="flex cursor-pointer items-center gap-2 text-stone-600">
+              <input v-model="settings.show_hints" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
               揭示前显示提示
             </label>
           </div>
         </section>
 
         <section v-if="today.queue.length > 0" class="surface p-4 sm:p-5">
-          <h2 class="text-sm font-semibold text-slate-800">队列预览</h2>
-          <p class="mt-1 text-xs text-slate-500">到期复习与续接优先；未完成前不会加入新学内容。</p>
+          <h2 class="text-sm font-semibold text-stone-800">队列预览</h2>
+          <p class="mt-1 text-xs text-stone-500">到期复习与续接优先；未完成前不会加入新学内容。</p>
           <ul class="mt-3 space-y-1.5">
             <li
               v-for="(card, index) in today.queue.slice(0, 8)"
               :key="`${card.id}-${index}`"
-              class="flex items-start gap-2 rounded-lg border border-slate-100 px-3 py-2 text-xs"
+              class="flex items-start gap-2 rounded-lg border border-stone-100 px-3 py-2 text-xs"
             >
-              <span class="shrink-0 text-slate-400">{{ index + 1 }}.</span>
-              <span class="min-w-0 flex-1 text-slate-700">
+              <span class="shrink-0 text-stone-400">{{ index + 1 }}.</span>
+              <span class="min-w-0 flex-1 text-stone-700">
                 <span class="line-clamp-2">{{ card.prompt }}</span>
-                <span v-if="card.due_at" class="mt-0.5 block text-[11px] text-slate-400">到期 {{ card.due_at }}</span>
+                <span v-if="card.due_at" class="mt-0.5 block text-[11px] text-stone-400">到期 {{ card.due_at }}</span>
               </span>
             </li>
           </ul>
-          <label class="mt-3 flex cursor-pointer items-start gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+          <label class="mt-3 flex cursor-pointer items-start gap-2 border-t border-stone-100 pt-3 text-xs text-stone-600">
             <input
               type="checkbox"
-              class="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              class="mt-0.5 rounded border-stone-300 text-brand-600 focus:ring-brand-500"
               :checked="today.override_enabled"
               :disabled="busy || today.status !== 'active'"
               @change="toggleOverride(($event.target as HTMLInputElement).checked)"
@@ -221,10 +221,10 @@ const statusLabel = (status: TodayLearning['status']): string => {
 };
 
 const statusClass = (status: TodayLearning['status']): string => {
-  if (status === 'active') return 'bg-blue-50 text-blue-700';
+  if (status === 'active') return 'bg-brand-50 text-brand-700';
   if (status === 'completed') return 'bg-emerald-50 text-emerald-700';
   if (status === 'paused') return 'bg-amber-50 text-amber-700';
-  return 'bg-slate-100 text-slate-600';
+  return 'bg-stone-100 text-stone-600';
 };
 
 const roundLabel = (round: NonNullable<TodayLearning['round']>): string => {

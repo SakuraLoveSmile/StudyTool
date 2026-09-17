@@ -12,7 +12,7 @@ const FEEDBACK_ELEMENT_TAG = 'feedback-widget';
 /**
  * 保留哨兵：**仅**用于绕过组件 `attributeChangedCallback` 的 `oldVal !== newVal` 守卫。
  *
- * 组件实现（0.2.0 产物实测）：
+ * 组件实现（0.4.0 源码核对，与 0.2.0 一致）：
  *   reflect(t, i) { i === null || i === "" ? this.removeAttribute(t) : this.setAttribute(t, i); }
  *   attributeChangedCallback(t, i, s) {
  *     t === "api-base" && i !== s && (this.identityEpoch++, this.resetForServiceSwitch()) ...

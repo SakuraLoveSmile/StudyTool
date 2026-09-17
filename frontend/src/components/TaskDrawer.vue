@@ -11,7 +11,7 @@
     >
       <div
         v-if="isDrawerOpen"
-        class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40"
+        class="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-40"
         @click="closeDrawer"
       />
     </Transition>
@@ -19,23 +19,23 @@
     <!-- Drawer Panel -->
     <Transition
       enter-active-class="transform transition duration-300 ease-out"
-      enter-from-class="translate-x-full"
-      enter-to-class="translate-x-0"
+      enter-from-class="transtone-x-full"
+      enter-to-class="transtone-x-0"
       leave-active-class="transform transition duration-200 ease-in"
-      leave-from-class="translate-x-0"
-      leave-to-class="translate-x-full"
+      leave-from-class="transtone-x-0"
+      leave-to-class="transtone-x-full"
     >
       <div
         v-if="isDrawerOpen"
-        class="fixed inset-y-0 right-0 z-50 w-full max-w-lg md:max-w-xl bg-white shadow-2xl flex flex-col border-l border-slate-200"
+        class="fixed inset-y-0 right-0 z-50 w-full max-w-lg md:max-w-xl bg-white shadow-2xl flex flex-col border-l border-stone-200"
       >
         <!-- Header -->
-        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+        <div class="px-5 py-4 border-b border-stone-100 flex items-center justify-between bg-stone-50/70">
           <div class="flex items-center gap-2.5">
-            <h3 class="text-base font-semibold text-slate-800">任务进度与监控</h3>
+            <h3 class="text-base font-semibold text-stone-800">任务进度与监控</h3>
             <span
               v-if="activeCount > 0"
-              class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 animate-pulse"
+              class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-brand-100 text-brand-800 animate-pulse"
             >
               {{ activeCount }} 运行中
             </span>
@@ -43,7 +43,7 @@
           <div class="flex items-center gap-1">
             <button
               type="button"
-              class="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              class="p-1.5 text-stone-400 hover:text-stone-600 rounded-lg hover:bg-stone-100 transition-colors cursor-pointer"
               title="刷新任务"
               @click="fetchTasks"
             >
@@ -53,7 +53,7 @@
             </button>
             <button
               type="button"
-              class="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              class="p-1.5 text-stone-400 hover:text-stone-600 rounded-lg hover:bg-stone-100 transition-colors cursor-pointer"
               @click="closeDrawer"
             >
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -64,12 +64,12 @@
         </div>
 
         <!-- Segmented Tabs -->
-        <div class="px-4 pt-3 pb-2 border-b border-slate-100 bg-white">
-          <div class="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg text-xs font-medium">
+        <div class="px-4 pt-3 pb-2 border-b border-stone-100 bg-white">
+          <div class="grid grid-cols-3 gap-1 bg-stone-100 p-1 rounded-lg text-xs font-medium">
             <button
               type="button"
               class="py-1.5 rounded-md transition-all text-center cursor-pointer"
-              :class="currentTab === 'active' ? 'bg-white text-blue-700 shadow-xs font-semibold' : 'text-slate-600 hover:text-slate-900'"
+              :class="currentTab === 'active' ? 'bg-white text-brand-700 shadow-xs font-semibold' : 'text-stone-600 hover:text-stone-900'"
               @click="currentTab = 'active'"
             >
               运行中 ({{ activeTasks.length }})
@@ -77,7 +77,7 @@
             <button
               type="button"
               class="py-1.5 rounded-md transition-all text-center cursor-pointer"
-              :class="currentTab === 'actionable' ? 'bg-white text-rose-700 shadow-xs font-semibold' : 'text-slate-600 hover:text-slate-900'"
+              :class="currentTab === 'actionable' ? 'bg-white text-rose-700 shadow-xs font-semibold' : 'text-stone-600 hover:text-stone-900'"
               @click="currentTab = 'actionable'"
             >
               异常 ({{ actionableTasks.length }})
@@ -85,7 +85,7 @@
             <button
               type="button"
               class="py-1.5 rounded-md transition-all text-center cursor-pointer"
-              :class="currentTab === 'history' ? 'bg-white text-slate-800 shadow-xs font-semibold' : 'text-slate-600 hover:text-slate-900'"
+              :class="currentTab === 'history' ? 'bg-white text-stone-800 shadow-xs font-semibold' : 'text-stone-600 hover:text-stone-900'"
               @click="currentTab = 'history'"
             >
               历史 ({{ historyTasks.length }})
@@ -96,21 +96,21 @@
         <!-- History Actions Bar -->
         <div
           v-if="currentTab === 'history' && historyTasks.length > 0"
-          class="px-4 py-2 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between text-xs"
+          class="px-4 py-2 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between text-xs"
         >
-          <span class="text-slate-500">已存档 {{ historyTasks.length }} 条记录</span>
+          <span class="text-stone-500">已存档 {{ historyTasks.length }} 条记录</span>
           <div class="flex items-center gap-2">
             <button
               type="button"
-              class="text-blue-600 hover:text-blue-700 font-medium hover:underline cursor-pointer"
+              class="text-brand-600 hover:text-brand-700 font-medium hover:underline cursor-pointer"
               @click="clearCompleted"
             >
               清理已完成
             </button>
-            <span class="text-slate-300">|</span>
+            <span class="text-stone-300">|</span>
             <button
               type="button"
-              class="text-slate-500 hover:text-rose-600 font-medium hover:underline cursor-pointer"
+              class="text-stone-500 hover:text-rose-600 font-medium hover:underline cursor-pointer"
               @click="showClearAllModal = true"
             >
               清空历史
@@ -141,7 +141,7 @@
               <div
                 v-for="task in activeTasks"
                 :key="task.id"
-                class="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden transition-all"
+                class="rounded-xl border border-stone-200 bg-white shadow-xs overflow-hidden transition-all"
               >
                 <!-- Task Card Summary (Top tier) -->
                 <div class="p-3.5 space-y-2.5">
@@ -150,9 +150,9 @@
                       <div class="flex items-center gap-2 flex-wrap">
                         <span
                           class="w-2 h-2 rounded-full shrink-0"
-                          :class="task.status === 'pending' ? 'bg-amber-500' : 'bg-blue-500 animate-ping'"
+                          :class="task.status === 'pending' ? 'bg-amber-500' : 'bg-brand-500 animate-ping'"
                         />
-                        <span class="text-sm font-semibold text-slate-800 truncate">
+                        <span class="text-sm font-semibold text-stone-800 truncate">
                           {{ taskTypeLabel(task.task_type) }}
                         </span>
                         <span
@@ -163,13 +163,13 @@
                         </span>
                         <span
                           v-if="task.progress_detail?.unit"
-                          class="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded font-mono"
+                          class="text-[10px] text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded font-mono"
                         >
                           单位: {{ formatUnit(task.progress_detail.unit) }}
                         </span>
                       </div>
 
-                      <p class="text-xs text-slate-600 mt-1 leading-relaxed line-clamp-2">
+                      <p class="text-xs text-stone-600 mt-1 leading-relaxed line-clamp-2">
                         {{ task.progress_detail?.currentAction || task.message || '正在处理中...' }}
                       </p>
                     </div>
@@ -202,7 +202,7 @@
                     >
                       <span
                         class="mt-1 w-1.5 h-1.5 rounded-full shrink-0"
-                        :class="line.tone === 'warn' ? 'bg-amber-500' : (line.tone === 'error' ? 'bg-rose-500' : 'bg-blue-500 animate-pulse')"
+                        :class="line.tone === 'warn' ? 'bg-amber-500' : (line.tone === 'error' ? 'bg-rose-500' : 'bg-brand-500 animate-pulse')"
                       />
                       <span>{{ line.text }}</span>
                     </div>
@@ -221,7 +221,7 @@
 
                   <!-- Native Progress Element -->
                   <div class="space-y-1">
-                    <div class="flex justify-between text-xs text-slate-500 font-medium">
+                    <div class="flex justify-between text-xs text-stone-500 font-medium">
                       <span>
                         <span v-if="task.status === 'pending'">
                           排队第 {{ task.queue_position || 1 }} 位 · 排队 {{ formatDuration(task.queued_seconds) }}
@@ -262,10 +262,10 @@
                   </div>
 
                   <!-- Footer Meta & Actions -->
-                  <div class="pt-1 text-[11px] text-slate-500 flex items-center justify-between flex-wrap gap-2 border-t border-slate-50">
+                  <div class="pt-1 text-[11px] text-stone-500 flex items-center justify-between flex-wrap gap-2 border-t border-stone-50">
                     <div class="flex items-center gap-2 font-mono">
                       <span>已耗时: {{ formatDuration(getLiveElapsedSeconds(task)) }}</span>
-                      <span v-if="task.progress_detail?.resultCount" class="text-blue-600 font-sans">
+                      <span v-if="task.progress_detail?.resultCount" class="text-brand-600 font-sans">
                         · 识别结果: {{ task.progress_detail.resultCount }}
                       </span>
                     </div>
@@ -274,7 +274,7 @@
                       <button
                         v-if="task.task_type === 'extract_knowledge_points' && (task.progress_detail?.resultCount || 0) > 0"
                         type="button"
-                        class="text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 hover:underline cursor-pointer"
+                        class="text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1 hover:underline cursor-pointer"
                         @click="openCandidatePreview(task)"
                       >
                         预览考点 ({{ task.progress_detail?.resultCount }})
@@ -282,7 +282,7 @@
 
                       <button
                         type="button"
-                        class="text-slate-600 hover:text-slate-900 font-medium flex items-center gap-0.5 cursor-pointer"
+                        class="text-stone-600 hover:text-stone-900 font-medium flex items-center gap-0.5 cursor-pointer"
                         @click="toggleTaskExpansion(task.id)"
                       >
                         <span>{{ isTaskExpanded(task.id) ? '收起详情' : '展开详情' }}</span>
@@ -303,14 +303,14 @@
                 <!-- Expanded Diagnostic Details (Inner tier - Accordion) -->
                 <div
                   v-if="isTaskExpanded(task.id)"
-                  class="p-3.5 bg-slate-50/70 border-t border-slate-100 space-y-3.5 text-xs"
+                  class="p-3.5 bg-stone-50/70 border-t border-stone-100 space-y-3.5 text-xs"
                 >
                   <!-- Pipeline Stage Stepper -->
                   <div class="space-y-1.5">
-                    <div class="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+                    <div class="text-[11px] font-semibold text-stone-600 uppercase tracking-wider">
                       流水线阶段
                     </div>
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-white p-2 rounded-lg border border-slate-200/80">
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-white p-2 rounded-lg border border-stone-200/80">
                       <div
                         v-for="(stage, idx) in getStagesForTask(task.task_type)"
                         :key="stage.key"
@@ -326,7 +326,7 @@
                         </span>
                         <span
                           class="text-[11px] truncate"
-                          :class="isStageActive(task, stage.key) ? 'font-bold text-blue-700' : 'text-slate-600'"
+                          :class="isStageActive(task, stage.key) ? 'font-bold text-brand-700' : 'text-stone-600'"
                         >
                           {{ stage.label }}
                         </span>
@@ -336,28 +336,28 @@
 
                   <!-- True Units Counts Grid -->
                   <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div class="bg-white p-2 rounded-lg border border-slate-200/80">
-                      <div class="text-[10px] text-slate-400">已成功批次</div>
-                      <div class="text-sm font-semibold text-slate-800">
+                    <div class="bg-white p-2 rounded-lg border border-stone-200/80">
+                      <div class="text-[10px] text-stone-400">已成功批次</div>
+                      <div class="text-sm font-semibold text-stone-800">
                         {{ task.progress_detail?.succeeded ?? 0 }} / {{ task.progress_detail?.total ?? '?' }}
                       </div>
                     </div>
-                    <div class="bg-white p-2 rounded-lg border border-slate-200/80">
-                      <div class="text-[10px] text-slate-400">当前活动单元</div>
-                      <div class="text-sm font-semibold text-blue-600 truncate">
+                    <div class="bg-white p-2 rounded-lg border border-stone-200/80">
+                      <div class="text-[10px] text-stone-400">当前活动单元</div>
+                      <div class="text-sm font-semibold text-brand-600 truncate">
                         {{ task.progress_detail?.activeUnits?.length ? `第 ${task.progress_detail.activeUnits.join(', ')} 批` : '无活动请求' }}
                       </div>
                     </div>
-                    <div class="bg-white p-2 rounded-lg border border-slate-200/80">
-                      <div class="text-[10px] text-slate-400">失败 / 跳过</div>
+                    <div class="bg-white p-2 rounded-lg border border-stone-200/80">
+                      <div class="text-[10px] text-stone-400">失败 / 跳过</div>
                       <div class="text-sm font-semibold">
-                        <span :class="(task.progress_detail?.failed || 0) > 0 ? 'text-rose-600' : 'text-slate-800'">{{ task.progress_detail?.failed ?? 0 }}</span>
-                        <span class="text-slate-400"> / </span>
-                        <span class="text-slate-800">{{ task.progress_detail?.skipped ?? 0 }}</span>
+                        <span :class="(task.progress_detail?.failed || 0) > 0 ? 'text-rose-600' : 'text-stone-800'">{{ task.progress_detail?.failed ?? 0 }}</span>
+                        <span class="text-stone-400"> / </span>
+                        <span class="text-stone-800">{{ task.progress_detail?.skipped ?? 0 }}</span>
                       </div>
                     </div>
-                    <div class="bg-white p-2 rounded-lg border border-slate-200/80">
-                      <div class="text-[10px] text-slate-400">累计提取成果</div>
+                    <div class="bg-white p-2 rounded-lg border border-stone-200/80">
+                      <div class="text-[10px] text-stone-400">累计提取成果</div>
                       <div class="text-sm font-semibold text-emerald-600">
                         {{ task.progress_detail?.resultCount ?? 0 }} 个
                       </div>
@@ -367,17 +367,17 @@
                   <!-- 旧任务：详细调用状态不可用 -->
                   <div
                     v-if="isLegacyDetail(task)"
-                    class="px-3 py-2 rounded-lg bg-slate-100 border border-slate-200 text-[11px] text-slate-500"
+                    class="px-3 py-2 rounded-lg bg-stone-100 border border-stone-200 text-[11px] text-stone-500"
                   >
                     旧任务记录：仅保留阶段级进度，详细调用状态不可用。
                   </div>
 
                   <!-- Per-unit execution statuses (并发请求分别列出) -->
                   <div v-if="(task.progress_detail?.execUnits?.length || 0) > 0" class="space-y-1.5">
-                    <div class="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+                    <div class="text-[11px] font-semibold text-stone-600 uppercase tracking-wider">
                       执行单元状态
                     </div>
-                    <div class="bg-white rounded-lg border border-slate-200/80 divide-y divide-slate-100">
+                    <div class="bg-white rounded-lg border border-stone-200/80 divide-y divide-stone-100">
                       <div
                         v-for="unit in visibleUnits(task)"
                         :key="unit.id"
@@ -385,14 +385,14 @@
                       >
                         <div class="min-w-0">
                           <div class="flex items-center gap-1.5 flex-wrap">
-                            <span class="font-semibold text-slate-700">{{ unitKindLabel(unit) }}</span>
+                            <span class="font-semibold text-stone-700">{{ unitKindLabel(unit) }}</span>
                             <span
-                              class="px-1.5 py-0.2 rounded text-[10px]"
+                              class="px-1.5 py-0.5 rounded text-[10px]"
                               :class="unitStateClass(unit)"
                             >
                               {{ unitStateLabel(unit) }}
                             </span>
-                            <span v-if="unit.scope" class="text-slate-500">{{ unit.scope }}</span>
+                            <span v-if="unit.scope" class="text-stone-500">{{ unit.scope }}</span>
                           </div>
                           <div v-if="unitRetryText(unit)" class="text-[10px] text-amber-700 mt-0.5">
                             {{ unitRetryText(unit) }}
@@ -401,8 +401,8 @@
                             {{ unit.error }}
                           </div>
                         </div>
-                        <div class="text-right shrink-0 font-mono text-[10px] text-slate-500">
-                          <div v-if="unitWaitSeconds(unit, nowTick) !== null" class="text-blue-600 font-semibold">
+                        <div class="text-right shrink-0 font-mono text-[10px] text-stone-500">
+                          <div v-if="unitWaitSeconds(unit, nowTick) !== null" class="text-brand-600 font-semibold">
                             {{ unitWaitSeconds(unit, nowTick) }} 秒
                           </div>
                           <div v-if="unit.attempt && unit.attempt > 1">尝试 {{ unit.attempt }} 次</div>
@@ -415,10 +415,10 @@
                   <!-- Live Request Waiting Indicator -->
                   <div
                     v-if="!isLegacyDetail(task) && task.progress_detail?.requestStartedAt && task.status === 'processing'"
-                    class="flex items-center justify-between px-3 py-2 bg-blue-50/80 border border-blue-100 rounded-lg text-blue-800"
+                    class="flex items-center justify-between px-3 py-2 bg-brand-50/80 border border-brand-100 rounded-lg text-brand-800"
                   >
                     <div class="flex items-center gap-2">
-                      <span class="inline-block w-2 h-2 rounded-full bg-blue-500 animate-ping" />
+                      <span class="inline-block w-2 h-2 rounded-full bg-brand-500 animate-ping" />
                       <span>正在调用模型 / OCR 服务...</span>
                     </div>
                     <span class="font-mono font-medium">
@@ -428,12 +428,12 @@
 
                   <!-- Timing Breakdown Table -->
                   <div v-if="task.timing_breakdown" class="space-y-1.5">
-                    <div class="text-[11px] font-semibold text-slate-600 uppercase tracking-wider flex justify-between">
+                    <div class="text-[11px] font-semibold text-stone-600 uppercase tracking-wider flex justify-between">
                       <span>耗时明细 (毫秒 / 次数)</span>
                     </div>
-                    <div class="bg-white rounded-lg border border-slate-200/80 overflow-hidden">
+                    <div class="bg-white rounded-lg border border-stone-200/80 overflow-hidden">
                       <table class="w-full text-left text-[11px]">
-                        <thead class="bg-slate-50 text-slate-500 border-b border-slate-100">
+                        <thead class="bg-stone-50 text-stone-500 border-b border-stone-100">
                           <tr>
                             <th class="py-1 px-2.5">类别</th>
                             <th class="py-1 px-2.5">总耗时</th>
@@ -441,13 +441,13 @@
                             <th class="py-1 px-2.5">平均</th>
                           </tr>
                         </thead>
-                        <tbody class="divide-y divide-slate-100">
+                        <tbody class="divide-y divide-stone-100">
                           <template v-for="(cat, key) in task.timing_breakdown" :key="key">
                             <tr v-if="cat && cat.count > 0">
-                              <td class="py-1 px-2.5 text-slate-700 font-medium">{{ formatTimingCategory(key) }}</td>
+                              <td class="py-1 px-2.5 text-stone-700 font-medium">{{ formatTimingCategory(key) }}</td>
                               <td class="py-1 px-2.5 font-mono">{{ Math.round(cat.wall_time_ms) }} ms</td>
                               <td class="py-1 px-2.5 font-mono">{{ cat.count }} 次</td>
-                              <td class="py-1 px-2.5 font-mono text-slate-500">
+                              <td class="py-1 px-2.5 font-mono text-stone-500">
                                 {{ cat.count > 0 ? Math.round(cat.wall_time_ms / cat.count) : 0 }} ms
                               </td>
                             </tr>
@@ -459,11 +459,11 @@
 
                   <!-- Live Incremental Event Stream -->
                   <div class="space-y-1.5">
-                    <div class="flex items-center justify-between text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+                    <div class="flex items-center justify-between text-[11px] font-semibold text-stone-600 uppercase tracking-wider">
                       <span>实时执行事件流</span>
                       <button
                         type="button"
-                        class="text-blue-600 hover:text-blue-800 normal-case font-normal cursor-pointer"
+                        class="text-brand-600 hover:text-brand-800 normal-case font-normal cursor-pointer"
                         @click="fetchTaskEvents(task.id, true)"
                       >
                         刷新日志
@@ -477,10 +477,10 @@
                       事件流同步中断，将自动重试…
                     </div>
 
-                    <div class="bg-white rounded-lg border border-slate-200/80 p-2 max-h-48 overflow-y-auto space-y-1.5 font-mono text-[11px]">
+                    <div class="bg-white rounded-lg border border-stone-200/80 p-2 max-h-48 overflow-y-auto space-y-1.5 font-mono text-[11px]">
                       <div
                         v-if="!taskEvents[task.id] || taskEvents[task.id].length === 0"
-                        class="text-slate-400 py-3 text-center"
+                        class="text-stone-400 py-3 text-center"
                       >
                         暂无事件记录
                       </div>
@@ -489,16 +489,16 @@
                         :key="ev.id"
                         class="flex items-start gap-2 leading-tight"
                       >
-                        <span class="text-slate-400 shrink-0 select-none">
+                        <span class="text-stone-400 shrink-0 select-none">
                           {{ formatEventTime(ev.created_at) }}
                         </span>
                         <span
-                          class="px-1 py-0.2 rounded text-[10px] shrink-0 font-sans"
+                          class="px-1 py-0.5 rounded text-[10px] shrink-0 font-sans"
                           :class="getEventBadgeClass(ev.event_type)"
                         >
                           {{ formatEventType(ev.event_type) }}
                         </span>
-                        <span class="text-slate-700 font-sans break-all">
+                        <span class="text-stone-700 font-sans break-all">
                           {{ ev.message }}
                         </span>
                       </div>
@@ -532,14 +532,14 @@
                   <div class="flex items-center gap-1">
                     <button
                       type="button"
-                      class="px-2.5 py-1 text-xs font-medium bg-white text-blue-600 hover:bg-blue-50 border border-blue-200 rounded-lg transition-colors cursor-pointer"
+                      class="px-2.5 py-1 text-xs font-medium bg-white text-brand-600 hover:bg-brand-50 border border-brand-200 rounded-lg transition-colors cursor-pointer"
                       @click="retry(task.id)"
                     >
                       重试任务
                     </button>
                     <button
                       type="button"
-                      class="text-xs text-slate-400 hover:text-slate-600 p-1 hover:bg-white rounded cursor-pointer"
+                      class="text-xs text-stone-400 hover:text-stone-600 p-1 hover:bg-white rounded cursor-pointer"
                       title="移除记录"
                       @click="remove(task.id)"
                     >
@@ -555,14 +555,14 @@
                 </p>
 
                 <!-- Units diagnostic -->
-                <div v-if="task.progress_detail" class="flex items-center gap-3 text-xs text-slate-600">
+                <div v-if="task.progress_detail" class="flex items-center gap-3 text-xs text-stone-600">
                   <span>成功: {{ task.progress_detail.succeeded }} 批</span>
                   <span>失败: {{ task.progress_detail.failed }} 批</span>
                   <span v-if="task.progress_detail.skipped > 0">跳过: {{ task.progress_detail.skipped }} 批</span>
                   <span>识别结果: {{ task.progress_detail.resultCount }} 个</span>
                 </div>
 
-                <div class="text-[11px] text-slate-400 flex justify-between pt-1 border-t border-rose-100">
+                <div class="text-[11px] text-stone-400 flex justify-between pt-1 border-t border-rose-100">
                   <span>ID: {{ task.id.slice(0, 8) }}</span>
                   <span>{{ formatTime(task.created_at) }}</span>
                 </div>
@@ -579,31 +579,31 @@
               <div
                 v-for="task in historyTasks"
                 :key="task.id"
-                class="p-3 rounded-xl border border-slate-100 bg-white hover:border-slate-200 transition-colors flex items-center justify-between gap-3 text-xs"
+                class="p-3 rounded-xl border border-stone-100 bg-white hover:border-stone-200 transition-colors flex items-center justify-between gap-3 text-xs"
               >
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="font-medium text-slate-800 truncate">
+                    <span class="font-medium text-stone-800 truncate">
                       {{ taskTypeLabel(task.task_type) }}
                     </span>
                     <span
                       class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
-                      :class="task.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'"
+                      :class="task.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-stone-100 text-stone-600'"
                     >
                       {{ task.status === 'completed' ? '已完成' : '已取消' }}
                     </span>
-                    <span v-if="task.elapsed_seconds" class="text-[10px] text-slate-400 font-mono">
+                    <span v-if="task.elapsed_seconds" class="text-[10px] text-stone-400 font-mono">
                       耗时: {{ formatDuration(task.elapsed_seconds) }}
                     </span>
                   </div>
-                  <p class="text-[11px] text-slate-500 mt-0.5 truncate">
+                  <p class="text-[11px] text-stone-500 mt-0.5 truncate">
                     {{ task.message || formatTime(task.created_at) }}
                   </p>
                 </div>
 
                 <button
                   type="button"
-                  class="text-slate-300 hover:text-slate-500 p-1 rounded hover:bg-slate-50 transition-colors cursor-pointer"
+                  class="text-stone-300 hover:text-stone-500 p-1 rounded hover:bg-stone-50 transition-colors cursor-pointer"
                   title="移除记录"
                   @click="remove(task.id)"
                 >
@@ -619,20 +619,20 @@
         <!-- Floating Undo Banner -->
         <Transition
           enter-active-class="transform transition duration-200 ease-out"
-          enter-from-class="translate-y-4 opacity-0"
-          enter-to-class="translate-y-0 opacity-100"
+          enter-from-class="transtone-y-4 opacity-0"
+          enter-to-class="transtone-y-0 opacity-100"
           leave-active-class="transform transition duration-150 ease-in"
-          leave-from-class="translate-y-0 opacity-100"
-          leave-to-class="translate-y-4 opacity-0"
+          leave-from-class="transtone-y-0 opacity-100"
+          leave-to-class="transtone-y-4 opacity-0"
         >
           <div
             v-if="showUndoToast"
-            class="m-4 p-3 rounded-xl bg-slate-900 text-white text-xs flex items-center justify-between shadow-lg"
+            class="m-4 p-3 rounded-xl bg-stone-900 text-white text-xs flex items-center justify-between shadow-lg"
           >
             <span>已清理 {{ lastClearedCount }} 条任务记录</span>
             <button
               type="button"
-              class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition-colors cursor-pointer"
+              class="px-2.5 py-1 bg-brand-600 hover:bg-brand-500 text-white rounded font-medium transition-colors cursor-pointer"
               @click="restoreLastClear"
             >
               撤销
@@ -649,9 +649,9 @@
       max-width="sm"
       @close="showClearAllModal = false"
     >
-      <div class="space-y-3 text-sm text-slate-600">
+      <div class="space-y-3 text-sm text-stone-600">
         <p>确定要清空所有已完成和已取消的任务历史记录吗？</p>
-        <p class="text-xs text-slate-400 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+        <p class="text-xs text-stone-400 bg-stone-50 p-2.5 rounded-lg border border-stone-100">
           此操作仅清理任务历史视图，绝不会删除您的教材资料、题库或考点数据。清理后支持在 10 秒内撤销。
         </p>
       </div>
@@ -681,23 +681,23 @@
       @close="showCandidateModal = false"
     >
       <div class="space-y-3 text-sm">
-        <div class="flex items-center justify-between text-xs text-slate-500 pb-2 border-b border-slate-100">
+        <div class="flex items-center justify-between text-xs text-stone-500 pb-2 border-b border-stone-100">
           <span>当前批次已入库 {{ previewCandidates.length }} 个考点候选</span>
           <button
             type="button"
-            class="text-blue-600 hover:underline cursor-pointer"
+            class="text-brand-600 hover:underline cursor-pointer"
             @click="refreshPreviewCandidates"
           >
             刷新列表
           </button>
         </div>
 
-        <div v-if="isPreviewLoading" class="py-8 text-center text-slate-400">
-          <div class="animate-spin inline-block w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full mb-2" />
+        <div v-if="isPreviewLoading" class="py-8 text-center text-stone-400">
+          <div class="animate-spin inline-block w-6 h-6 border-2 border-brand-600 border-t-transparent rounded-full mb-2" />
           <p class="text-xs">加载考点候选...</p>
         </div>
 
-        <div v-else-if="previewCandidates.length === 0" class="py-8 text-center text-slate-400 text-xs">
+        <div v-else-if="previewCandidates.length === 0" class="py-8 text-center text-stone-400 text-xs">
           暂无已识别的考点候选
         </div>
 
@@ -705,21 +705,21 @@
           <div
             v-for="cand in previewCandidates"
             :key="cand.id"
-            class="p-2.5 rounded-lg border border-slate-200 bg-white text-xs space-y-1"
+            class="p-2.5 rounded-lg border border-stone-200 bg-white text-xs space-y-1"
           >
-            <div class="flex items-center justify-between font-semibold text-slate-800">
+            <div class="flex items-center justify-between font-semibold text-stone-800">
               <span class="text-sm">{{ cand.name }}</span>
               <span
                 class="px-1.5 py-0.5 rounded text-[10px] font-normal"
-                :class="cand.match_type === 'new' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'"
+                :class="cand.match_type === 'new' ? 'bg-brand-50 text-brand-700' : 'bg-stone-100 text-stone-600'"
               >
                 {{ cand.match_type === 'new' ? '新考点' : '已有考点' }}
               </span>
             </div>
-            <p v-if="cand.definition" class="text-slate-600 text-[11px] leading-relaxed">
+            <p v-if="cand.definition" class="text-stone-600 text-[11px] leading-relaxed">
               {{ cand.definition }}
             </p>
-            <div class="text-[10px] text-slate-400 flex items-center gap-2">
+            <div class="text-[10px] text-stone-400 flex items-center gap-2">
               <span v-if="cand.chapter">{{ cand.chapter }}</span>
               <span>来源依据: {{ cand.citations?.length || 0 }} 处</span>
             </div>
@@ -883,7 +883,7 @@ const formatStatus = (status: string): string => {
 const getStatusBadgeClass = (status: string): string => {
   switch (status) {
     case 'processing':
-      return 'bg-blue-50 text-blue-700 border border-blue-200';
+      return 'bg-brand-50 text-brand-700 border border-brand-200';
     case 'pending':
       return 'bg-amber-50 text-amber-700 border border-amber-200';
     case 'completed':
@@ -893,7 +893,7 @@ const getStatusBadgeClass = (status: string): string => {
     case 'failed':
       return 'bg-rose-50 text-rose-700 border border-rose-200';
     default:
-      return 'bg-slate-100 text-slate-600';
+      return 'bg-stone-100 text-stone-600';
   }
 };
 
@@ -924,7 +924,7 @@ const blockingToneClass = (task: TaskStatus): string => {
   const lines = blockingLines(task);
   if (lines.some(l => l.tone === 'error')) return 'bg-rose-50/70 border-rose-200 text-rose-800';
   if (lines.some(l => l.tone === 'warn')) return 'bg-amber-50/70 border-amber-200 text-amber-800';
-  return 'bg-blue-50/70 border-blue-100 text-blue-800';
+  return 'bg-brand-50/70 border-brand-100 text-brand-800';
 };
 
 /** 展开区中的执行单元：活动单元在前，其后是最近结束的单元 */
@@ -940,12 +940,12 @@ const unitStateClass = (unit: ExecUnitStatus): string => {
   switch (unit.state) {
     case 'awaiting_response':
     case 'waiting_slot':
-      return 'bg-blue-50 text-blue-700';
+      return 'bg-brand-50 text-brand-700';
     case 'retry_wait':
       return 'bg-amber-50 text-amber-700';
     case 'processing':
     case 'saving':
-      return 'bg-indigo-50 text-indigo-700';
+      return 'bg-brand-50 text-brand-700';
     case 'succeeded':
       return 'bg-emerald-50 text-emerald-700';
     case 'failed':
@@ -953,9 +953,9 @@ const unitStateClass = (unit: ExecUnitStatus): string => {
     case 'skipped':
       return 'bg-purple-50 text-purple-700';
     case 'cancelled':
-      return 'bg-slate-100 text-slate-500';
+      return 'bg-stone-100 text-stone-500';
     default:
-      return 'bg-slate-100 text-slate-600';
+      return 'bg-stone-100 text-stone-600';
   }
 };
 
@@ -1004,10 +1004,10 @@ const getEventBadgeClass = (type: string): string => {
   switch (type) {
     case 'created':
     case 'stage_change':
-      return 'bg-slate-100 text-slate-700';
+      return 'bg-stone-100 text-stone-700';
     case 'slot_wait':
     case 'request_start':
-      return 'bg-blue-50 text-blue-700';
+      return 'bg-brand-50 text-brand-700';
     case 'response_received':
     case 'save_done':
     case 'completed':
@@ -1019,7 +1019,7 @@ const getEventBadgeClass = (type: string): string => {
     case 'failed':
       return 'bg-rose-50 text-rose-700';
     default:
-      return 'bg-slate-100 text-slate-600';
+      return 'bg-stone-100 text-stone-600';
   }
 };
 
@@ -1095,8 +1095,8 @@ const getStageStatusClass = (task: TaskStatus, stageKey: string, stageIdx: numbe
     return 'bg-emerald-100 text-emerald-700';
   }
   if (isStageActive(task, stageKey)) {
-    return 'bg-blue-600 text-white animate-pulse';
+    return 'bg-brand-600 text-white animate-pulse';
   }
-  return 'bg-slate-100 text-slate-400';
+  return 'bg-stone-100 text-stone-400';
 };
 </script>

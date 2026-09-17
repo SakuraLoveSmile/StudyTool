@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-slate-50 flex flex-col">
+  <div class="min-h-screen bg-stone-50 flex flex-col">
     <Navbar v-if="showShell" />
 
     <main class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
@@ -9,7 +9,7 @@
     <!-- Global Task Drawer -->
     <TaskDrawer v-if="showShell" />
 
-    <footer v-if="showShell" class="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-400">
+    <footer v-if="showShell" class="bg-white border-t border-stone-200 py-4 text-center text-xs text-stone-400">
       <div class="max-w-7xl mx-auto px-4 flex flex-wrap items-center justify-between gap-2">
         <span>考研专业课备考助手</span>
         <span>教材切片依据追溯 · 考查频次统计 · 规范答题框架</span>
