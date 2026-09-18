@@ -65,7 +65,8 @@ test('a viewer query is executed by the worker, not by the caller', async () => 
 test('filesystem failures cross the real worker boundary as errors and recover after repair', async () => {
   const root = tempDir();
   const dir = path.join(root, 'logs');
-  // A file in place of the log directory reliably produces ENOTDIR on all hosts.
+  // A file in place of the log directory must fail on every host. Windows may
+  // return ENOENT for its children, so the reader validates the directory itself.
   fs.writeFileSync(dir, 'not a directory');
   const service = new LogWorkerService();
   try {

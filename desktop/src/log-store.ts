@@ -334,6 +334,17 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
     unavailable: true,
     skippedLines: 0,
   };
+  // Windows may report ENOENT for a child of a regular file. Check the log
+  // directory itself so that this invalid layout cannot look like missing logs.
+  try {
+    if (!fs.statSync(dir).isDirectory()) {
+      result.error = new LogReadError(source, 'stat', { code: 'ENOTDIR' });
+      return result;
+    }
+  } catch (error) {
+    if (!isMissing(error)) result.error = new LogReadError(source, 'stat', error);
+    return result;
+  }
   // Read newest first: active file, then .1 … .N.
   const candidates = [active, ...Array.from({ length: LOG_BACKUP_COUNT }, (_, i) => `${active}.${i + 1}`)];
   let budget = options.byteBudget;

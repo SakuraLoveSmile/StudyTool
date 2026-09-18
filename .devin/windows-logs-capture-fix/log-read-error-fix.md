@@ -24,6 +24,7 @@
 - 真实 Worker 覆盖 ENOTDIR 和本机临时目录 chmod 权限拒绝→恢复查询；POSIX 权限用例不能替代 Windows ACL。
 - `git diff --check` 通过。测试未操作用户实际日志目录或真实反馈服务。
 - beta.2 构建前只读复核发现导出在某代日志不可读后漏掉后续历史；已修复为保留查询失败、导出继续读取可用代，并新增 active open EACCES / 中间代不可读的回归测试。
+- 首次 Windows CI 在真实 Worker 测试中发现“日志目录被文件占用”的子路径 stat 被 Windows 映射为 ENOENT；补充目录本身的类型检查，保持原失败断言，不跳过或弱化测试。
 
 ## 待完成边界
 
