@@ -58,7 +58,7 @@
 | T2b | 按五项证据修复真实根因 | **实现中**：证据缺"失败阶段"与"具体错误"两项。嫌疑排序：auth 守卫挂起 ≈ 单 chunk 缺失/被杀软拦截/MIME 异常 > IPC/Worker。诊断候选版本已含取数埋点；现场复现步骤见 Worker B 交付 §7 | 主代理裁定 |
 | T3a | 桌面受限日志采集（feedback Worker 通道） | **完成**：`feedback-logs.ts` + 独立通道，20/20 新测试、93/93 无回归；主进程 `desktop:getFeedbackLogs` 已接线 | Worker C |
 | T3b | Feedback 面板 logProvider 接入 | **完成**：`feedbackLogs.ts` 适配 + `useFeedbackWidget` 注入，25/25 e2e 用例（真实附件字节/错误文案断言） | Worker D |
-| T4 | 接线、构建门禁、E2E、Windows 候选包验收 | **进行中**：依赖已替换、e2e 项目已接线（59 通过/5 个 Windows 占位跳过）、构建门禁已加入 build-release.py（manifest 递归含 css/assets + 冻结后端 MIME + Worker unpacked 校验，含负向验证）；Reviewer 终审 R1-R3 已修；版本 `1.0.6-beta.1`。Windows 实机验收无环境 → 待 CI 候选包 | 主代理 + Tester |
+| T4 | 接线、构建门禁、E2E、Windows 候选包验收 | **进行中**：依赖已替换、e2e 项目已接线（59 通过/5 个 Windows 占位跳过）、构建门禁已加入 build-release.py（manifest 递归含 css/assets + 冻结后端 MIME + Worker unpacked 校验，含负向验证）；Reviewer 终审 R1-R3 已修。**CI 候选包已产出**：分支 `beta/windows-1.0.6-beta.1`（全部未提交工作区打包推送），workflow_dispatch run 35302981625 全部步骤通过（含 Windows 上的门禁、93 单测、NSIS），`publish=false` 发布步骤正确跳过。安装包 `rag-study-assistant-desktop-setup-1.0.6-beta.1.exe`（143 MB），SHA-256 `e7d44e24e686b8c12cdc9db93500ee7bf1630632bacc6c95e38aa06b1fbb882f`（SHA256SUMS/RELEASE_MANIFEST/下载文件三方一致）。**剩余：Windows 实机验收表 + T2b 现场取证** | 主代理 + Tester |
 
 ## 冻结 IPC 契约（T3a/T3b 唯一依据，两边逐字一致）
 

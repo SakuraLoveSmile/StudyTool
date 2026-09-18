@@ -44,6 +44,7 @@
       >
         <FolderOpen class="h-3.5 w-3.5" />打开诊断目录
       </button>
+      <span v-if="dirOpenError" class="basis-full text-err/80">{{ dirOpenError }}</span>
       <button type="button" class="shrink-0 rounded-lg p-1 text-err/70 hover:bg-err/15" aria-label="关闭提示" @click="dismiss">
         <X class="h-3.5 w-3.5" />
       </button>
@@ -52,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { AlertTriangle, FolderOpen, Loader2, X } from 'lucide-vue-next';
 import {
   dismissLogNavigation,
@@ -76,11 +77,18 @@ function dismiss(): void {
   dismissLogNavigation();
 }
 
-function openLogDirectory(): void {
+/** 打开诊断目录的失败提示：主进程现在返回 {ok,message}，失败必须可见而不是静默。 */
+const dirOpenError = ref('');
+
+async function openLogDirectory(): Promise<void> {
+  dirOpenError.value = '';
   try {
-    window.desktopAPI?.openLogDirectory?.();
-  } catch {
-    /* IPC 失败静默：按钮本身已做存在性检查，这里只是兜底 */
+    const result = await window.desktopAPI?.openLogDirectory?.();
+    if (result && result.ok === false) {
+      dirOpenError.value = result.message || '无法打开日志目录';
+    }
+  } catch (err: any) {
+    dirOpenError.value = err?.message || '无法打开日志目录';
   }
 }
 </script>

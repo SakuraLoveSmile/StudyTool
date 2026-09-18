@@ -15,6 +15,7 @@
  */
 
 import fs from 'fs';
+import path from 'path';
 import { StringDecoder } from 'string_decoder';
 import { LOG_BACKUP_COUNT, scrubRecord, scrubString, logFilePath, type LogSource } from './diagnostics';
 
@@ -159,7 +160,25 @@ export function parseLogLine(line: string, fallbackSource: string): LogEntry | n
     message: String(scrubbed.message ?? parsed.msg ?? ''),
     session_id: parsed.session_id ? String(parsed.session_id) : null,
   };
+  // The durable record id drives export de-duplication of pending-queue records.
+  // FIELD_WHITELIST gains it in diagnostics.ts; preserving it here keeps the read
+  // side correct regardless of landing order, and the id is an opaque
+  // `session:source:seq` token that carries no user content.
+  if (typeof parsed.log_record_id === 'string' && parsed.log_record_id) {
+    entry.log_record_id = parsed.log_record_id;
+  }
   return entry;
+}
+
+/**
+ * One sanitized per-candidate read failure, safe to disclose in the export manifest:
+ * relative file name (basename), stage and normalized code only — never an absolute
+ * path, raw exception text or log-line content.
+ */
+export interface SourceReadError {
+  file: string;
+  stage: 'stat' | 'open' | 'read';
+  code: string;
 }
 
 interface SourceReadResult {
@@ -167,7 +186,15 @@ interface SourceReadResult {
   bytes: number;
   truncated: boolean;
   unavailable: boolean;
+  /**
+   * True only when every candidate we actually attempted was absent (ENOENT):
+   * attempted>0, no non-ENOENT failure, nothing read. A budget-interrupted scan is
+   * judged on the part it scanned — generations it never reached do not count.
+   */
+  missing: boolean;
   skippedLines: number;
+  /** All per-candidate failures, sanitized for disclosure; `error` keeps only the first. */
+  errors: SourceReadError[];
   error?: LogReadError;
 }
 
@@ -332,17 +359,30 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
     // Until at least one generation is read successfully, this source is
     // genuinely unavailable (all candidates may be ENOENT).
     unavailable: true,
+    missing: false,
     skippedLines: 0,
+    errors: [],
+  };
+  // `error` keeps the FIRST failure (queries throw it); `errors` collects them all
+  // as basename + stage + normalized code, the only shape the export may disclose.
+  const recordError = (file: string, failure: LogReadError): void => {
+    result.error ??= failure;
+    result.errors.push({ file, stage: failure.stage, code: failure.code });
   };
   // Windows may report ENOENT for a child of a regular file. Check the log
   // directory itself so that this invalid layout cannot look like missing logs.
   try {
     if (!fs.statSync(dir).isDirectory()) {
-      result.error = new LogReadError(source, 'stat', { code: 'ENOTDIR' });
+      recordError(path.basename(dir), new LogReadError(source, 'stat', { code: 'ENOTDIR' }));
       return result;
     }
   } catch (error) {
-    if (!isMissing(error)) result.error = new LogReadError(source, 'stat', error);
+    if (isMissing(error)) {
+      // The log directory itself is absent: every candidate is definitionally ENOENT.
+      result.missing = true;
+    } else {
+      recordError(path.basename(dir), new LogReadError(source, 'stat', error));
+    }
     return result;
   }
   // Read newest first: active file, then .1 … .N.
@@ -362,7 +402,7 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
     try {
       const stat = fs.statSync(candidate);
       if (!stat.isFile()) {
-        result.error ??= new LogReadError(source, 'stat', { code: 'EINVAL' });
+        recordError(path.basename(candidate), new LogReadError(source, 'stat', { code: 'EINVAL' }));
         continue;
       }
       size = stat.size;
@@ -370,11 +410,11 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
       // ENOENT is normal for an absent active/rotated generation. Other failures
       // must reach the strict query contract instead of becoming "no logs".
       if (isMissing(error)) continue;
-      result.error ??= new LogReadError(source, 'stat', error);
+      recordError(path.basename(candidate), new LogReadError(source, 'stat', error));
       continue;
     }
     if (!Number.isFinite(size) || size < 0) {
-      result.error ??= new LogReadError(source, 'stat', { code: 'EINVAL' });
+      recordError(path.basename(candidate), new LogReadError(source, 'stat', { code: 'EINVAL' }));
       continue;
     }
     // An existing empty file is readable too; still open it below so an ACL
@@ -398,13 +438,16 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
     result.skippedLines += stream.skippedLines;
     if (stream.error) {
       // Queries reject the saved error; exports still collect readable history.
-      result.error ??= stream.error;
+      recordError(path.basename(candidate), stream.error);
       continue;
     }
     if (!stream.failed) readable = true;
   }
 
   if (!attempted || readable) result.unavailable = false;
+  // Missing = every attempted candidate was absent: nothing read, nothing else
+  // failed. Unscanned generations (budget exhausted first) are not evidence either way.
+  result.missing = attempted && !readable && result.errors.length === 0;
 
   // Only export needs this order (its byte cap keeps the newest records); the viewer
   // sorts the merged result once instead of sorting every source and then sorting again.
@@ -504,11 +547,39 @@ export interface ExportSelection {
   note: string;
   /** Lines dropped for exceeding MAX_LINE_BYTES; reported in the note so it is not silent. */
   skippedLines: number;
+  /**
+   * Every read failure across all sources, sanitized for disclosure:
+   * source + basename + stage + normalized code — never an absolute path,
+   * raw exception text or log-line content.
+   */
+  read_errors: Array<{ source: string; file: string; stage: 'stat' | 'open' | 'read'; code: string }>;
+  /** Sources whose candidate generations were all absent (all ENOENT). */
+  missing_sources: string[];
+  /** Sources whose payload contains memory-ring or pending-queue records. */
+  memory_sources: string[];
+  /** Pending records actually written to the payload (after dedup, window and byte cap). */
+  buffered_entries: number;
+  /** Pending records dropped by the logger's bounded queue before export ran. */
+  dropped_pending_entries: number;
+  /** At least one source hit the scan byte budget before all generations were read. */
+  read_truncated: boolean;
+  /**
+   * The payload is known to be incomplete or memory-sourced. Frozen truth table:
+   * read_errors>0 || read_truncated || truncated || skippedLines>0 ||
+   * memory_sources>0 || dropped_pending_entries>0.
+   */
+  incomplete: boolean;
 }
 
 /**
  * Selects and re-scrubs export payload for [from, to].
  * The 20 MiB cap keeps the NEWEST records and records the truncation in the note.
+ *
+ * Merge order per source: disk records → memoryFallback (desktop only, when the disk
+ * produced nothing) → pendingEntries (the loggers' not-yet-persisted queue, grouped
+ * by each record's own `source`). Pending records are de-duplicated against
+ * already-collected ones via `log_record_id`; a pending record without an id is
+ * always kept — better a duplicate than a gap.
  */
 export function collectExportEntries(options: {
   dir: string;
@@ -516,23 +587,49 @@ export function collectExportEntries(options: {
   from: number;
   to: number;
   memoryFallback?: Record<string, unknown>[];
+  /** Merged `getPendingEntries()` snapshots; each record carries its own `source`. */
+  pendingEntries?: Record<string, unknown>[];
+  /** Sum of the loggers' droppedPending counters, disclosed verbatim in the manifest. */
+  droppedPendingEntries?: number;
   maxRawBytes?: number;
+  /** Overrides MAX_SCAN_BYTES — exists so tests can exercise the truncation path. */
+  maxScanBytes?: number;
 }): ExportSelection {
-  const { dir, sources = ALL_SOURCES, from, to, memoryFallback = [] } = options;
+  const { dir, sources = ALL_SOURCES, from, to, memoryFallback = [], pendingEntries = [] } = options;
   const maxRaw = options.maxRawBytes ?? EXPORT_MAX_RAW_BYTES;
+  const scanBudget =
+    Number.isFinite(options.maxScanBytes) && (options.maxScanBytes as number) > 0
+      ? Math.floor(options.maxScanBytes as number)
+      : MAX_SCAN_BYTES;
+  const droppedPending =
+    Number.isFinite(options.droppedPendingEntries) && (options.droppedPendingEntries as number) > 0
+      ? Math.floor(options.droppedPendingEntries as number)
+      : 0;
 
   const perSourceEntries = new Map<string, LogEntry[]>();
-  let totalAvailable = 0;
+  const readErrors: ExportSelection['read_errors'] = [];
+  const missingSources: string[] = [];
+  const memorySources: string[] = [];
+  // Identity tracking: which entries came from memory / pending, so memory_sources
+  // and buffered_entries reflect what the payload ACTUALLY contains after the cap.
+  const memoryRingEntries = new Set<LogEntry>();
+  const pendingSet = new Set<LogEntry>();
   let skippedLines = 0;
+  let readTruncated = false;
+  let bufferedEntries = 0;
 
   for (const source of sources) {
     const read = readSource(dir, source, {
-      byteBudget: MAX_SCAN_BYTES,
+      byteBudget: scanBudget,
       accept: (entry) => entry.timestamp_ms >= from && entry.timestamp_ms <= to,
       sort: true,
     });
     skippedLines += read.skippedLines;
-    totalAvailable += read.entries.length;
+    if (read.truncated) readTruncated = true;
+    if (read.missing) missingSources.push(source);
+    for (const failure of read.errors) {
+      readErrors.push({ source, file: failure.file, stage: failure.stage, code: failure.code });
+    }
     perSourceEntries.set(source, read.entries);
   }
 
@@ -546,9 +643,50 @@ export function collectExportEntries(options: {
       .filter((entry): entry is LogEntry => entry !== null)
       .filter((entry) => entry.timestamp_ms >= from && entry.timestamp_ms <= to);
     if (scrubbed.length) {
+      for (const entry of scrubbed) memoryRingEntries.add(entry);
       perSourceEntries.set('desktop', scrubbed);
       usedMemory = true;
     }
+  }
+
+  // Pending-queue merge: grouped by each record's own `source`, deduplicated by
+  // log_record_id against records already collected (disk + memory ring).
+  const pendingBySource = new Map<string, Record<string, unknown>[]>();
+  for (const item of pendingEntries) {
+    if (!item || typeof item !== 'object') continue;
+    const source = typeof item.source === 'string' ? item.source : '';
+    if (!source || !sources.includes(source)) continue;
+    const queued = pendingBySource.get(source) ?? [];
+    queued.push(item);
+    pendingBySource.set(source, queued);
+  }
+  for (const source of sources) {
+    const queued = pendingBySource.get(source);
+    if (!queued || queued.length === 0) continue;
+    const collected = perSourceEntries.get(source) ?? [];
+    const knownIds = new Set<string>();
+    for (const item of collected) {
+      if (typeof item.log_record_id === 'string' && item.log_record_id) knownIds.add(item.log_record_id);
+    }
+    for (const item of queued) {
+      const entry = parseLogLine(JSON.stringify(item), source);
+      if (!entry) continue;
+      if (entry.timestamp_ms < from || entry.timestamp_ms > to) continue;
+      const id = typeof entry.log_record_id === 'string' && entry.log_record_id ? entry.log_record_id : null;
+      if (id && knownIds.has(id)) continue;
+      pendingSet.add(entry);
+      collected.push(entry);
+    }
+    perSourceEntries.set(source, collected);
+  }
+
+  // Pending and memory records must interleave by time, not append after the disk
+  // tail; the disk segment is already newest-first, so one sort completes the merge.
+  let totalAvailable = 0;
+  for (const source of sources) {
+    const entries = perSourceEntries.get(source);
+    if (entries && entries.length > 1) entries.sort((a, b) => b.timestamp_ms - a.timestamp_ms);
+    totalAvailable += entries ? entries.length : 0;
   }
 
   const files: ExportSelection['files'] = [];
@@ -563,6 +701,8 @@ export function collectExportEntries(options: {
     const chunks: string[] = [];
     let bytes = 0;
     let kept = 0;
+    let buffered = 0;
+    let usedBuffer = false;
     for (const entry of entries) {
       const line = `${JSON.stringify(entry)}\n`;
       const lineBytes = Buffer.byteLength(line, 'utf8');
@@ -573,8 +713,16 @@ export function collectExportEntries(options: {
       chunks.push(line);
       bytes += lineBytes;
       kept += 1;
+      if (pendingSet.has(entry)) {
+        buffered += 1;
+        usedBuffer = true;
+      } else if (memoryRingEntries.has(entry)) {
+        usedBuffer = true;
+      }
     }
     if (kept === 0) continue;
+    bufferedEntries += buffered;
+    if (usedBuffer) memorySources.push(source);
     files.push({ name: `${source}.jsonl`, content: chunks.join(''), entries: kept, bytes });
     perSource[source] = kept;
     totalBytes += bytes;
@@ -591,9 +739,47 @@ export function collectExportEntries(options: {
   if (usedMemory) {
     note += '；磁盘日志不可用，桌面日志取自当前进程内存缓冲';
   }
+  if (readErrors.length > 0) {
+    note += `；${readErrors.length} 个日志文件读取失败，详见 MANIFEST.json 的 read_errors`;
+  }
+  if (readTruncated) {
+    note += '；日志扫描达到读取上限，部分记录未读取';
+  }
+  if (missingSources.length > 0) {
+    note += `；以下来源无磁盘日志文件：${missingSources.join('、')}`;
+  }
+  if (bufferedEntries > 0) {
+    note += `；包含 ${bufferedEntries} 条尚未落盘的内存待写记录`;
+  }
+  if (droppedPending > 0) {
+    note += `；${droppedPending} 条待写记录因缓冲超限被丢弃`;
+  }
   if (totalAvailable > totalEntries) {
     note += `；时段内共 ${totalAvailable} 条，已导出 ${totalEntries} 条`;
   }
 
-  return { files, totalEntries, totalBytes, perSource, truncated, note, skippedLines };
+  const incomplete =
+    readErrors.length > 0 ||
+    readTruncated ||
+    truncated ||
+    skippedLines > 0 ||
+    memorySources.length > 0 ||
+    droppedPending > 0;
+
+  return {
+    files,
+    totalEntries,
+    totalBytes,
+    perSource,
+    truncated,
+    note,
+    skippedLines,
+    read_errors: readErrors,
+    missing_sources: missingSources,
+    memory_sources: memorySources,
+    buffered_entries: bufferedEntries,
+    dropped_pending_entries: droppedPending,
+    read_truncated: readTruncated,
+    incomplete,
+  };
 }

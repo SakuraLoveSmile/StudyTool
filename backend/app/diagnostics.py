@@ -178,6 +178,9 @@ LOG_FIELD_WHITELIST = frozenset({
     "action", "operation", "route", "target", "kind", "tags",
     # log-navigation diagnostics (mirror of desktop FIELD_WHITELIST)
     "nav_id", "trigger", "to_name", "elapsed_ms",
+    # Mirror of the desktop-minted record id (beta.3 D2): the backend never mints it,
+    # but records relayed from the desktop keep it, so the whitelist must not drop it.
+    "log_record_id",
 })
 
 # Attributes that belong to logging.LogRecord itself; they must never be copied into the
@@ -735,14 +738,6 @@ def setup_diagnostics(
     lvl_name = (log_level or getattr(settings, "LOG_LEVEL", "INFO")).upper()
     level = getattr(logging, lvl_name, logging.INFO)
 
-    target_dir = log_dir or getattr(settings, "log_path", None)
-    if target_dir is None:
-        target_dir = Path(getattr(settings, "DATA_DIR", "./data")) / "logs"
-
-    mb = max_bytes if max_bytes is not None else getattr(settings, "LOG_MAX_BYTES", DEFAULT_LOG_MAX_BYTES)
-    bc = backup_count if backup_count is not None else getattr(settings, "LOG_BACKUP_COUNT", 5)
-    rd = retention_days if retention_days is not None else getattr(settings, "LOG_RETENTION_DAYS", LOG_RETENTION_DAYS)
-
     _make_streams_encoding_safe()
 
     root_logger = logging.getLogger()
@@ -750,7 +745,22 @@ def setup_diagnostics(
     _drop_dead_handlers(root_logger)
 
     # 1. File Handler Setup
+    # The whole log-target chain lives in ONE protected scope: resolving the directory
+    # (`settings.log_path` runs mkdir on attribute access — a `logs` path occupied by a
+    # regular file or refused by the ACL raises right there — and the DATA_DIR fallback
+    # is equally fallible), creating it, and creating/attaching the rotating handler.
+    # Any failure degrades to a single stderr note; it must never abort the module-level
+    # setup_diagnostics() call in app/main.py. Business paths (data_path/uploads_path/
+    # db_path) are untouched by this: their errors still propagate.
     try:
+        target_dir = log_dir or getattr(settings, "log_path", None)
+        if target_dir is None:
+            target_dir = Path(getattr(settings, "DATA_DIR", "./data")) / "logs"
+
+        mb = max_bytes if max_bytes is not None else getattr(settings, "LOG_MAX_BYTES", DEFAULT_LOG_MAX_BYTES)
+        bc = backup_count if backup_count is not None else getattr(settings, "LOG_BACKUP_COUNT", 5)
+        rd = retention_days if retention_days is not None else getattr(settings, "LOG_RETENTION_DAYS", LOG_RETENTION_DAYS)
+
         target_dir.mkdir(parents=True, exist_ok=True)
         log_file = target_dir / "backend.jsonl"
         file_handler = DiagnosticFileHandler(

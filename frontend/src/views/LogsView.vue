@@ -141,9 +141,23 @@
         </div>
       </div>
 
-      <p v-if="queryError || errorMessage" role="alert" class="border-b border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
-        {{ queryError || errorMessage }}
-        <span v-if="queryError">请根据错误信息处理后，点击“手动刷新”重试。</span>
+      <!-- 查询错误与操作结果分区显示：导出/打开目录的提示不能顶替或清除查询错误。 -->
+      <p v-if="queryError" role="alert" class="border-b border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
+        {{ queryError }}
+        <span>请根据错误信息处理后，点击“手动刷新”重试。</span>
+      </p>
+      <p
+        v-if="actionMessage"
+        role="status"
+        :class="
+          actionTone === 'err'
+            ? 'border-b border-err/30 bg-err/10 px-3 py-2 text-xs text-err'
+            : actionTone === 'warn'
+              ? 'border-b border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn'
+              : 'border-b border-accent/30 bg-accent/10 px-3 py-2 text-xs text-accent'
+        "
+      >
+        {{ actionMessage }}
       </p>
 
       <!-- 加载中（尚无结果）只提示正在读取，绝不显示成"没有日志记录" -->
@@ -156,7 +170,7 @@
         因此不会与"没有日志"混淆。
       -->
       <div
-        v-else-if="!busy && !queryError && !errorMessage && entries.length === 0"
+        v-else-if="!busy && !queryError && entries.length === 0"
         class="px-3 py-10 text-center text-xs text-faint"
       >
         当前筛选条件下没有日志记录。
@@ -243,7 +257,9 @@ const page = ref(1);
 const hasMore = ref(false);
 const busy = ref(false);
 const exporting = ref(false);
-const errorMessage = ref('');
+/** 操作结果（导出/打开目录/复制）：与查询错误分区显示，互不清除。 */
+const actionMessage = ref('');
+const actionTone = ref<'ok' | 'warn' | 'err'>('ok');
 const queryError = ref('');
 const scanTruncated = ref(false);
 const skippedLines = ref(0);
@@ -404,7 +420,6 @@ async function refresh(resetPage = false): Promise<void> {
   inFlightRequestId = requestId;
   // 加载态在第一个 await 之前就置位，加载提示不会被"没有日志记录"抢走。
   busy.value = true;
-  errorMessage.value = '';
   if (!firstQueryTracked) reportLogQueryStart();
 
   try {
@@ -449,7 +464,6 @@ async function refresh(resetPage = false): Promise<void> {
     skippedLines.value = result.skippedLines ?? 0;
     unavailable.value = result.unavailable ?? [];
     queryError.value = '';
-    errorMessage.value = '';
   } catch (err: any) {
     // 抛错同样可能是旧请求：序号过期时什么都不做。
     if (mySeq !== seq) return;
@@ -491,15 +505,23 @@ async function copyEntry(entry: DesktopLogEntry): Promise<void> {
       if (copiedKey.value === key) copiedKey.value = null;
     }, 1500);
   } catch {
-    errorMessage.value = '复制失败，请手动选择详情内容。';
+    actionTone.value = 'err';
+    actionMessage.value = '复制失败，请手动选择详情内容。';
   }
 }
 
-function openLogDirectory(): void {
+async function openLogDirectory(): Promise<void> {
+  const desktop = api.value;
+  if (!desktop?.openLogDirectory) return;
   try {
-    api.value?.openLogDirectory?.();
-  } catch {
-    /* ignore */
+    const result = await desktop.openLogDirectory();
+    if (result && result.ok === false) {
+      actionTone.value = 'err';
+      actionMessage.value = result.message || '无法打开日志目录';
+    }
+  } catch (err: any) {
+    actionTone.value = 'err';
+    actionMessage.value = err?.message || '无法打开日志目录';
   }
 }
 
@@ -507,20 +529,24 @@ async function exportDiagnostics(): Promise<void> {
   const desktop = api.value;
   if (!desktop?.exportDiagnostics) return;
   exporting.value = true;
-  errorMessage.value = '';
   try {
     const result = await desktop.exportDiagnostics(rangeBounds());
     if (result?.canceled) {
-      errorMessage.value = '已取消导出，未生成任何文件。';
+      actionTone.value = 'warn';
+      actionMessage.value = '已取消导出，未生成任何文件。';
     } else if (result?.ok) {
-      errorMessage.value = `诊断包已导出：${result.path}（${result.entries ?? 0} 条记录${
+      // incomplete 披露由 MANIFEST.json 承载，这里只提示“可能不完整”这一事实。
+      actionTone.value = result.incomplete ? 'warn' : 'ok';
+      actionMessage.value = `诊断包已导出：${result.path}（${result.entries ?? 0} 条记录${
         result.truncated ? '，原始日志超限已截断' : ''
-      }）`;
+      }${result.incomplete ? '，部分内容不完整或来自内存，详情见 MANIFEST.json' : ''}）`;
     } else {
-      errorMessage.value = result?.message || '导出失败';
+      actionTone.value = 'err';
+      actionMessage.value = result?.message || '导出失败';
     }
   } catch (err: any) {
-    errorMessage.value = err?.message || '导出失败';
+    actionTone.value = 'err';
+    actionMessage.value = err?.message || '导出失败';
   } finally {
     exporting.value = false;
   }

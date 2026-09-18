@@ -25,7 +25,10 @@ import { writeArchiveAtomically } from './diagnostic-export';
 import { LogWorkerService, type LogJobError } from './log-workers';
 import {
   classifyConnectionTestTransportFailure,
+  DEFAULT_BACKEND_REQUEST_TIMEOUT_MS,
   normalizeConnectionTestResult,
+  resolveConnectionTestTimeoutMs,
+  terminateRequestOnTimeout,
 } from './connection-test';
 import {
   ThemePreferenceStore,
@@ -285,6 +288,33 @@ function currentLogDir(): string {
   return getDiagnostics()?.getLogDir() || backendManager!.getLogDir();
 }
 
+/**
+ * Ensures the log directory exists and opens it in the OS file manager.
+ * `shell.openPath` resolves with an error string instead of rejecting, so both the
+ * mkdir and the open result must be checked — swallowing either is what used to make
+ * "打开日志目录" fail silently. Returns a sanitized error detail or null on success.
+ */
+async function openLogDirInShell(): Promise<string | null> {
+  const logDir = currentLogDir();
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+  } catch (err: any) {
+    diagWarn('diagnostics.logdir.create_failed', '日志目录创建失败', { error_message: err?.message });
+    return scrubString(err?.message || String(err));
+  }
+  try {
+    const openError = await shell.openPath(logDir);
+    if (openError) {
+      diagWarn('diagnostics.logdir.open_failed', '打开日志目录失败', { error_message: openError });
+      return scrubString(openError);
+    }
+    return null;
+  } catch (err: any) {
+    diagWarn('diagnostics.logdir.open_failed', '打开日志目录失败', { error_message: err?.message });
+    return scrubString(err?.message || String(err));
+  }
+}
+
 function currentThemePayload(): ThemePayload {
   return { preference: themePreference, effective: resolveEffectiveTheme(themePreference) };
 }
@@ -507,6 +537,7 @@ async function exportDiagnostics(range: {
   path?: string;
   entries?: number;
   truncated?: boolean;
+  incomplete?: boolean;
   message?: string;
   code?: string;
   elapsedMs?: number;
@@ -529,6 +560,16 @@ async function exportDiagnostics(range: {
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
 
   const requestId = nextRequestId('e');
+  // Immutable snapshots of not-yet-persisted records: the export must carry them even
+  // when the disk files already hold older entries, and the count of queue-overflow
+  // drops is disclosed in the manifest instead of silently claiming completeness.
+  const pendingEntries = [
+    ...(logger?.getPendingEntries() ?? []),
+    ...frontendLogger.getPendingEntries(),
+  ];
+  const droppedPendingEntries =
+    (logger?.getPersistenceState().droppedPending ?? 0) +
+    frontendLogger.getPersistenceState().droppedPending;
   const outcome = await logWorkers.exportArchive(requestId, {
     dir: currentLogDir(),
     appVersion: app.getVersion(),
@@ -536,6 +577,8 @@ async function exportDiagnostics(range: {
     from: range.from,
     to: range.to,
     memoryFallback: logger?.getMemoryEntries() ?? [],
+    pendingEntries,
+    droppedPendingEntries,
   });
 
   if (!outcome.ok) {
@@ -567,6 +610,7 @@ async function exportDiagnostics(range: {
       path: result.filePath,
       entries: outcome.value.entries,
       truncated: outcome.value.truncated,
+      incomplete: outcome.value.incomplete,
       elapsedMs: outcome.elapsedMs,
     };
   } catch (err: any) {
@@ -610,11 +654,8 @@ async function showStartupFailureDialog(context: {
       : dialog.showMessageBoxSync(options);
 
     if (choice === 0) {
-      try {
-        await shell.openPath(currentLogDir());
-      } catch {
-        /* ignore */
-      }
+      const openError = await openLogDirInShell();
+      extra = openError ? `无法打开日志目录：${openError}` : '';
       continue;
     }
     if (choice === 1) {
@@ -623,7 +664,9 @@ async function showStartupFailureDialog(context: {
         to: Date.now(),
       });
       extra = result.ok
-        ? `诊断包已导出：${result.path}（${result.entries ?? 0} 条记录${result.truncated ? '，已截断' : ''}）`
+        ? `诊断包已导出：${result.path}（${result.entries ?? 0} 条记录${result.truncated ? '，已截断' : ''}${
+            result.incomplete ? '，部分内容不完整或来自内存，详情见 MANIFEST.json' : ''
+          }）`
         : result.canceled
           ? '已取消导出，未生成任何文件。'
           : `导出失败：${result.message ?? '未知错误'}`;
@@ -647,12 +690,14 @@ function validateIpcSender(event: Electron.IpcMainInvokeEvent): void {
 function makeBackendRequest(
   method: string,
   apiPath: string,
-  body?: any
+  body?: any,
+  timeoutMs: number = DEFAULT_BACKEND_REQUEST_TIMEOUT_MS
 ): Promise<{ status: number; data: any }> {
   return new Promise((resolve, reject) => {
     const postData = body ? JSON.stringify(body) : '';
+    const target = `${BASE_URL}${apiPath}`;
     const req = http.request(
-      `${BASE_URL}${apiPath}`,
+      target,
       {
         method,
         headers: {
@@ -662,7 +707,7 @@ function makeBackendRequest(
           Origin: BASE_URL,
           ...(body ? { 'Content-Length': Buffer.byteLength(postData) } : {}),
         },
-        timeout: 15000,
+        timeout: timeoutMs,
       },
       (res) => {
         let raw = '';
@@ -678,6 +723,9 @@ function makeBackendRequest(
       }
     );
 
+    // `timeout` 选项本身不会终止请求：超时必须 destroy，否则留下悬挂 socket、
+    // 渲染端只能等到自己的超时（OCR 连接测试要等 315 秒，这一点尤其关键）。
+    terminateRequestOnTimeout(req, timeoutMs, target);
     req.on('error', (err) => reject(err));
     if (postData) req.write(postData);
     req.end();
@@ -936,6 +984,7 @@ app.whenReady().then(async () => {
 
   // Check port availability
   let portAvailable = await isPortAvailable(PORT, HOST);
+  let portDialogExtra = '';
   while (!portAvailable) {
     diagWarn('startup.port.conflict', '端口已被占用，等待用户处理', { target: `${HOST}:${PORT}` });
     const choice = dialog.showMessageBoxSync({
@@ -945,7 +994,10 @@ app.whenReady().then(async () => {
       detail: [
         `桌面版固定使用 http://${HOST}:${PORT} 保证安全来源与反馈组件正常工作。请关闭冲突程序后重试。`,
         `日志目录：${currentLogDir()}`,
-      ].join('\n'),
+        portDialogExtra,
+      ]
+        .filter(Boolean)
+        .join('\n'),
       buttons: ['重试', '打开日志目录', '导出诊断包', '退出程序'],
       defaultId: 0,
       cancelId: 3,
@@ -953,11 +1005,8 @@ app.whenReady().then(async () => {
     });
 
     if (choice === 1) {
-      try {
-        await shell.openPath(currentLogDir());
-      } catch {
-        /* ignore */
-      }
+      const openError = await openLogDirInShell();
+      portDialogExtra = openError ? `无法打开日志目录：${openError}` : '';
       continue;
     }
     if (choice === 2) {
@@ -1145,15 +1194,23 @@ function setupIpcHandlers() {
   ipcMain.handle('desktop:testConnection', async (event, serviceType, customConfig) => {
     validateIpcSender(event);
     const startedAt = Date.now();
+    // PP-OCRv6 是异步 jobs 识别，一次探针要等任务排队与轮询，因此 OCR 单独放宽到 315 秒；
+    // 其余服务（llm/embedding）保持原有 15 秒等待上限。
+    const timeoutMs = resolveConnectionTestTimeoutMs(serviceType);
     try {
-      const res = await makeBackendRequest('POST', '/api/desktop/test-connection', {
-        service_type: serviceType,
-        base_url: customConfig?.base_url,
-        model: customConfig?.model,
-        api_key: customConfig?.api_key,
-        baidu_ocr_url: customConfig?.baidu_ocr_url,
-        baidu_ocr_token: customConfig?.baidu_ocr_token,
-      });
+      const res = await makeBackendRequest(
+        'POST',
+        '/api/desktop/test-connection',
+        {
+          service_type: serviceType,
+          base_url: customConfig?.base_url,
+          model: customConfig?.model,
+          api_key: customConfig?.api_key,
+          baidu_ocr_url: customConfig?.baidu_ocr_url,
+          baidu_ocr_token: customConfig?.baidu_ocr_token,
+        },
+        timeoutMs
+      );
       const outcome = normalizeConnectionTestResult(
         serviceType,
         res.status,
@@ -1387,11 +1444,10 @@ function setupIpcHandlers() {
     }
   });
 
-  ipcMain.handle('desktop:openLogDirectory', (event) => {
+  ipcMain.handle('desktop:openLogDirectory', async (event) => {
     validateIpcSender(event);
-    const logDir = currentLogDir();
-    fs.mkdirSync(logDir, { recursive: true });
-    shell.openPath(logDir);
+    const openError = await openLogDirInShell();
+    return openError ? { ok: false, message: `无法打开日志目录（${openError}）` } : { ok: true };
   });
 
   // --- Test-build diagnostics surface (restricted IPC) --------------------------------

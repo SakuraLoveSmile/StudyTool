@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: true
+      prerelease:
+        description: 'Mark the published GitHub release as a prerelease (beta builds: not listed as latest)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -158,5 +163,12 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:RELEASE_TAG @files --repo $env:RELEASE_REPO --clobber
           } else {
-            gh release create $env:RELEASE_TAG @files --repo $env:RELEASE_REPO --title "RAG Study Assistant $env:RELEASE_VERSION" --notes "Windows x64 desktop release $env:RELEASE_VERSION"
+            $createArgs = @()
+            if ('${{ github.event.inputs.prerelease }}' -eq 'true') {
+              # Beta/candidate builds are published as prereleases: visible for
+              # anonymous download but never promoted to the "latest" release.
+              $createArgs += '--prerelease'
+              $createArgs += '--latest=false'
+            }
+            gh release create $env:RELEASE_TAG @files --repo $env:RELEASE_REPO --title "RAG Study Assistant $env:RELEASE_VERSION" --notes "Windows x64 desktop release $env:RELEASE_VERSION" @createArgs
           }
