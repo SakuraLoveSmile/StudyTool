@@ -16,16 +16,16 @@ import { expect, test } from '@playwright/test';
 const FIXTURE = 'http://127.0.0.1:5276/widget-fixture.html';
 const FEEDBACK_BASE = 'http://127.0.0.1:5199';
 const FEEDBACK_BASE_B = 'http://127.0.0.1:5198';
-const VENDOR_TARBALL = '../../frontend/vendor/feedback-web-0.4.0.tgz';
-const EXPECTED_SHA256 = '2c22aa3110cb2e84780786ee37dc263ff766b3e6ada9699597a8e79f8b0d5533';
+const VENDOR_TARBALL = '../../frontend/vendor/feedback-web-0.4.1-studytool.1.tgz';
+const EXPECTED_SHA256 = '2c56ebcaa2f6f051fdf898fdac165f56e430bf14a01e9ead2081ad3f9dac4bcf';
 
-test('依赖来源固定：@feedback/web 实装 0.4.0，且与核验清单 sha256 一致', async () => {
+test('依赖来源固定：@feedback/web 实装 0.4.1-studytool.1，且与核验清单 sha256 一致', async () => {
   const pkg = JSON.parse(await readFile(new URL('../node_modules/@feedback/web/package.json', import.meta.url), 'utf8')) as { version: string };
-  expect(pkg.version, 'fixture 必须测 0.4.0，防止静默退化到旧版本').toBe('0.4.0');
+  expect(pkg.version, 'fixture 必须测 0.4.1-studytool.1（截图遮罩修复包），防止静默退化到旧版本').toBe('0.4.1-studytool.1');
 
   const tarball = await readFile(new URL(VENDOR_TARBALL, import.meta.url));
   const digest = createHash('sha256').update(tarball).digest('hex');
-  expect(digest, 'vendor tarball 必须与 .feedback-work/vendor-verified/SHA256SUMS 登记值一致').toBe(EXPECTED_SHA256);
+  expect(digest, 'vendor tarball 必须与 T1 交付的 0.4.1-studytool.1 SHA-256 一致').toBe(EXPECTED_SHA256);
 });
 
 test.describe('组件/分块加载失败', () => {

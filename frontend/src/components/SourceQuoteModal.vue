@@ -8,15 +8,15 @@
       leave-from-class="opacity-100"
       leave-to-class="opacity-0"
     >
-      <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/50 backdrop-blur-sm p-4" @click.self="close">
-        <div class="bg-white rounded-2xl shadow-pop w-full max-w-2xl overflow-hidden border border-stone-200">
+      <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-sink/50 backdrop-blur-sm p-4" @click.self="close">
+        <div class="bg-surface rounded-2xl shadow-pop w-full max-w-2xl overflow-hidden border border-line">
           <!-- Modal Header -->
-          <div class="px-6 py-4 border-b border-stone-100 flex items-center justify-between bg-stone-50/60">
+          <div class="px-6 py-4 border-b border-line flex items-center justify-between bg-raised/60">
             <div class="flex items-center space-x-2">
-              <FileText class="w-5 h-5 text-brand-600" />
-              <h3 class="font-display font-semibold text-stone-800">资料原文与定位溯源</h3>
+              <FileText class="w-5 h-5 text-accent" />
+              <h3 class="font-display font-semibold text-ink">资料原文与定位溯源</h3>
             </div>
-            <button @click="close" class="text-stone-400 hover:text-stone-600 p-1.5 rounded-lg hover:bg-stone-100 transition-colors" aria-label="关闭">
+            <button @click="close" class="text-faint hover:text-sub p-1.5 rounded-lg hover:bg-raised transition-colors" aria-label="关闭">
               <X class="w-5 h-5" />
             </button>
           </div>
@@ -25,16 +25,16 @@
           <div class="p-6 space-y-4">
             <!-- Metadata pills -->
             <div class="flex flex-wrap gap-2 text-xs">
-              <span class="px-2.5 py-1 rounded-full bg-brand-50 text-brand-700 font-medium">
+              <span class="px-2.5 py-1 rounded-full bg-accent/10 text-accent font-medium">
                 来源文件: {{ docName }}
               </span>
-              <span class="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium">
+              <span class="px-2.5 py-1 rounded-full bg-warn/10 text-warn font-medium">
                 定位位置: {{ locationRef }}
               </span>
-              <span v-if="heading" class="px-2.5 py-1 rounded-full bg-stone-100 text-stone-700 font-medium">
+              <span v-if="heading" class="px-2.5 py-1 rounded-full bg-raised text-ink font-medium">
                 章节: {{ heading }}
               </span>
-              <a v-if="fileUrl" :href="fileUrl" target="_blank" rel="noreferrer" class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-medium hover:underline">
+              <a v-if="fileUrl" :href="fileUrl" target="_blank" rel="noreferrer" class="px-2.5 py-1 rounded-full bg-ok/10 text-ok font-medium hover:underline">
                 打开原文件
               </a>
             </div>
@@ -43,7 +43,7 @@
             <div>
               <div class="flex justify-between items-center mb-1.5">
                 <label class="field-label mb-0">原文切片内容{{ readOnly ? '' : '（支持人工校对与修改）' }}</label>
-                <span v-if="savedSuccess" class="text-xs text-emerald-600 font-medium flex items-center">
+                <span v-if="savedSuccess" class="text-xs text-ok font-medium flex items-center">
                   <Check class="w-3.5 h-3.5 mr-0.5" /> 已保存修改并更新检索索引
                 </span>
               </div>
@@ -51,13 +51,13 @@
                 v-model="editableContent"
                 rows="8"
                 :readonly="readOnly"
-                class="field font-mono text-sm leading-relaxed bg-stone-50/50"
+                class="field font-mono text-sm leading-relaxed bg-raised/50"
               ></textarea>
             </div>
           </div>
 
           <!-- Modal Footer -->
-          <div class="px-6 py-3.5 bg-stone-50/60 border-t border-stone-100 flex justify-end gap-2">
+          <div class="px-6 py-3.5 bg-raised/60 border-t border-line flex justify-end gap-2">
             <button @click="close" class="btn btn-secondary">
               关闭
             </button>

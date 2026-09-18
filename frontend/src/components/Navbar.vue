@@ -1,5 +1,5 @@
 <template>
-  <header class="sticky top-0 z-30 border-b border-stone-200/80 bg-white/80 shadow-xs backdrop-blur-md">
+  <header class="sticky top-0 z-30 border-b border-line/80 bg-surface/80 shadow-xs backdrop-blur-md">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
       <div class="flex h-16 items-center justify-between gap-3">
         <router-link to="/today" class="flex min-w-0 items-center space-x-3" aria-label="返回今日学习">
@@ -7,12 +7,12 @@
             <BookOpen class="h-5 w-5" />
           </div>
           <div class="min-w-0">
-            <h1 class="truncate font-display text-base font-bold tracking-tight text-stone-900 sm:text-lg">考研专业课备考助手</h1>
-            <p class="hidden text-xs text-stone-400 sm:block">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
+            <h1 class="truncate font-display text-base font-bold tracking-tight text-ink sm:text-lg">考研专业课备考助手</h1>
+            <p class="hidden text-xs text-faint sm:block">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
           </div>
         </router-link>
 
-        <nav class="hidden items-center space-x-1 sm:space-x-1.5 md:flex" aria-label="主导航">
+        <nav class="hidden items-center space-x-1 sm:space-x-1.5 xl:flex" aria-label="主导航">
           <router-link to="/today" class="nav-tab" :class="{ 'nav-tab-active': $route.path === '/today' }">
             <CalendarDays class="mr-1.5 inline h-4 w-4" />今日学习
           </router-link>
@@ -37,6 +37,7 @@
             to="/logs"
             class="nav-tab"
             :class="{ 'nav-tab-active': $route.path === '/logs' }"
+            @click="noteLogNavClick"
           >
             <ScrollText class="mr-1.5 inline h-4 w-4" />日志
           </router-link>
@@ -46,13 +47,14 @@
         </nav>
 
         <div class="flex shrink-0 items-center space-x-2">
+          <ThemeToggle class="hidden xl:block" />
           <button
             type="button"
             class="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
-            :class="activeCount > 0 ? 'border-brand-300 bg-brand-50 text-brand-700 hover:bg-brand-100' : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'"
+            :class="activeCount > 0 ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15' : 'border-line bg-surface text-sub hover:bg-raised'"
             @click="toggleDrawer"
           >
-            <ListTodo class="h-4 w-4" :class="{ 'animate-pulse text-brand-600': activeCount > 0 }" />
+            <ListTodo class="h-4 w-4" :class="{ 'animate-pulse text-accent': activeCount > 0 }" />
             <span>任务</span>
             <span v-if="activeCount > 0" class="flex h-4 w-4 items-center justify-center rounded-full bg-brand-600 text-[10px] font-bold text-white">{{ activeCount }}</span>
           </button>
@@ -66,27 +68,30 @@
             data-feedback-capture-mask
             class="flex items-center space-x-2"
           >
-            <span v-if="auth.user.value" class="hidden text-xs text-stone-500 sm:inline">{{ auth.user.value.username }}</span>
-            <button v-if="auth.authRequired.value" type="button" class="rounded-lg px-2 py-1.5 text-xs text-stone-600 hover:bg-stone-100" @click="logout">退出</button>
+            <span v-if="auth.user.value" class="hidden text-xs text-sub sm:inline">{{ auth.user.value.username }}</span>
+            <button v-if="auth.authRequired.value" type="button" class="rounded-lg px-2 py-1.5 text-xs text-sub hover:bg-raised" @click="logout">退出</button>
           </span>
-          <button type="button" class="rounded-lg p-2 text-stone-500 hover:bg-stone-100 md:hidden" aria-label="打开导航菜单" @click="mobileMenuOpen = !mobileMenuOpen">
+          <button type="button" class="rounded-lg p-2 text-sub hover:bg-raised xl:hidden" aria-label="打开导航菜单" @click="mobileMenuOpen = !mobileMenuOpen">
             <Menu v-if="!mobileMenuOpen" class="h-5 w-5" />
             <X v-else class="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      <nav v-if="mobileMenuOpen" class="space-y-1 border-t border-stone-100 py-3 md:hidden" aria-label="移动端主导航">
+      <nav v-if="mobileMenuOpen" class="space-y-1 border-t border-line py-3 xl:hidden" aria-label="移动端主导航">
         <router-link
           v-for="item in mobileLinks"
           :key="item.to"
           :to="item.to"
           class="block rounded-xl px-3 py-2 text-sm font-medium"
-          :class="$route.path === item.to ? 'bg-brand-50 text-brand-700' : 'text-stone-600 hover:bg-stone-50'"
-          @click="mobileMenuOpen = false"
+          :class="$route.path === item.to ? 'bg-accent/10 text-accent' : 'text-sub hover:bg-raised'"
+          @click="mobileMenuOpen = false; if (item.to === '/logs') noteLogNavClick()"
         >
           <component :is="item.icon" class="mr-2 inline h-4 w-4" />{{ item.label }}
         </router-link>
+        <div class="border-t border-line pt-2">
+          <ThemeToggle variant="menu" />
+        </div>
       </nav>
     </div>
   </header>
@@ -98,6 +103,8 @@ import { useRouter } from 'vue-router';
 import { BookOpen, FolderArchive, BarChart3, Layers, CheckSquare, ListTodo, Menu, X, CalendarDays, BrainCircuit, Sliders, ScrollText } from 'lucide-vue-next';
 import { useTaskManager } from '../composables/useTaskManager';
 import { useAuth } from '../composables/useAuth';
+import { beginLogNavigation } from '../composables/useLogNavigation';
+import ThemeToggle from './ThemeToggle.vue';
 
 const { activeCount, toggleDrawer } = useTaskManager();
 const auth = useAuth();
@@ -109,6 +116,11 @@ const isDesktop = computed(() =>
 );
 const logout = async () => { try { await auth.logout(); await router.replace({ name: 'login' }); } catch { alert(auth.errorMessage.value); } };
 const mobileMenuOpen = ref(false);
+
+/** T2a：点击日志入口即生成诊断编号并让外壳显示"正在打开"，与后续导航/查询埋点串联。 */
+function noteLogNavClick(): void {
+  beginLogNavigation('click');
+}
 
 const mobileLinks = computed<Array<{ to: string; label: string; icon: Component }>>(() => [
   { to: '/today', label: '今日学习', icon: CalendarDays },
@@ -124,9 +136,9 @@ const mobileLinks = computed<Array<{ to: string; label: string; icon: Component 
 
 <style scoped>
 .nav-tab {
-  @apply inline-flex items-center rounded-full px-3.5 py-2 text-sm font-medium text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900;
+  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-3.5 py-2 text-sm font-medium text-sub transition-colors hover:bg-raised hover:text-ink;
 }
 .nav-tab-active {
-  @apply bg-brand-50 font-semibold text-brand-700 hover:bg-brand-100 hover:text-brand-800;
+  @apply bg-accent/10 font-semibold text-accent hover:bg-accent/15 hover:text-accent;
 }
 </style>

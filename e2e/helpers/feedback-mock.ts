@@ -232,7 +232,7 @@ export const feedbackRules = {
         body: {
           authenticated: true,
           kind: 'token',
-          clientLabel: 'web:rag',
+          clientLabel: 'web:studytool',
           expiresAt: new Date(Date.now() + 3600_000).toISOString(),
           user: { id: 'fb-user-1', username: 'feedback-user', role: 'user' },
           quota: { dailyLimit: 20, used: 0, remaining: 20, resetAt: new Date(Date.now() + 3600_000).toISOString() },

@@ -13,10 +13,35 @@
 import { parentPort } from 'worker_threads';
 import { queryLogs, type LogQueryOptions } from './log-store';
 import { buildDiagnosticArchive, type DiagnosticArchiveOptions } from './diagnostic-export';
-import type { LogWorkerRequest, LogWorkerResponse } from './log-worker-protocol';
+import { collectFeedbackLogs, type FeedbackJobPayload } from './feedback-logs';
+import { scrubString } from './diagnostics';
+import {
+  FEEDBACK_ERROR_CODES,
+  type LogJobKind,
+  type LogWorkerErrorCode,
+  type LogWorkerRequest,
+  type LogWorkerResponse,
+} from './log-worker-protocol';
 
 export type QueryJobPayload = LogQueryOptions;
 export type ExportJobPayload = DiagnosticArchiveOptions;
+export type { FeedbackJobPayload } from './feedback-logs';
+
+/**
+ * Failure code per job kind. Feedback keeps any LOG_FEEDBACK_* code the collector
+ * raised (e.g. LOG_FEEDBACK_UNAVAILABLE) and normalizes everything else to
+ * LOG_FEEDBACK_FAILED — it must never borrow the query/export codes.
+ */
+function jobErrorCode(kind: LogJobKind, err: unknown): LogWorkerErrorCode {
+  if (kind === 'export') return 'LOG_EXPORT_FAILED';
+  if (kind === 'feedback') {
+    const code = (err as { code?: unknown })?.code;
+    return typeof code === 'string' && FEEDBACK_ERROR_CODES.has(code)
+      ? (code as LogWorkerErrorCode)
+      : 'LOG_FEEDBACK_FAILED';
+  }
+  return 'LOG_QUERY_FAILED';
+}
 
 /** Runs one job synchronously — each is CPU/IO bound and already isolated in a thread. */
 function runJob(request: LogWorkerRequest): unknown {
@@ -27,6 +52,11 @@ function runJob(request: LogWorkerRequest): unknown {
     // The archive is built here, in the worker: the parent thread only validates the
     // request and writes the finished bytes through the native save dialog.
     return buildDiagnosticArchive(request.payload as ExportJobPayload);
+  }
+  if (request.kind === 'feedback') {
+    // Restricted feedback collection: read, re-whitelist, re-scrub, bound and sort
+    // all happen here; the main thread only schedules and forwards the result.
+    return collectFeedbackLogs(request.payload as FeedbackJobPayload);
   }
   throw new Error(`未知的日志任务类型: ${String((request as { kind?: unknown }).kind)}`);
 }
@@ -41,8 +71,13 @@ if (parentPort) {
       response = {
         status: 'error',
         requestId: request.requestId,
-        code: request.kind === 'export' ? 'LOG_EXPORT_FAILED' : 'LOG_QUERY_FAILED',
-        message: err?.message || String(err),
+        code: jobErrorCode(request.kind, err),
+        // Feedback failures must never carry a raw system path to the renderer —
+        // scrubString collapses home/absolute paths to `<path>`.
+        message:
+          request.kind === 'feedback'
+            ? scrubString(err?.message || String(err))
+            : err?.message || String(err),
       };
     }
     port.postMessage(response);

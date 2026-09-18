@@ -1,5 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  // data-theme 是唯一的主题真源；dark: 变体仅留给无法用语义 token 表达的边角场景
+  darkMode: ['selector', '[data-theme="dark"]'],
   content: [
     "./index.html",
     "./src/**/*.{vue,js,ts,jsx,tsx}",
@@ -20,7 +22,30 @@ export default {
           800: '#3730a3',
           900: '#312e81',
           950: '#1e1b4b',
-        }
+        },
+        // 语义色：随 data-theme 翻转（CSS 变量为 RGB 三元组，保留 /opacity 语法）
+        page: 'rgb(var(--c-page) / <alpha-value>)',
+        surface: 'rgb(var(--c-surface) / <alpha-value>)',
+        raised: 'rgb(var(--c-raised) / <alpha-value>)',
+        sink: 'rgb(var(--c-sink) / <alpha-value>)',
+        ink: 'rgb(var(--c-ink) / <alpha-value>)',
+        sub: 'rgb(var(--c-sub) / <alpha-value>)',
+        faint: 'rgb(var(--c-faint) / <alpha-value>)',
+        'on-sink': 'rgb(var(--c-on-sink) / <alpha-value>)',
+        'on-accent': 'rgb(var(--c-on-accent) / <alpha-value>)',
+        line: {
+          DEFAULT: 'rgb(var(--c-line) / <alpha-value>)',
+          strong: 'rgb(var(--c-line-strong) / <alpha-value>)',
+        },
+        accent: {
+          DEFAULT: 'rgb(var(--c-accent) / <alpha-value>)',
+          strong: 'rgb(var(--c-accent-strong) / <alpha-value>)',
+        },
+        ok: 'rgb(var(--c-ok) / <alpha-value>)',
+        warn: 'rgb(var(--c-warn) / <alpha-value>)',
+        err: 'rgb(var(--c-err) / <alpha-value>)',
+        info: 'rgb(var(--c-info) / <alpha-value>)',
+        violet: 'rgb(var(--c-violet) / <alpha-value>)',
       },
       fontFamily: {
         // 页面标题：宋体系衬线，营造书卷感；正文仍用系统黑体保证可读性

@@ -8,6 +8,7 @@ import RecallCardsView from '../views/RecallCardsView.vue';
 import LoginView from '../views/LoginView.vue';
 import ChangePasswordView from '../views/ChangePasswordView.vue';
 import { useAuth } from '../composables/useAuth';
+import { installLogNavigation } from '../composables/useLogNavigation';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -87,5 +88,12 @@ router.beforeEach(async (to) => {
   }
   return true;
 });
+
+/**
+ * T2a 外壳级日志导航处理：注册 router.onError / beforeEach / afterEach 监听，
+ * 捕获导航失败与懒加载 chunk 加载失败，经 diagnostics.report 上报，并驱动
+ * 外壳提示条（LogNavNotice）。幂等；main.ts 再调一次也安全。只监听、不拦截导航。
+ */
+installLogNavigation(router);
 
 export default router;

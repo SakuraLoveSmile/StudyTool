@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import {
   HOST_USER_A, HOST_USER_B, clickPrimarySubmit, draftInput, installRemovalProbe, loginInsideWidgetOnly, mockFeedbackService, mockHostApi,
-  openPanel, panelText, readDetachedState, readRemovalProbe, readWidgetState, readProbe,
+  openPanel, closePanel, panelText, readDetachedState, readRemovalProbe, readWidgetState, readProbe,
   installProbe, typeDraft, waitForAutoScreenshot, waitForWidget, widget,
 } from '../helpers/host-page';
 import { deferred, feedbackRules, type MockResponse } from '../helpers/feedback-mock';
@@ -32,7 +32,7 @@ test.describe('已配置形态：挂载门禁与公开属性', () => {
     const state = await readWidgetState(page);
     expect(state.apiBase).toBe('http://127.0.0.1:5199');
     expect(state.apiBaseAttr).toBe('http://127.0.0.1:5199');
-    expect(state.appId).toBe('rag');
+    expect(state.appId).toBe('studytool');
     expect(state.pageLabel).toBe('today');
     // 未登录时不应有任何反馈服务请求。
     expect(svc.count()).toBe(0);
@@ -93,8 +93,8 @@ test.describe('组件内独立登录', () => {
     expect(login.pathname).toBe('/api/auth/login');
     const body = JSON.parse(login.bodyText) as { username: string; clientLabel: string; appId: string };
     expect(body.username).toBe('tester');
-    expect(body.clientLabel).toBe('web:rag');
-    expect(body.appId).toBe('rag');
+    expect(body.clientLabel).toBe('web:studytool');
+    expect(body.appId).toBe('studytool');
 
     // 组件拿到了独立令牌（凭证在组件实例内存中；登录是异步的，需等待）。
     await expect.poll(async () => (await readWidgetState(page)).accessToken, { timeout: 10_000 }).toBe('mock-token-0001');
@@ -328,6 +328,38 @@ test.describe('模拟故障：已保存但归档失败不重复提交', () => {
     const after = await readWidgetState(page);
     expect(after.phase).toBe('archived');
     expect(after.lastFeedbackId).toBe('fb-arch-1');
+  });
+});
+
+test.describe('主题切换不干扰反馈实例', () => {
+  test('切换深色只更新组件 theme 属性：草稿、截图与实例保持不变', async ({ page }) => {
+    await openConfiguredApp(page, [feedbackRules.loginOk(), feedbackRules.sessionOk()]);
+    await openPanel(page);
+    await typeDraft(page, '切换主题后草稿仍在');
+    const before = await waitForAutoScreenshot(page);
+    expect(before.draftBytes).toBeGreaterThan(0);
+
+    // 给当前实例打上标记：若主题切换重建了实例，标记会随旧节点一起消失。
+    await page.evaluate(() => {
+      (document.querySelector('feedback-widget') as unknown as Record<string, unknown>).__themeMarker = 'kept';
+    });
+
+    // 先关面板再点导航栏：面板层级高于下拉菜单，草稿留在实例内不受关合影响。
+    await closePanel(page);
+    await page.getByRole('button', { name: /外观设置/ }).click();
+    await page.getByRole('menuitemradio', { name: '深色' }).click();
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+
+    const after = await readWidgetState(page);
+    expect(after.present).toBe(true);
+    expect(after.draftText).toBe('切换主题后草稿仍在');
+    expect(after.draftBytes).toBe(before.draftBytes);
+    // 同一实例：theme 只是公开属性赋值，不走重建路径。
+    expect(await page.evaluate(() => (document.querySelector('feedback-widget') as unknown as Record<string, unknown>).__themeMarker)).toBe('kept');
+    // 组件 theme 属性同步为实际主题（组件据此切换自身深浅样式）。
+    await expect
+      .poll(() => page.evaluate(() => document.querySelector('feedback-widget')?.getAttribute('theme')))
+      .toBe('dark');
   });
 });
 

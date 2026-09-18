@@ -70,6 +70,9 @@ export const FIELD_WHITELIST: ReadonlySet<string> = new Set([
   'count', 'total', 'ok', 'name', 'id', 'version', 'bytes', 'entries', 'truncated',
   'note', 'action', 'operation', 'route', 'target', 'kind', 'tags', 'has_more',
   'page', 'page_size', 'sources', 'levels',
+  // log-navigation diagnostics (T2a): correlation id + phase details — dropping
+  // these silently would sever the click→guard→mount→query evidence chain.
+  'nav_id', 'trigger', 'to_name', 'elapsed_ms',
 ]);
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [

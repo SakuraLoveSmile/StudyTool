@@ -87,7 +87,7 @@ docker compose --env-file deploy/.env exec backend python -m app.manage_users di
 
 ```sh
 VITE_FEEDBACK_API_BASE=https://feedback.xn--fhqths51enha.cn \
-VITE_FEEDBACK_APP_ID=rag \
+VITE_FEEDBACK_APP_ID=studytool \
 docker compose --env-file deploy/.env build frontend
 ```
 
@@ -95,7 +95,7 @@ docker compose --env-file deploy/.env build frontend
 
 **B. 在反馈服务后台登记上线后的真实来源。** 必须精确匹配浏览器实际 origin，**不要使用通配符**：
 
-- `appId`：`rag`
+- `appId`：`studytool`
 - 名称：RAG 备考助手
 - 允许来源：`https://$DOMAIN`（即上线后的 HTTPS origin）
 

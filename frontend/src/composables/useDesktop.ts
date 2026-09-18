@@ -121,6 +121,43 @@ export interface DesktopDiagnosticExportResult {
   message?: string;
 }
 
+/** 反馈附件自动采集：与 desktop/src/feedback-logs.ts 的冻结契约逐字一致。 */
+export type FeedbackLogSource = 'desktop' | 'backend' | 'frontend';
+export type FeedbackLogFilename =
+  | 'studytool-desktop.jsonl'
+  | 'studytool-backend.jsonl'
+  | 'studytool-frontend.jsonl';
+export type FeedbackLogsResult =
+  | {
+      ok: true;
+      files: Array<{ filename: FeedbackLogFilename; text: string }>;
+      truncated: boolean;
+      unavailable: FeedbackLogSource[];
+      skippedLines: number;
+    }
+  | {
+      ok: false;
+      code:
+        | 'LOG_FEEDBACK_BUSY'
+        | 'LOG_FEEDBACK_TIMEOUT'
+        | 'LOG_FEEDBACK_CANCELED'
+        | 'LOG_FEEDBACK_UNAVAILABLE'
+        | 'LOG_FEEDBACK_FAILED';
+      message: string;
+    };
+
+/** 外观偏好：与主进程独立偏好文件同源（useTheme.ts 共用该类型）。 */
+export type ThemePreference = 'system' | 'light' | 'dark';
+export type EffectiveTheme = 'light' | 'dark';
+export interface DesktopThemePayload {
+  preference: ThemePreference;
+  effective: EffectiveTheme;
+}
+export interface DesktopThemeSetResult extends DesktopThemePayload {
+  ok: boolean;
+  message?: string;
+}
+
 declare global {
   interface Window {
     desktopAPI?: {
@@ -150,6 +187,13 @@ declare global {
       cancelLogQuery?(requestId: string): Promise<{ ok: boolean; canceled: boolean }>;
       reportLog?(entries: unknown[]): Promise<{ ok: boolean; accepted: number; dropped: number }>;
       exportDiagnostics?(params: { from: number; to: number }): Promise<DesktopDiagnosticExportResult>;
+      /** 反馈附件自动采集：无参数受限 IPC；旧版桌面端可能未暴露（可选链调用）。 */
+      getFeedbackLogs?(): Promise<FeedbackLogsResult>;
+      /** 外观偏好：preload 在首屏前同步注入的初始值；读写均走受限 IPC。 */
+      initialTheme?: DesktopThemePayload;
+      getThemePreference?(): Promise<DesktopThemePayload>;
+      setThemePreference?(preference: ThemePreference): Promise<DesktopThemeSetResult>;
+      onThemeChanged?(callback: (payload: DesktopThemePayload) => void): () => void;
     };
   }
 }

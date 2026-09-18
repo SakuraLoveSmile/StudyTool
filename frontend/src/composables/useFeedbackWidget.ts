@@ -1,5 +1,6 @@
 import { onBeforeUnmount, shallowRef, watch, type Ref } from 'vue';
 import type { FeedbackWidget } from '@feedback/web';
+import { createFeedbackLogProvider, resolveFeedbackLogsApi } from '../utils/feedbackLogs';
 
 /**
  * Custom Element 标签名，与 `@feedback/web` 导出的 `FEEDBACK_ELEMENT_TAG` 一致。
@@ -57,6 +58,8 @@ export interface UseFeedbackWidgetOptions {
   instanceKey: Ref<string>;
   /** 页面标签：只取路由名称，绝不含 URL、查询参数或用户信息。 */
   pageLabel: Ref<string>;
+  /** 实际主题（light/dark 已解析值）：只更新组件公开 theme 属性，不重建实例、不动草稿。 */
+  theme?: Readonly<Ref<'light' | 'dark'>>;
 }
 
 /**
@@ -150,6 +153,19 @@ export function useFeedbackWidget(options: UseFeedbackWidgetOptions) {
     el.launcherMode = 'orb';
     // 使用组件既有的截图 / 预览 / 重拍 / 移除能力（含遮罩与失败保留草稿），不在此重新实现。
     el.captureMode = 'viewport';
+    // theme 与 side/capture-mode 同属公开属性：赋值不触碰草稿、令牌与任务态（组件实现保证）。
+    if (options.theme) el.theme = options.theme.value;
+    // 桌面受限日志采集：仅当 preload 已注入受限通道且方法有效时才安装 logProvider；
+    // 浏览器形态 / 旧 preload / 方法被篡改时保持 undefined，组件不采集、不报错。
+    const feedbackLogsApi = resolveFeedbackLogsApi();
+    if (feedbackLogsApi) {
+      // isAlive 绑定**本实例**：destroyInstance 先把 element.value 置空再移除节点，
+      // 此后旧 provider 迟到的结果一律作废为空数组，绝不写入后续实例的草稿。
+      el.logProvider = createFeedbackLogProvider({
+        api: feedbackLogsApi,
+        isAlive: () => element.value === el && el.isConnected,
+      });
+    }
     container.appendChild(el);
     element.value = el;
   };
@@ -183,6 +199,15 @@ export function useFeedbackWidget(options: UseFeedbackWidgetOptions) {
     (label) => { if (element.value) element.value.pageLabel = label; },
     { flush: 'post' },
   );
+
+  // 主题变化只更新组件 theme 属性：不重建实例，草稿与截图保持不变。
+  if (options.theme) {
+    watch(
+      options.theme,
+      (next) => { if (element.value) element.value.theme = next; },
+      { flush: 'post' },
+    );
+  }
 
   // 卸载前同样先清空服务身份，再移除实例。
   onBeforeUnmount(() => destroyInstance('宿主卸载'));

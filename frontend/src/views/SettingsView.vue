@@ -2,27 +2,52 @@
   <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
     <!-- Header -->
     <div class="mb-8">
-      <h1 class="font-display text-2xl font-bold tracking-tight text-stone-900 sm:text-3xl">模型与系统设置</h1>
-      <p class="mt-2 text-sm text-stone-600">
+      <h1 class="font-display text-2xl font-bold tracking-tight text-ink sm:text-3xl">模型与系统设置</h1>
+      <p class="mt-2 text-sm text-sub">
         配置大语言模型、向量服务与百度 OCR 凭据。凭据通过系统本地安全存储加密保存，备份与安装包不会包含您的密钥。
       </p>
     </div>
 
+    <!-- 外观：独立区域，选择立即生效，不随模型配置一起保存 -->
+    <section class="surface mb-8 p-5" aria-labelledby="appearance-heading">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 id="appearance-heading" class="text-base font-semibold text-ink">外观</h2>
+          <p class="mt-1 text-xs text-sub">跟随系统或固定浅色/深色，选择立即生效并保留在本设备上。</p>
+          <p v-if="theme.persistError.value" role="alert" class="mt-2 text-xs text-err">{{ theme.persistError.value }}</p>
+        </div>
+        <div role="radiogroup" aria-label="外观" class="inline-flex rounded-xl border border-line bg-raised p-1">
+          <button
+            v-for="opt in themeOptions"
+            :key="opt.value"
+            type="button"
+            role="radio"
+            :aria-checked="theme.preference.value === opt.value"
+            class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+            :class="theme.preference.value === opt.value ? 'bg-surface text-accent shadow-xs' : 'text-sub hover:text-ink'"
+            @click="chooseTheme(opt.value)"
+          >
+            <component :is="opt.icon" class="h-4 w-4" />{{ opt.label }}
+          </button>
+        </div>
+      </div>
+    </section>
+
     <!-- First-run Onboarding Wizard Banner -->
     <div
       v-if="showWizard"
-      class="mb-8 rounded-xl border border-brand-200 bg-brand-50/80 p-5 shadow-xs"
+      class="mb-8 rounded-xl border border-accent/30 bg-accent/10 p-5 shadow-xs"
     >
       <div class="flex items-start justify-between gap-4">
         <div>
-          <h2 class="text-base font-semibold text-brand-900">首次使用配置向导</h2>
-          <p class="mt-1 text-sm text-brand-700">
+          <h2 class="text-base font-semibold text-accent">首次使用配置向导</h2>
+          <p class="mt-1 text-sm text-accent">
             配置模型凭据后即可开启专业课扫描真题文字识别、考点切片分析与智能练习批改。您也可以直接跳过此向导，本地阅读已导入的资料与已有背诵卡。
           </p>
         </div>
         <button
           type="button"
-          class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100"
+          class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/15"
           @click="dismissWizard"
         >
           暂不配置，跳过向导
@@ -31,7 +56,7 @@
     </div>
 
     <!-- Error Banner -->
-    <div v-if="errorMessage" class="mb-6 rounded-lg bg-rose-50 p-4 text-sm text-rose-700">
+    <div v-if="errorMessage" class="mb-6 rounded-lg bg-err/10 p-4 text-sm text-err">
       {{ errorMessage }}
     </div>
 
@@ -39,19 +64,19 @@
     <section v-if="isDesktop" class="surface mb-8 p-5">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 class="text-base font-semibold text-stone-900">软件更新</h2>
-          <p class="mt-1 text-xs text-stone-500">当前版本 {{ updateStatus.currentVersion }}，只从正式发行版获取更新。</p>
-          <p v-if="updateStatus.state === 'available'" class="mt-2 text-sm text-brand-700">
+          <h2 class="text-base font-semibold text-ink">软件更新</h2>
+          <p class="mt-1 text-xs text-sub">当前版本 {{ updateStatus.currentVersion }}，只从正式发行版获取更新。</p>
+          <p v-if="updateStatus.state === 'available'" class="mt-2 text-sm text-accent">
             发现新版本 {{ updateStatus.version }}，确认后下载。
           </p>
-          <p v-else-if="updateStatus.state === 'downloaded'" class="mt-2 text-sm text-emerald-700">
+          <p v-else-if="updateStatus.state === 'downloaded'" class="mt-2 text-sm text-ok">
             新版本 {{ updateStatus.version }} 已下载完成，可在空闲时安装。
           </p>
-          <p v-else-if="updateStatus.state === 'downloading'" class="mt-2 text-sm text-brand-700">
+          <p v-else-if="updateStatus.state === 'downloading'" class="mt-2 text-sm text-accent">
             正在下载更新 {{ Math.round(updateStatus.percent || 0) }}%
           </p>
-          <p v-else-if="updateStatus.state === 'error'" class="mt-2 text-sm text-rose-700">{{ updateStatus.error }}</p>
-          <p v-else-if="updateStatus.state === 'not-available'" class="mt-2 text-xs text-stone-500">当前已是最新版本。</p>
+          <p v-else-if="updateStatus.state === 'error'" class="mt-2 text-sm text-err">{{ updateStatus.error }}</p>
+          <p v-else-if="updateStatus.state === 'not-available'" class="mt-2 text-xs text-sub">当前已是最新版本。</p>
         </div>
         <div class="flex flex-wrap gap-2">
           <button
@@ -93,26 +118,26 @@
     </section>
 
     <!-- Success Message -->
-    <div v-if="successMessage" class="mb-6 rounded-lg bg-emerald-50 p-4 text-sm text-emerald-700">
+    <div v-if="successMessage" class="mb-6 rounded-lg bg-ok/10 p-4 text-sm text-ok">
       {{ successMessage }}
     </div>
 
     <form @submit.prevent="handleSave" class="space-y-8">
       <!-- 1. LLM Settings -->
       <section class="surface p-6">
-        <div class="flex items-center justify-between border-b border-stone-100 pb-4">
+        <div class="flex items-center justify-between border-b border-line pb-4">
           <div class="flex items-center space-x-2">
-            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10 text-accent">
               <Bot class="h-4 w-4" />
             </div>
             <div>
-              <h2 class="text-base font-semibold text-stone-900">大语言模型 (LLM)</h2>
-              <p class="text-xs text-stone-500">用于考点提炼、真题解析、背诵卡生成与主观题批改</p>
+              <h2 class="text-base font-semibold text-ink">大语言模型 (LLM)</h2>
+              <p class="text-xs text-sub">用于考点提炼、真题解析、背诵卡生成与主观题批改</p>
             </div>
           </div>
           <span
             class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
-            :class="credentialsStatus?.llm.configured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'"
+            :class="credentialsStatus?.llm.configured ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'"
           >
             {{ credentialsStatus?.llm.configured ? '已配置' : '待配置' }}
           </span>
@@ -146,7 +171,7 @@
               <button
                 v-if="credentialsStatus?.llm.configured"
                 type="button"
-                class="text-[11px] text-rose-600 hover:underline"
+                class="text-[11px] text-err hover:underline"
                 @click="toggleClearLlmKey"
               >
                 {{ clearLlmKey ? '撤销清除' : '清除已存密钥' }}
@@ -159,9 +184,9 @@
                 type="password"
                 autocomplete="off"
                 :placeholder="credentialsStatus?.llm.configured ? '已保存密钥 (留空表示保持当前密钥不变)' : '请输入 API 密钥'"
-                class="block w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-800 placeholder-stone-400 focus:border-brand-500 focus:outline-none"
+                class="block w-full rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder-faint focus:border-accent focus:outline-none"
               />
-              <div v-else class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              <div v-else class="rounded-lg border border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
                 保存后将清除此模型的已存密钥。
               </div>
             </div>
@@ -176,12 +201,12 @@
             @click="testLlm"
           >
             <Loader2 v-if="testingLlm" class="h-3.5 w-3.5 animate-spin" />
-            <Sparkles v-else class="h-3.5 w-3.5 text-brand-500" />
+            <Sparkles v-else class="h-3.5 w-3.5 text-accent" />
             <span>{{ testingLlm ? '测试中...' : '测试 LLM 连通性' }}</span>
           </button>
-          <span v-if="llmTestResult" class="text-right text-xs" :class="llmTestResult.ok ? 'text-emerald-600' : 'text-rose-600'">
+          <span v-if="llmTestResult" class="text-right text-xs" :class="llmTestResult.ok ? 'text-ok' : 'text-err'">
             {{ llmTestResult.message }}
-            <span v-if="!llmTestResult.ok && llmTestResult.callId" class="block text-stone-400" :title="llmTestResult.errorType">
+            <span v-if="!llmTestResult.ok && llmTestResult.callId" class="block text-faint" :title="llmTestResult.errorType">
               诊断编号 {{ llmTestResult.callId }}（可在日志页搜索）
             </span>
           </span>
@@ -190,31 +215,31 @@
 
       <!-- 2. Embedding Settings -->
       <section class="surface p-6">
-        <div class="flex items-center justify-between border-b border-stone-100 pb-4">
+        <div class="flex items-center justify-between border-b border-line pb-4">
           <div class="flex items-center space-x-2">
-            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-ok/10 text-ok">
               <Network class="h-4 w-4" />
             </div>
             <div>
-              <h2 class="text-base font-semibold text-stone-900">向量检索服务 (Embedding)</h2>
-              <p class="text-xs text-stone-500">用于学习资料语义切片检索与真题考点智能关联</p>
+              <h2 class="text-base font-semibold text-ink">向量检索服务 (Embedding)</h2>
+              <p class="text-xs text-sub">用于学习资料语义切片检索与真题考点智能关联</p>
             </div>
           </div>
           <span
             class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
-            :class="credentialsStatus?.embedding.configured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'"
+            :class="credentialsStatus?.embedding.configured ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'"
           >
             {{ credentialsStatus?.embedding.configured ? '已配置' : '待配置' }}
           </span>
         </div>
 
         <!-- Embedding lock note -->
-        <div v-if="status?.vector_locked" class="mt-4 flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-4 text-xs text-amber-900">
+        <div v-if="status?.vector_locked" class="mt-4 flex flex-col gap-2 rounded-lg border border-warn/40 bg-warn/10 p-4 text-xs text-warn">
           <div class="flex items-center gap-2 font-medium">
-            <Lock class="h-4 w-4 text-amber-600" />
+            <Lock class="h-4 w-4 text-warn" />
             <span>向量索引已被锁定：{{ status?.vector_lock_reason || '模型来源不一致或信息缺失' }}</span>
           </div>
-          <p class="text-amber-800">
+          <p class="text-warn">
             锁定期间普通文本搜索与文档浏览不受影响，但禁止追加与语义检索。您可以在配置好上方向量模型与密钥后，点击下方按钮重建索引以解除锁定。
           </p>
           <div class="mt-1">
@@ -230,8 +255,8 @@
             </button>
           </div>
         </div>
-        <div v-else-if="credentialsStatus?.embedding.locked" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-          <Lock class="mr-1.5 inline h-3.5 w-3.5 text-amber-600" />
+        <div v-else-if="credentialsStatus?.embedding.locked" class="mt-4 rounded-lg border border-warn/30 bg-warn/10 p-3 text-xs text-warn">
+          <Lock class="mr-1.5 inline h-3.5 w-3.5 text-warn" />
           当前资料库已建立语义向量。为避免不同模型维度混用导致检索异常，已锁定服务地址与模型名称，仅允许更新密钥。
         </div>
 
@@ -243,7 +268,7 @@
               type="text"
               :disabled="credentialsStatus?.embedding.locked"
               placeholder="https://api.openai.com/v1"
-              class="field mt-1 disabled:bg-stone-50 disabled:text-stone-400"
+              class="field mt-1 disabled:bg-raised disabled:text-faint"
             />
           </div>
 
@@ -254,7 +279,7 @@
               type="text"
               :disabled="credentialsStatus?.embedding.locked"
               placeholder="text-embedding-3-small"
-              class="field mt-1 disabled:bg-stone-50 disabled:text-stone-400"
+              class="field mt-1 disabled:bg-raised disabled:text-faint"
             />
           </div>
 
@@ -265,7 +290,7 @@
               <button
                 v-if="credentialsStatus?.embedding.configured"
                 type="button"
-                class="text-[11px] text-rose-600 hover:underline"
+                class="text-[11px] text-err hover:underline"
                 @click="toggleClearEmbeddingKey"
               >
                 {{ clearEmbeddingKey ? '撤销清除' : '清除已存密钥' }}
@@ -278,9 +303,9 @@
                 type="password"
                 autocomplete="off"
                 :placeholder="credentialsStatus?.embedding.configured ? '已保存密钥 (留空表示保持当前密钥不变)' : '请输入 API 密钥'"
-                class="block w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-800 placeholder-stone-400 focus:border-brand-500 focus:outline-none"
+                class="block w-full rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder-faint focus:border-accent focus:outline-none"
               />
-              <div v-else class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              <div v-else class="rounded-lg border border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
                 保存后将清除此向量服务的已存密钥。
               </div>
             </div>
@@ -295,10 +320,10 @@
             @click="testEmbedding"
           >
             <Loader2 v-if="testingEmbedding" class="h-3.5 w-3.5 animate-spin" />
-            <Sparkles v-else class="h-3.5 w-3.5 text-emerald-500" />
+            <Sparkles v-else class="h-3.5 w-3.5 text-ok" />
             <span>{{ testingEmbedding ? '测试中...' : '测试 Embedding 连通性' }}</span>
           </button>
-          <span v-if="embeddingTestResult" class="text-xs" :class="embeddingTestResult.ok ? 'text-emerald-600' : 'text-rose-600'">
+          <span v-if="embeddingTestResult" class="text-xs" :class="embeddingTestResult.ok ? 'text-ok' : 'text-err'">
             {{ embeddingTestResult.message }}
           </span>
         </div>
@@ -306,19 +331,19 @@
 
       <!-- 3. Baidu PaddleOCR API Settings -->
       <section class="surface p-6">
-        <div class="flex items-center justify-between border-b border-stone-100 pb-4">
+        <div class="flex items-center justify-between border-b border-line pb-4">
           <div class="flex items-center space-x-2">
-            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet/10 text-violet">
               <ScanText class="h-4 w-4" />
             </div>
             <div>
-              <h2 class="text-base font-semibold text-stone-900">百度 PaddleOCR API (PP-OCRv5)</h2>
-              <p class="text-xs text-stone-500">用于扫描版真题与图片讲义的高精度逐页文字识别</p>
+              <h2 class="text-base font-semibold text-ink">百度 PaddleOCR API (PP-OCRv5)</h2>
+              <p class="text-xs text-sub">用于扫描版真题与图片讲义的高精度逐页文字识别</p>
             </div>
           </div>
           <span
             class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
-            :class="credentialsStatus?.baidu_ocr.configured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'"
+            :class="credentialsStatus?.baidu_ocr.configured ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'"
           >
             {{ credentialsStatus?.baidu_ocr.configured ? '已配置' : '待配置' }}
           </span>
@@ -333,7 +358,7 @@
               placeholder="https://aistudio.baidu.com/serving/api/v1/ocr..."
               class="field mt-1"
             />
-            <p class="mt-1 text-[11px] text-stone-400">
+            <p class="mt-1 text-[11px] text-faint">
               请填写完整的 OCR 预测接口 URL。
             </p>
           </div>
@@ -345,7 +370,7 @@
               <button
                 v-if="credentialsStatus?.baidu_ocr.configured"
                 type="button"
-                class="text-[11px] text-rose-600 hover:underline"
+                class="text-[11px] text-err hover:underline"
                 @click="toggleClearOcrToken"
               >
                 {{ clearOcrToken ? '撤销清除' : '清除已存 Token' }}
@@ -358,9 +383,9 @@
                 type="password"
                 autocomplete="off"
                 :placeholder="credentialsStatus?.baidu_ocr.configured ? '已保存 Token (留空表示保持当前 Token 不变)' : '请输入 Authorization Token'"
-                class="block w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-800 placeholder-stone-400 focus:border-brand-500 focus:outline-none"
+                class="block w-full rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder-faint focus:border-accent focus:outline-none"
               />
-              <div v-else class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              <div v-else class="rounded-lg border border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
                 保存后将清除此百度 OCR 的访问令牌。
               </div>
             </div>
@@ -375,10 +400,10 @@
             @click="testOcr"
           >
             <Loader2 v-if="testingOcr" class="h-3.5 w-3.5 animate-spin" />
-            <Sparkles v-else class="h-3.5 w-3.5 text-violet-500" />
+            <Sparkles v-else class="h-3.5 w-3.5 text-violet" />
             <span>{{ testingOcr ? '测试中...' : '测试百度 OCR 识别能力' }}</span>
           </button>
-          <span v-if="ocrTestResult" class="text-xs" :class="ocrTestResult.ok ? 'text-emerald-600' : 'text-rose-600'">
+          <span v-if="ocrTestResult" class="text-xs" :class="ocrTestResult.ok ? 'text-ok' : 'text-err'">
             {{ ocrTestResult.message }}
           </span>
         </div>
@@ -398,10 +423,10 @@
     </form>
 
     <!-- 4. Backup & Restore Section -->
-    <div class="mt-12 border-t border-stone-200 pt-8">
+    <div class="mt-12 border-t border-line pt-8">
       <div class="mb-4">
-        <h2 class="text-lg font-bold text-stone-900">数据备份与恢复</h2>
-        <p class="text-xs text-stone-500">
+        <h2 class="text-lg font-bold text-ink">数据备份与恢复</h2>
+        <p class="text-xs text-sub">
           通过系统文件对话框完整导出或恢复您的学习数据、题目与真题切片。
         </p>
       </div>
@@ -410,15 +435,15 @@
         <!-- Export Card -->
         <div class="surface p-5">
           <div class="flex items-center space-x-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-ok/10 text-ok">
               <Download class="h-5 w-5" />
             </div>
             <div>
-              <h3 class="text-sm font-semibold text-stone-900">导出数据备份</h3>
-              <p class="text-xs text-stone-500">校验哈希并生成压缩归档文件</p>
+              <h3 class="text-sm font-semibold text-ink">导出数据备份</h3>
+              <p class="text-xs text-sub">校验哈希并生成压缩归档文件</p>
             </div>
           </div>
-          <p class="mt-3 text-xs text-stone-600">服务安全停机后完整归档，自动排除系统日志与密钥敏感信息。</p>
+          <p class="mt-3 text-xs text-sub">服务安全停机后完整归档，自动排除系统日志与密钥敏感信息。</p>
           <button
             type="button"
             class="btn btn-secondary btn-sm mt-4 gap-1.5"
@@ -433,20 +458,20 @@
         <!-- Restore Card -->
         <div class="surface p-5">
           <div class="flex items-center space-x-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-warn/10 text-warn">
               <Upload class="h-5 w-5" />
             </div>
             <div>
-              <h3 class="text-sm font-semibold text-stone-900">从备份文件恢复</h3>
-              <p class="text-xs text-stone-500">安全恢复历史资料并保留当前快照</p>
+              <h3 class="text-sm font-semibold text-ink">从备份文件恢复</h3>
+              <p class="text-xs text-sub">安全恢复历史资料并保留当前快照</p>
             </div>
           </div>
-          <p class="mt-3 text-xs text-stone-600">
+          <p class="mt-3 text-xs text-sub">
             恢复前在临时目录自检完整性与模型兼容性，并自动保留恢复前副本。
           </p>
           <button
             type="button"
-            class="btn btn-secondary btn-sm mt-4 gap-1.5 text-amber-700 hover:bg-amber-50"
+            class="btn btn-secondary btn-sm mt-4 gap-1.5 text-warn hover:bg-warn/10"
             :disabled="loading"
             @click="handleRestoreBackup"
           >
@@ -457,8 +482,8 @@
       </div>
 
       <!-- Logs / Diagnostics -->
-      <div class="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-stone-50 p-4">
-        <div class="text-xs text-stone-600">
+      <div class="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-raised p-4">
+        <div class="text-xs text-sub">
           如遇异常需要排查，可在软件内直接查看运行日志并导出诊断包，或使用右下角 Feedback 提交报告。
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -468,7 +493,7 @@
             to="/logs"
             class="btn btn-sm btn-secondary gap-1"
           >
-            <ScrollText class="h-3.5 w-3.5 text-stone-500" />
+            <ScrollText class="h-3.5 w-3.5 text-sub" />
             <span>查看运行日志</span>
           </router-link>
           <button
@@ -476,7 +501,7 @@
             class="btn btn-sm btn-secondary gap-1"
             @click="openLogDirectory"
           >
-            <Folder class="h-3.5 w-3.5 text-stone-500" />
+            <Folder class="h-3.5 w-3.5 text-sub" />
             <span>打开运行日志目录</span>
           </button>
         </div>
@@ -486,7 +511,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, type Component } from 'vue';
 import {
   Bot,
   Network,
@@ -497,10 +522,24 @@ import {
   Upload,
   Folder,
   Loader2,
+  Monitor,
+  Moon,
   RefreshCw,
   ScrollText,
+  Sun,
 } from 'lucide-vue-next';
 import { useDesktop } from '../composables/useDesktop';
+import { useTheme, type ThemePreference } from '../composables/useTheme';
+
+const theme = useTheme();
+const themeOptions: Array<{ value: ThemePreference; label: string; icon: Component }> = [
+  { value: 'system', label: '跟随系统', icon: Monitor },
+  { value: 'light', label: '浅色', icon: Sun },
+  { value: 'dark', label: '深色', icon: Moon },
+];
+const chooseTheme = (value: ThemePreference) => {
+  void theme.setPreference(value);
+};
 
 const {
   isDesktop,

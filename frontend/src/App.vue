@@ -1,6 +1,7 @@
 <template>
-  <div class="min-h-screen bg-stone-50 flex flex-col">
+  <div class="min-h-screen bg-page flex flex-col">
     <Navbar v-if="showShell" />
+    <LogNavNotice v-if="showShell" />
 
     <main class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
       <router-view :key="sessionKey" />
@@ -9,7 +10,7 @@
     <!-- Global Task Drawer -->
     <TaskDrawer v-if="showShell" />
 
-    <footer v-if="showShell" class="bg-white border-t border-stone-200 py-4 text-center text-xs text-stone-400">
+    <footer v-if="showShell" class="bg-surface border-t border-line py-4 text-center text-xs text-faint">
       <div class="max-w-7xl mx-auto px-4 flex flex-wrap items-center justify-between gap-2">
         <span>考研专业课备考助手</span>
         <span>教材切片依据追溯 · 考查频次统计 · 规范答题框架</span>
@@ -28,11 +29,13 @@
 
 <script setup lang="ts">
 import Navbar from './components/Navbar.vue';
+import LogNavNotice from './components/LogNavNotice.vue';
 import TaskDrawer from './components/TaskDrawer.vue';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from './composables/useAuth';
 import { useFeedbackWidget } from './composables/useFeedbackWidget';
+import { useTheme } from './composables/useTheme';
 
 const route = useRoute();
 const router = useRouter();
@@ -56,10 +59,12 @@ const feedbackEnabled = computed(() => auth.ready.value && showShell.value);
 const feedbackInstanceKey = computed(() => `${auth.user.value?.id ?? 'anonymous'}:${auth.sessionEpoch.value}`);
 
 const feedbackHost = ref<HTMLElement | null>(null);
+const theme = useTheme();
 const { configured: feedbackConfigured } = useFeedbackWidget({
   container: feedbackHost,
   enabled: feedbackEnabled,
   instanceKey: feedbackInstanceKey,
   pageLabel,
+  theme: theme.effective,
 });
 </script>

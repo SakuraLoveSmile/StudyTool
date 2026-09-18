@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, session } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -18,6 +18,7 @@ import {
   DiagnosticsLogger,
   getDiagnostics,
   initDiagnostics,
+  scrubString,
   type LogLevel,
 } from './diagnostics';
 import { writeArchiveAtomically } from './diagnostic-export';
@@ -26,6 +27,14 @@ import {
   classifyConnectionTestTransportFailure,
   normalizeConnectionTestResult,
 } from './connection-test';
+import {
+  ThemePreferenceStore,
+  normalizeThemePreference,
+  resolveEffectiveTheme,
+  windowBackgroundFor,
+  type ThemePayload,
+  type ThemePreference,
+} from './theme-prefs';
 
 const PORT = 18764;
 const HOST = '127.0.0.1';
@@ -200,6 +209,9 @@ if (!gotTheLock) {
 // 2. Generate random 32-byte instance token for this launch
 const instanceToken = crypto.randomBytes(32).toString('hex');
 const credentialsStore = new CredentialsStore();
+/** 外观偏好独立成文件，不与模型密钥/学习数据混存（T3）。 */
+const themeStore = new ThemePreferenceStore();
+let themePreference: ThemePreference = 'system';
 backendManager = new BackendManager(PORT, HOST, instanceToken, credentialsStore, app.isPackaged, {
   onEvent: (event, level, message, fields) => {
     // Resolved lazily: the logger is initialized immediately after this and the hook is
@@ -271,6 +283,21 @@ function diagError(event: string, message: string, fields: Record<string, unknow
 
 function currentLogDir(): string {
   return getDiagnostics()?.getLogDir() || backendManager!.getLogDir();
+}
+
+function currentThemePayload(): ThemePayload {
+  return { preference: themePreference, effective: resolveEffectiveTheme(themePreference) };
+}
+
+/**
+ * 主题变更广播：网页只消费主进程结论；窗口背景同步刷新，保证 resize 露出的底色不闪白。
+ * 未挂窗口时静默跳过（preload 首次拉取仍走 theme-sync 通道）。
+ */
+function publishTheme(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(windowBackgroundFor(themePreference));
+    mainWindow.webContents.send('desktop:theme-changed', currentThemePayload());
+  }
 }
 
 /**
@@ -800,6 +827,8 @@ async function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: '专业课备考助手',
+    // 与实际主题一致的预渲染底色：深色模式下冷启动不闪白。
+    backgroundColor: windowBackgroundFor(themePreference),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       sandbox: true,
@@ -875,6 +904,13 @@ app.whenReady().then(async () => {
   diagInfo('startup.app.ready', '桌面主进程就绪，开始启动流程', {
     app_version: app.getVersion(),
   });
+
+  // 外观偏好必须在窗口创建前生效：nativeTheme 是原生标题栏/系统对话框与
+  // prefers-color-scheme 的共同真源，窗口底色也按同一结论预设。
+  themePreference = themeStore.load();
+  nativeTheme.themeSource = themePreference;
+  // 系统主题翻转时广播最新结论（偏好为 system 时渲染端据此切换实际主题）。
+  nativeTheme.on('updated', publishTheme);
 
   // Setup session filter: inject instance token ONLY into local backend requests from mainWindow
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
@@ -1394,6 +1430,64 @@ function setupIpcHandlers() {
   ipcMain.handle('desktop:exportDiagnostics', async (event, params: unknown) => {
     validateIpcSender(event);
     return exportDiagnostics(normalizeRange(params));
+  });
+
+  // Feedback attachment collection. The renderer cannot pick paths, ranges or
+  // filenames: the main process supplies the log dir, this launch's session id
+  // and the frozen 30-minute window, and the worker answers with the frozen
+  // FeedbackLogsResult contract verbatim.
+  ipcMain.handle('desktop:getFeedbackLogs', async (event) => {
+    validateIpcSender(event);
+    const outcome = await logWorkers.feedback(nextRequestId('fb'), {
+      dir: currentLogDir(),
+      sessionId: SESSION_ID,
+      appVersion: app.getVersion(),
+      now: Date.now(),
+    });
+    if (!outcome.ok) {
+      if (outcome.error.code !== 'LOG_FEEDBACK_CANCELED') {
+        diagWarn('diagnostics.feedback.failed', '反馈日志采集失败', {
+          code: outcome.error.code,
+          error_message: outcome.error.message,
+          duration_ms: outcome.error.elapsedMs,
+        });
+      }
+      // scrubString collapses absolute/home paths to <path>: a worker crash message
+      // can carry the unpacked module path, which must never reach the renderer.
+      return { ok: false, code: outcome.error.code, message: scrubString(outcome.error.message) };
+    }
+    return outcome.value;
+  });
+
+  // --- Appearance (restricted IPC) -----------------------------------------------------
+  // 偏好唯一存放在主进程文件；网页端不读不写本地存储，避免两处真源互相覆盖。
+  // theme-sync 是同步通道：preload 必须在首帧前拿到结论，sendSync 是唯一不闪白的途径。
+  ipcMain.on('desktop:theme-sync', (event) => {
+    try {
+      validateIpcSender(event as unknown as Electron.IpcMainInvokeEvent);
+      event.returnValue = currentThemePayload();
+    } catch {
+      event.returnValue = { preference: 'system', effective: resolveEffectiveTheme('system') };
+    }
+  });
+
+  ipcMain.handle('desktop:getThemePreference', (event) => {
+    validateIpcSender(event);
+    return currentThemePayload();
+  });
+
+  ipcMain.handle('desktop:setThemePreference', (event, raw: unknown) => {
+    validateIpcSender(event);
+    const next = normalizeThemePreference(raw);
+    try {
+      themeStore.save(next);
+    } catch (err: any) {
+      return { ok: false, message: err?.message || '外观偏好保存失败', ...currentThemePayload() };
+    }
+    themePreference = next;
+    nativeTheme.themeSource = next;
+    publishTheme();
+    return { ok: true, ...currentThemePayload() };
   });
 }
 

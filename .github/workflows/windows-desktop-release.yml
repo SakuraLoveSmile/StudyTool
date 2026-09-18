@@ -10,6 +10,11 @@ on:
         description: 'desktop/package.json version to build (for example 1.0.0)'
         required: true
         type: string
+      publish:
+        description: 'Publish files to the StudyTool-Releases repo (set false for beta/candidate builds)'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -22,7 +27,7 @@ env:
   # These two values MUST stay identical to the release constants in
   # desktop/scripts/build-release.py, which re-validates and re-injects them.
   VITE_FEEDBACK_API_BASE: "https://feedback.xn--fhqths51enha.cn"
-  VITE_FEEDBACK_APP_ID: "rag"
+  VITE_FEEDBACK_APP_ID: "studytool"
 
 jobs:
   build-and-publish:
@@ -76,7 +81,7 @@ jobs:
           # Cheap pre-flight gate: a misconfigured release must fail in seconds, before
           # dependency install and packaging, not silently ship without the feedback entry.
           $expectedApiBase = 'https://feedback.xn--fhqths51enha.cn'
-          $expectedAppId = 'rag'
+          $expectedAppId = 'studytool'
           if ([string]::IsNullOrWhiteSpace($env:FEEDBACK_API_BASE)) {
             throw 'Missing VITE_FEEDBACK_API_BASE: the release must inject the feedback API base explicitly (frontend/.env.local is git-ignored and never available in CI).'
           }
@@ -129,6 +134,7 @@ jobs:
             desktop/release/SHA256SUMS.txt
 
       - name: Verify release publishing credential
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.publish == 'true' }}
         shell: pwsh
         env:
           RELEASE_REPO_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
@@ -138,6 +144,7 @@ jobs:
           }
 
       - name: Publish release files
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.publish == 'true' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}

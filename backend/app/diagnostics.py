@@ -176,6 +176,8 @@ LOG_FIELD_WHITELIST = frozenset({
     # generic counters used by call sites
     "bytes", "entries", "count", "total", "ok", "version", "truncated", "note",
     "action", "operation", "route", "target", "kind", "tags",
+    # log-navigation diagnostics (mirror of desktop FIELD_WHITELIST)
+    "nav_id", "trigger", "to_name", "elapsed_ms",
 })
 
 # Attributes that belong to logging.LogRecord itself; they must never be copied into the

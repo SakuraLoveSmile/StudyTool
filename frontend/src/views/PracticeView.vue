@@ -2,12 +2,12 @@
   <div class="page-stack">
     <!-- Header & Generator Controls -->
     <div class="surface p-5 space-y-4">
-      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-stone-100 pb-4">
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-line pb-4">
         <div>
-          <h2 class="font-display text-base sm:text-lg font-bold text-stone-900 tracking-tight">
+          <h2 class="font-display text-base sm:text-lg font-bold text-ink tracking-tight">
             真题风格模拟练习与多维度智能批改
           </h2>
-          <p class="text-xs text-stone-500 mt-0.5">
+          <p class="text-xs text-sub mt-0.5">
             AI 仿照真题出题（标记为模拟题，不计入真题统计） · 作答前隐藏标准答案 · 逐项覆盖诊断 · 概念纠错
           </p>
         </div>
@@ -84,11 +84,11 @@
           <span class="px-2 py-0.5 rounded bg-purple-100 text-purple-800 font-bold text-xs">
             模拟试卷
           </span>
-          <span class="font-bold text-stone-800">考点：{{ currentSession.knowledge_point_name }}</span>
-          <span class="text-stone-300">·</span>
-          <span class="text-stone-500">难度：{{ currentSession.difficulty === 'basic' ? '基础概念' : '综合应用' }}</span>
-          <span class="text-stone-300">·</span>
-          <span class="text-stone-500">题量：{{ currentSession.questions.length }} 道</span>
+          <span class="font-bold text-ink">考点：{{ currentSession.knowledge_point_name }}</span>
+          <span class="text-faint">·</span>
+          <span class="text-sub">难度：{{ currentSession.difficulty === 'basic' ? '基础概念' : '综合应用' }}</span>
+          <span class="text-faint">·</span>
+          <span class="text-sub">题量：{{ currentSession.questions.length }} 道</span>
         </div>
 
         <button
@@ -110,10 +110,10 @@
       >
         <!-- Question Stem -->
         <div class="flex items-start gap-3">
-          <span class="px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-bold text-xs shrink-0 mt-0.5">
+          <span class="px-2 py-0.5 rounded bg-accent/10 text-accent font-bold text-xs shrink-0 mt-0.5">
             第 {{ idx + 1 }} 题
           </span>
-          <p class="reading-content font-semibold text-stone-900 leading-relaxed">
+          <p class="reading-content font-semibold text-ink leading-relaxed">
             {{ q.stem }}
           </p>
         </div>
@@ -126,40 +126,40 @@
             @input="saveDraft"
             rows="6"
             placeholder="根据专业课规范，分点论述核心概念定义、主要特征要素、运行机制及适用条件..."
-            class="field font-mono text-xs sm:text-sm p-3.5 leading-relaxed bg-stone-50/40"
+            class="field font-mono text-xs sm:text-sm p-3.5 leading-relaxed bg-raised/40"
           />
         </div>
 
         <!-- Evaluation Diagnosis (After Submission) -->
-        <div v-else class="space-y-4 pt-3 border-t border-stone-100">
+        <div v-else class="space-y-4 pt-3 border-t border-line">
           <!-- Student's submitted text -->
-          <div class="bg-stone-50 p-4 rounded-xl border border-stone-200 text-xs sm:text-sm">
-            <span class="font-semibold text-stone-700 block mb-1">考生作答内容：</span>
-            <p class="text-stone-700 whitespace-pre-wrap leading-relaxed">{{ getStudentAnswer(q.question_id) || '[考生未作答]' }}</p>
+          <div class="bg-raised p-4 rounded-xl border border-line text-xs sm:text-sm">
+            <span class="font-semibold text-ink block mb-1">考生作答内容：</span>
+            <p class="text-ink whitespace-pre-wrap leading-relaxed">{{ getStudentAnswer(q.question_id) || '[考生未作答]' }}</p>
           </div>
 
           <!-- Evaluation Diagnosis for this question -->
           <div v-if="getQuestionEval(q.question_id)" class="space-y-3.5">
             <!-- Score & Rubric Banner -->
-            <div class="surface p-4 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm bg-stone-50/70">
+            <div class="surface p-4 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm bg-raised/70">
               <div class="flex items-center gap-2">
-                <span class="font-bold text-stone-700">参考估分：</span>
-                <span v-if="getQuestionEval(q.question_id)?.score_estimate !== null" class="text-base font-bold text-brand-700">
+                <span class="font-bold text-ink">参考估分：</span>
+                <span v-if="getQuestionEval(q.question_id)?.score_estimate !== null" class="text-base font-bold text-accent">
                   {{ getQuestionEval(q.question_id)?.score_estimate }} / {{ getQuestionEval(q.question_id)?.max_score || 10 }} 分
                 </span>
-                <span v-else class="text-stone-400 italic text-xs">
+                <span v-else class="text-faint italic text-xs">
                   [按要点覆盖评定，不虚构考试分数]
                 </span>
               </div>
-              <span class="text-xs text-stone-500">
+              <span class="text-xs text-sub">
                 {{ getQuestionEval(q.question_id)?.score_basis }}
               </span>
             </div>
 
             <!-- Itemized Rubric Checklist -->
             <div class="space-y-2">
-              <h4 class="text-xs font-bold text-stone-700 flex items-center gap-1.5">
-                <CheckSquare class="w-4 h-4 text-brand-600" />
+              <h4 class="text-xs font-bold text-ink flex items-center gap-1.5">
+                <CheckSquare class="w-4 h-4 text-accent" />
                 得分要点逐项核对（同义表达均予认定）：
               </h4>
 
@@ -171,13 +171,13 @@
                   :class="coverageItemStyle(kpCov.status)"
                 >
                   <div class="flex items-center justify-between font-semibold">
-                    <span class="text-stone-800">要点 {{ cIdx + 1 }}: {{ kpCov.point }}</span>
+                    <span class="text-ink">要点 {{ cIdx + 1 }}: {{ kpCov.point }}</span>
                     <span class="px-2 py-0.5 rounded text-[11px] font-bold" :class="coverageBadgeStyle(kpCov.status)">
                       {{ formatCoverageStatus(kpCov.status) }}
                     </span>
                   </div>
-                  <p class="text-stone-600 leading-relaxed">{{ kpCov.detail }}</p>
-                  <span class="text-xs text-stone-400 block">依据: {{ kpCov.basis }}</span>
+                  <p class="text-sub leading-relaxed">{{ kpCov.detail }}</p>
+                  <span class="text-xs text-faint block">依据: {{ kpCov.basis }}</span>
                 </div>
               </div>
             </div>
@@ -185,13 +185,13 @@
             <!-- Conceptual Errors & Ungrounded Warnings -->
             <div
               v-if="getQuestionEval(q.question_id)?.conceptual_errors?.length"
-              class="bg-rose-50 border border-rose-200 rounded-xl p-3.5 text-xs sm:text-sm text-rose-800 space-y-1.5"
+              class="bg-err/10 border border-err/30 rounded-xl p-3.5 text-xs sm:text-sm text-err space-y-1.5"
             >
               <span class="font-bold flex items-center gap-1.5">
-                <AlertCircle class="w-4 h-4 text-rose-600" />
+                <AlertCircle class="w-4 h-4 text-err" />
                 概念错误与混淆预警：
               </span>
-              <ul class="list-disc list-inside space-y-0.5 text-rose-700 pl-1">
+              <ul class="list-disc list-inside space-y-0.5 text-err pl-1">
                 <li v-for="(err, eIdx) in getQuestionEval(q.question_id)?.conceptual_errors" :key="eIdx">
                   {{ err }}
                 </li>
@@ -200,13 +200,13 @@
 
             <div
               v-if="getQuestionEval(q.question_id)?.ungrounded_claims?.length"
-              class="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs sm:text-sm text-amber-800 space-y-1.5"
+              class="bg-warn/10 border border-warn/30 rounded-xl p-3.5 text-xs sm:text-sm text-warn space-y-1.5"
             >
               <span class="font-bold flex items-center gap-1.5">
-                <AlertTriangle class="w-4 h-4 text-amber-600" />
+                <AlertTriangle class="w-4 h-4 text-warn" />
                 无理论依据的表述：
               </span>
-              <ul class="list-disc list-inside space-y-0.5 text-amber-700 pl-1">
+              <ul class="list-disc list-inside space-y-0.5 text-warn pl-1">
                 <li v-for="(claim, cIdx) in getQuestionEval(q.question_id)?.ungrounded_claims" :key="cIdx">
                   {{ claim }}
                 </li>
@@ -214,15 +214,15 @@
             </div>
 
             <!-- Expression Rewrite Advice -->
-            <div class="bg-brand-50/40 border border-brand-100 rounded-xl p-4 text-xs sm:text-sm text-brand-900 space-y-1">
-              <span class="font-bold block text-brand-950">高分规范答题改写建议：</span>
-              <p class="text-brand-900 leading-relaxed whitespace-pre-wrap">{{ getQuestionEval(q.question_id)?.expression_rewrite }}</p>
+            <div class="bg-accent/10 border border-accent/20 rounded-xl p-4 text-xs sm:text-sm text-accent space-y-1">
+              <span class="font-bold block text-accent">高分规范答题改写建议：</span>
+              <p class="text-accent leading-relaxed whitespace-pre-wrap">{{ getQuestionEval(q.question_id)?.expression_rewrite }}</p>
             </div>
 
             <!-- Standard Reference Answer (Revealed after submission) -->
-            <div class="surface p-4 space-y-1 bg-stone-50/50">
-              <span class="font-bold text-stone-700 block">参考标准答案：</span>
-              <p class="text-stone-700 whitespace-pre-wrap leading-relaxed">{{ q.reference_answer }}</p>
+            <div class="surface p-4 space-y-1 bg-raised/50">
+              <span class="font-bold text-ink block">参考标准答案：</span>
+              <p class="text-ink whitespace-pre-wrap leading-relaxed">{{ q.reference_answer }}</p>
             </div>
           </div>
         </div>
@@ -255,18 +255,18 @@
         >
           <div>
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="font-bold text-stone-800 text-sm sm:text-base">{{ sess.knowledge_point_name }}</span>
-              <span class="px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-medium text-xs">
+              <span class="font-bold text-ink text-sm sm:text-base">{{ sess.knowledge_point_name }}</span>
+              <span class="px-2 py-0.5 rounded bg-accent/10 text-accent font-medium text-xs">
                 {{ sess.question_count }} 题 ({{ sess.difficulty === 'basic' ? '基础' : '综合' }})
               </span>
               <span
                 class="px-2 py-0.5 rounded text-xs font-semibold"
-                :class="sess.evaluation ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
+                :class="sess.evaluation ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'"
               >
                 {{ sess.evaluation ? '已完成批改' : '待作答' }}
               </span>
             </div>
-            <p class="text-stone-400 text-xs mt-1">创建时间: {{ formatDate(sess.created_at) }}</p>
+            <p class="text-faint text-xs mt-1">创建时间: {{ formatDate(sess.created_at) }}</p>
           </div>
 
           <div class="flex items-center gap-2 self-end sm:self-center">
@@ -296,9 +296,9 @@
       max-width="sm"
       @close="showBlankConfirm = false"
     >
-      <div class="space-y-2 text-sm text-stone-600">
+      <div class="space-y-2 text-sm text-sub">
         <p>检测到部分或全部题目作答为空。确认直接提交进行批改诊断吗？</p>
-        <p class="text-xs text-stone-400">
+        <p class="text-xs text-faint">
           未作答的题目将被判定为缺失，系统将展示该题的标准答案与答题框架。
         </p>
       </div>
@@ -454,15 +454,15 @@ const getQuestionEval = (qid: string): QuestionEvaluation | undefined => {
 };
 
 const coverageItemStyle = (status: string) => {
-  if (status === 'COVERED') return 'bg-emerald-50/40 border-emerald-200';
-  if (status === 'PARTIALLY_COVERED') return 'bg-amber-50/40 border-amber-200';
-  return 'bg-rose-50/40 border-rose-200';
+  if (status === 'COVERED') return 'bg-ok/10 border-ok/30';
+  if (status === 'PARTIALLY_COVERED') return 'bg-warn/10 border-warn/30';
+  return 'bg-err/10 border-err/30';
 };
 
 const coverageBadgeStyle = (status: string) => {
-  if (status === 'COVERED') return 'bg-emerald-100 text-emerald-800';
-  if (status === 'PARTIALLY_COVERED') return 'bg-amber-100 text-amber-800';
-  return 'bg-rose-100 text-rose-800';
+  if (status === 'COVERED') return 'bg-ok/15 text-ok';
+  if (status === 'PARTIALLY_COVERED') return 'bg-warn/15 text-warn';
+  return 'bg-err/15 text-err';
 };
 
 const formatCoverageStatus = (status: string) => {
