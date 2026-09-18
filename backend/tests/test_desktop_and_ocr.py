@@ -1,14 +1,16 @@
 import asyncio
 import base64
+import contextlib
 import json
 import sqlite3
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import app.services.parser.ocr_service as ocr_module
 from app.config import settings
 from app.database import db_session, init_db
 from app.desktop import (
@@ -17,6 +19,7 @@ from app.desktop import (
     has_existing_embeddings,
 )
 from app.main import app
+from app.services.http_client import GlobalRateLimiter, HttpClientProvider
 from app.services.parser.ocr_service import (
     OCRQuotaExhaustedError,
     OCRService,
@@ -156,92 +159,165 @@ def test_embedding_lock_when_vectors_exist(isolated_desktop_env):
     assert "禁止修改 Embedding API 地址" in res_change_url.json()["detail"]
 
 
-@pytest.mark.asyncio
-async def test_baidu_paddleocr_api_success(monkeypatch):
+# ---------------------------------------------------------------------------
+# Baidu PP-OCRv6 asynchronous jobs API (/api/v2/ocr/jobs).
+# These tests replace the removed v1 synchronous protocol coverage
+# (test_baidu_paddleocr_api_success / _429_quota_exhausted / _403_no_retry /
+#  _malformed_and_retries).
+# ---------------------------------------------------------------------------
+
+OCR_JOBS_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
+OCR_JOB_ID = "5a1b2c3d4e5f6071"
+OCR_JSONL_URL = "https://ocr-result.example.com/out/result.jsonl?X-Amz-Signature=abc123"
+OCR_RESULT_TOKEN = "mock-token-xyz"
+
+
+def _jobs_config(monkeypatch, url=OCR_JOBS_URL, token=OCR_RESULT_TOKEN):
     monkeypatch.setattr(settings, "OCR_MODE", "paddleocr_api")
-    monkeypatch.setattr(settings, "BAIDU_OCR_API_URL", "https://aistudio.baidu.com/serving/api/v1/ocr")
-    monkeypatch.setattr(settings, "BAIDU_OCR_TOKEN", "mock-token-xyz")
+    monkeypatch.setattr(settings, "BAIDU_OCR_API_URL", url)
+    monkeypatch.setattr(settings, "BAIDU_OCR_TOKEN", token)
 
-    sample_response = {
-        "errorCode": 0,
-        "errorMsg": "success",
-        "result": {
-            "ocrResults": [
-                {
-                    "prunedResult": {
-                        "rec_texts": ["第一章 专业课导论", "1.1 基本概念与考点解析"]
-                    }
-                }
-            ]
-        },
-    }
 
-    captured_request = {}
+def _jsonl_lines(*lines) -> str:
+    """Each line is a list of per-page recognized-text lists."""
+    return "\n".join(
+        json.dumps({"result": {"ocrResults": [
+            {"prunedResult": {"rec_texts": list(page)}} for page in pages
+        ]}}, ensure_ascii=False)
+        for pages in lines
+    )
 
-    def mock_handler(request: httpx.Request):
-        captured_request["url"] = str(request.url)
-        captured_request["auth"] = request.headers.get("Authorization")
-        captured_request["content_type"] = request.headers.get("Content-Type")
-        body = json.loads(request.read())
-        captured_request["fileType"] = body.get("fileType")
-        captured_request["visualize"] = body.get("visualize")
-        return httpx.Response(200, json=sample_response)
 
-    transport = httpx.MockTransport(mock_handler)
-    mock_client = httpx.AsyncClient(transport=transport)
+@contextlib.contextmanager
+def _jobs_client(monkeypatch, handler):
+    """Installs a MockTransport-backed shared client and yields observed requests."""
+    requests = []
 
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=mock_client):
-        text = await OCRService.extract_text_from_image_bytes(b"dummy_image_data", "png")
+    def recording(request):
+        requests.append(request)
+        return handler(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(recording))
+    monkeypatch.setattr(HttpClientProvider, "get_client", lambda: client)
+    yield requests
+
+
+@contextlib.contextmanager
+def _no_wait(monkeypatch):
+    """Removes poll/retry wall-clock waits while recording the requested delays."""
+    delays = []
+
+    async def _sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(ocr_module.asyncio, "sleep", _sleep)
+    yield delays
+
+
+def _jobs_handler(*, submit=None, poll=None, download=None):
+    submit = submit or (lambda r: httpx.Response(200, json={"code": 0, "data": {"jobId": OCR_JOB_ID}}))
+    poll = poll or (lambda r: httpx.Response(200, json={"code": 0, "data": {
+        "state": "done", "resultUrl": {"jsonUrl": OCR_JSONL_URL}}}))
+    download = download or (lambda r: httpx.Response(200, text=_jsonl_lines([["默认文字"]])))
+
+    def handler(request):
+        if request.method == "POST":
+            return submit(request)
+        url = str(request.url)
+        if url == OCR_JSONL_URL:
+            return download(request)
+        if url == f"{OCR_JOBS_URL}/{OCR_JOB_ID}":
+            return poll(request)
+        raise AssertionError(f"unexpected request: {request.method} {url}")
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_baidu_paddleocr_jobs_success_flow(monkeypatch):
+    """Normal jobs flow: multipart submit → poll → token-less JSONL download."""
+    _jobs_config(monkeypatch)
+
+    def handler(request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"code": 0, "data": {"jobId": OCR_JOB_ID}})
+        url = str(request.url)
+        if url == f"{OCR_JOBS_URL}/{OCR_JOB_ID}":
+            return httpx.Response(200, json={"code": 0, "data": {
+                "state": "done", "resultUrl": {"jsonUrl": OCR_JSONL_URL}}})
+        if url == OCR_JSONL_URL:
+            return httpx.Response(200, text=_jsonl_lines(
+                [["第一章 专业课导论", "1.1 基本概念与考点解析"]]
+            ))
+        raise AssertionError(f"unexpected request: {url}")
+
+    with _no_wait(monkeypatch) as delays:
+        with _jobs_client(monkeypatch, handler) as requests:
+            text = await OCRService.extract_text_from_image_bytes(b"dummy_image_data", "png")
 
     assert text == "第一章 专业课导论\n1.1 基本概念与考点解析"
-    assert captured_request["url"] == "https://aistudio.baidu.com/serving/api/v1/ocr"
-    assert captured_request["auth"] == "token mock-token-xyz"
-    assert captured_request["content_type"] == "application/json"
-    assert captured_request["fileType"] == 1
-    assert captured_request["visualize"] is False
+    submit, poll, download = requests[0], requests[1], requests[2]
+
+    assert submit.method == "POST"
+    assert str(submit.url) == OCR_JOBS_URL
+    assert submit.headers["Authorization"] == f"Bearer {OCR_RESULT_TOKEN}"
+    assert submit.headers["Content-Type"].startswith("multipart/form-data")
+    body = submit.read()
+    assert b"PP-OCRv6" in body
+    assert b'name="optionalPayload"' in body
+    assert b'"useDocOrientationClassify": false' in body
+    assert b'"useDocUnwarping": false' in body
+    assert b'"useTextlineOrientation": false' in body
+    assert b'"visualize": false' in body
+    assert b"dummy_image_data" in body
+
+    assert poll.method == "GET"
+    assert str(poll.url) == f"{OCR_JOBS_URL}/{OCR_JOB_ID}"
+    assert poll.headers["Authorization"] == f"Bearer {OCR_RESULT_TOKEN}"
+
+    assert str(download.url) == OCR_JSONL_URL
+    assert "Authorization" not in download.headers
+    assert delays == []
 
 
 @pytest.mark.asyncio
-async def test_baidu_paddleocr_api_429_quota_exhausted(monkeypatch):
-    monkeypatch.setattr(settings, "OCR_MODE", "paddleocr_api")
-    monkeypatch.setattr(settings, "BAIDU_OCR_API_URL", "https://aistudio.baidu.com/serving/api/v1/ocr")
-    monkeypatch.setattr(settings, "BAIDU_OCR_TOKEN", "mock-token-xyz")
-
-    def mock_handler(request: httpx.Request):
-        return httpx.Response(429, json={"errorMsg": "Daily quota exceeded"})
-
-    transport = httpx.MockTransport(mock_handler)
-    mock_client = httpx.AsyncClient(transport=transport)
-
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=mock_client):
-        with pytest.raises(OCRQuotaExhaustedError) as exc_info:
-            await OCRService.extract_text_from_image_bytes(b"dummy_image_data", "png")
-
-    assert "额度耗尽" in str(exc_info.value) or "HTTP 429" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_baidu_paddleocr_api_403_no_retry(monkeypatch):
-    monkeypatch.setattr(settings, "OCR_MODE", "paddleocr_api")
-    monkeypatch.setattr(settings, "BAIDU_OCR_API_URL", "https://aistudio.baidu.com/serving/api/v1/ocr")
-    monkeypatch.setattr(settings, "BAIDU_OCR_TOKEN", "mock-token-xyz")
-
+async def test_baidu_paddleocr_jobs_429_quota_exhausted(monkeypatch):
+    _jobs_config(monkeypatch)
     attempts = 0
 
-    def mock_handler(request: httpx.Request):
+    def mock_handler(request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429, json={"msg": "Daily quota exceeded"})
+
+    with _no_wait(monkeypatch) as delays:
+        with _jobs_client(monkeypatch, mock_handler):
+            with pytest.raises(OCRQuotaExhaustedError) as exc_info:
+                await OCRService.extract_text_from_image_bytes(b"dummy_image_data", "png")
+
+    assert "429" in str(exc_info.value)
+    assert attempts == 1  # quota exhaustion is never retried
+    assert delays == []
+
+
+@pytest.mark.asyncio
+async def test_baidu_paddleocr_jobs_submit_failure_is_not_retried(monkeypatch):
+    """A retried submit would create duplicate jobs: the POST is sent exactly once."""
+    _jobs_config(monkeypatch)
+    attempts = 0
+
+    def mock_handler(request):
         nonlocal attempts
         attempts += 1
         return httpx.Response(403, text="Invalid token")
 
-    transport = httpx.MockTransport(mock_handler)
-    mock_client = httpx.AsyncClient(transport=transport)
+    with _no_wait(monkeypatch) as delays:
+        with _jobs_client(monkeypatch, mock_handler):
+            with pytest.raises(OCRServiceError):
+                await OCRService.extract_text_from_image_bytes(b"dummy_image_data", "png")
 
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=mock_client):
-        with pytest.raises(OCRServiceError):
-            await OCRService.extract_text_from_image_bytes(b"dummy_image_data", "png")
-
-    # 403 must NOT be retried (exactly 1 attempt)
     assert attempts == 1
+    assert delays == []
 
 
 def test_backup_and_restore_cycle(isolated_desktop_env, tmp_path):
@@ -377,61 +453,167 @@ def test_restore_rejects_mismatched_embedding_model(isolated_desktop_env, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_baidu_paddleocr_api_malformed_and_retries(monkeypatch):
-    monkeypatch.setattr(settings, "OCR_MODE", "paddleocr_api")
-    monkeypatch.setattr(settings, "BAIDU_OCR_API_URL", "https://aistudio.baidu.com/serving/api/v1/ocr")
-    monkeypatch.setattr(settings, "BAIDU_OCR_TOKEN", "mock-token")
+async def test_baidu_paddleocr_jobs_failed_and_unknown_states(monkeypatch):
+    _jobs_config(monkeypatch)
 
-    # Case 1: missing errorCode
-    def handler_missing_err(req):
-        return httpx.Response(200, json={"result": {"ocrResults": [{"prunedResult": {"rec_texts": ["hello"]}}]}})
+    failed_poll = lambda r: httpx.Response(200, json={"code": 0, "data": {
+        "state": "failed", "errorMsg": "模型执行失败"}})
+    with _no_wait(monkeypatch):
+        with _jobs_client(monkeypatch, _jobs_handler(poll=failed_poll)) as requests:
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+    assert "任务执行失败" in str(exc.value)
+    assert not any(str(r.url) == OCR_JSONL_URL for r in requests)  # nothing downloaded
 
-    transport = httpx.MockTransport(handler_missing_err)
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=httpx.AsyncClient(transport=transport)):
-        with pytest.raises(OCRServiceError) as exc:
-            await OCRService.extract_text_from_image_bytes(b"img", "png")
-        assert "缺少 errorCode 字段" in str(exc.value)
+    unknown_poll = lambda r: httpx.Response(200, json={"code": 0, "data": {"state": "queued"}})
+    with _no_wait(monkeypatch):
+        with _jobs_client(monkeypatch, _jobs_handler(poll=unknown_poll)):
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+    assert "状态异常" in str(exc.value)
 
-    # Case 2: non-zero errorCode
-    def handler_nonzero_err(req):
-        return httpx.Response(200, json={"errorCode": 1001, "errorMsg": "参数非法"})
 
-    transport = httpx.MockTransport(handler_nonzero_err)
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=httpx.AsyncClient(transport=transport)):
-        with pytest.raises(OCRServiceError) as exc:
-            await OCRService.extract_text_from_image_bytes(b"img", "png")
-        assert "参数非法" in str(exc.value)
+@pytest.mark.asyncio
+async def test_baidu_paddleocr_jobs_missing_contract_fields(monkeypatch):
+    _jobs_config(monkeypatch)
 
-    # Case 3: ocrResults length is 2 (must be exactly 1 for single image)
-    def handler_multipage(req):
-        return httpx.Response(200, json={"errorCode": 0, "result": {"ocrResults": [{}, {}]}})
+    # Missing jobId in the submit response
+    no_job_id = lambda r: httpx.Response(200, json={"code": 0, "data": {"state": "pending"}})
+    with _no_wait(monkeypatch):
+        with _jobs_client(monkeypatch, _jobs_handler(submit=no_job_id)) as requests:
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+    assert "缺少 jobId" in str(exc.value)
+    assert len(requests) == 1
 
-    transport = httpx.MockTransport(handler_multipage)
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=httpx.AsyncClient(transport=transport)):
-        with pytest.raises(OCRServiceError) as exc:
-            await OCRService.extract_text_from_image_bytes(b"img", "png")
-        assert "单页识别结果数量异常" in str(exc.value)
+    # state=done without resultUrl.jsonUrl
+    no_json_url = lambda r: httpx.Response(200, json={"code": 0, "data": {"state": "done"}})
+    with _no_wait(monkeypatch):
+        with _jobs_client(monkeypatch, _jobs_handler(poll=no_json_url)):
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+    assert "缺少 resultUrl.jsonUrl" in str(exc.value)
 
-    # Case 4: rec_texts containing non-string
-    def handler_nonstring(req):
-        return httpx.Response(200, json={"errorCode": 0, "result": {"ocrResults": [{"prunedResult": {"rec_texts": [123, True]}}]}})
 
-    transport = httpx.MockTransport(handler_nonstring)
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=httpx.AsyncClient(transport=transport)):
-        with pytest.raises(OCRServiceError) as exc:
-            await OCRService.extract_text_from_image_bytes(b"img", "png")
-        assert "包含非字符串元素" in str(exc.value)
+@pytest.mark.asyncio
+async def test_baidu_paddleocr_jobs_malformed_jsonl_and_empty_text(monkeypatch):
+    _jobs_config(monkeypatch)
 
-    # Case 5: 500 error verifies exactly 2 retries (total 3 attempts)
-    call_count = 0
-    def handler_500(req):
-        nonlocal call_count
-        call_count += 1
+    malformed = lambda r: httpx.Response(200, text='{"result": {"ocrResults": [')
+    with _no_wait(monkeypatch):
+        with _jobs_client(monkeypatch, _jobs_handler(download=malformed)):
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+    assert "JSONL" in str(exc.value)
+
+    empty = lambda r: httpx.Response(200, text=_jsonl_lines([["   ", ""]]))
+    with _no_wait(monkeypatch):
+        with _jobs_client(monkeypatch, _jobs_handler(download=empty)):
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+    assert "识别文本为空" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_baidu_paddleocr_jobs_poll_and_download_retry_limits(monkeypatch):
+    _jobs_config(monkeypatch)
+
+    poll_attempts = 0
+
+    def failing_poll(request):
+        nonlocal poll_attempts
+        poll_attempts += 1
         return httpx.Response(500, text="Internal Server Error")
 
-    transport = httpx.MockTransport(handler_500)
-    with patch("app.services.http_client.HttpClientProvider.get_client", return_value=httpx.AsyncClient(transport=transport)):
-        with pytest.raises(OCRServiceError):
+    with _no_wait(monkeypatch) as delays:
+        with _jobs_client(monkeypatch, _jobs_handler(poll=failing_poll)):
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+
+    assert poll_attempts == 3  # initial + 2 retries
+    assert delays == [1.0, 2.0]
+    assert "重试耗尽" in str(exc.value)
+
+    download_attempts = 0
+
+    def failing_download(request):
+        nonlocal download_attempts
+        download_attempts += 1
+        return httpx.Response(503, text="Service Unavailable")
+
+    with _no_wait(monkeypatch) as delays:
+        with _jobs_client(monkeypatch, _jobs_handler(download=failing_download)):
+            with pytest.raises(OCRServiceError):
+                await OCRService.extract_text_from_image_bytes(b"img", "png")
+
+    assert download_attempts == 3
+    assert delays == [1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_baidu_paddleocr_jobs_hard_timeout(monkeypatch):
+    """A job that never completes is abandoned at the 300s page budget."""
+    _jobs_config(monkeypatch)
+    monkeypatch.setattr(OCRService, "JOB_TOTAL_TIMEOUT", 10.0)
+
+    clock = {"now": 0.0}
+
+    class _Clock:
+        def monotonic(self):
+            return clock["now"]
+
+    monkeypatch.setattr(ocr_module, "time", _Clock())
+
+    delays = []
+
+    async def _sleep(delay):
+        delays.append(delay)
+        clock["now"] += delay
+
+    monkeypatch.setattr(ocr_module.asyncio, "sleep", _sleep)
+
+    running = lambda r: httpx.Response(200, json={"code": 0, "data": {"state": "running"}})
+    with _jobs_client(monkeypatch, _jobs_handler(poll=running)) as requests:
+        with pytest.raises(OCRServiceError) as exc:
             await OCRService.extract_text_from_image_bytes(b"img", "png")
 
-    assert call_count == 3  # Initial attempt + 2 retries
+    assert "超时" in str(exc.value)
+    assert delays == [5.0, 5.0]  # two 5s polls, then the budget is gone
+    assert len(requests) == 3  # submit + 2 polls
+
+
+@pytest.mark.asyncio
+async def test_baidu_paddleocr_jobs_cancellation_releases_resources(monkeypatch):
+    """Cancellation closes the open response, frees the limiter slot and propagates."""
+    _jobs_config(monkeypatch)
+    GlobalRateLimiter._init()
+    slot_before = GlobalRateLimiter._semaphore._value
+
+    class _Response:
+        status_code = 200
+        headers = {}
+
+        def __init__(self):
+            self.closed = False
+
+        async def aread(self):
+            raise asyncio.CancelledError()
+
+        async def aclose(self):
+            self.closed = True
+
+    class _Client:
+        def __init__(self, response):
+            self.response = response
+
+        async def post(self, url, **kwargs):
+            return self.response
+
+    response = _Response()
+    monkeypatch.setattr(HttpClientProvider, "get_client", lambda: _Client(response))
+
+    with pytest.raises(asyncio.CancelledError):
+        await OCRService.extract_text_from_image_bytes(b"img", "png")
+
+    assert response.closed is True
+    assert GlobalRateLimiter._semaphore._value == slot_before

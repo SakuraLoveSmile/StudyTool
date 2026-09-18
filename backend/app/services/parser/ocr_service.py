@@ -12,6 +12,7 @@ from app.diagnostics import (
     call_context,
     log_diagnostic,
     sanitize_endpoint,
+    sanitize_text,
     extract_provider_request_id,
     stream_request_context,
     extract_safe_exception_info,
@@ -346,6 +347,429 @@ class OCRService:
 
         raise OCRServiceError("OCR 请求失败")
 
+    # ------------------------------------------------------------------
+    # Baidu PP-OCRv6 asynchronous jobs API (submit → poll → JSONL download).
+    # Wire contract verified against the official PaddleOCR API SDK
+    # (paddleocr/_api_client/_http.py, _core.py, _poller.py):
+    #   POST {jobs_url}  multipart(model, optionalPayload, file)  Bearer token
+    #   GET  {jobs_url}/{jobId}                                   Bearer token
+    #   GET  {resultUrl.jsonUrl}                                  pre-signed, NO token
+    # ------------------------------------------------------------------
+    JOBS_API_MODEL = "PP-OCRv6"
+    JOB_POLL_INTERVAL = 5.0        # seconds between two job-status polls
+    JOB_TOTAL_TIMEOUT = 300.0      # hard cap for submit + poll + download of one page
+    JOB_REQUEST_TIMEOUT = 60.0     # hard cap for a single HTTP request
+    JOB_RETRY_DELAYS = (1.0, 2.0)  # transient-failure backoff, poll/download only
+
+    @classmethod
+    def _jobs_stage_label(cls, stage: str) -> str:
+        return {
+            "submit": "任务提交",
+            "poll": "任务状态查询",
+            "download": "结果下载",
+        }.get(stage, "请求")
+
+    @classmethod
+    def _jobs_check_deadline(cls, deadline: float) -> None:
+        if time.monotonic() >= deadline:
+            raise OCRServiceError(
+                f"百度 OCR 任务超时（单页处理超过 {int(cls.JOB_TOTAL_TIMEOUT)} 秒）"
+            )
+
+    @classmethod
+    def _jobs_decode_json(cls, body: bytes, what: str) -> Dict[str, Any]:
+        """Decodes a JSON object response; never echoes raw payload content."""
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise OCRServiceError(f"百度 OCR {what} JSON 解析失败（{type(exc).__name__}）") from exc
+        if not isinstance(payload, dict):
+            raise OCRServiceError(f"百度 OCR {what}必须为 JSON 对象")
+        return payload
+
+    @classmethod
+    def _jobs_unwrap_payload(cls, body: bytes, what: str) -> Dict[str, Any]:
+        """Unwraps the {'code': 0, 'data': {...}} envelope used by the jobs API."""
+        payload = cls._jobs_decode_json(body, what)
+        code = payload.get("code")
+        if code not in (0, None):
+            raise OCRServiceError(f"百度 OCR {what}被拒绝（code={code}）")
+        data_obj = payload.get("data")
+        if isinstance(data_obj, dict):
+            return data_obj
+        return payload
+
+    @classmethod
+    async def _jobs_single_request(
+        cls,
+        method: str,
+        url: str,
+        *,
+        stage: str,
+        attempt: int,
+        on_event,
+        deadline: float,
+        call_id: str,
+        endpoint: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+        model: Optional[str] = None,
+        input_bytes: Optional[int] = None,
+        **kwargs: Any,
+    ):
+        """Performs exactly one HTTP request under the global rate limiter.
+
+        The limiter slot is held only while a request is actually in flight; the
+        5-second polling wait never occupies a slot. Returns (status, body, request_id).
+        """
+        client = HttpClientProvider.get_client()
+
+        await cls._emit(on_event, "slot_wait", {"attempt": attempt, "service": "ocr", "stage": stage})
+        await GlobalRateLimiter.acquire()
+        try:
+            cls._jobs_check_deadline(deadline)
+            remaining = deadline - time.monotonic()
+            timeout = min(cls.JOB_REQUEST_TIMEOUT, max(remaining, 0.1))
+
+            with call_context(call_id=call_id, attempt=attempt):
+                await cls._emit(on_event, "request_start", {
+                    "attempt": attempt,
+                    "service": "ocr",
+                    "stage": stage,
+                })
+                log_diagnostic(
+                    "request_dispatched",
+                    level=logging.INFO,
+                    message=f"百度 OCR 请求已发送（{cls._jobs_stage_label(stage)}）",
+                    service="ocr",
+                    model=model,
+                    endpoint=endpoint,
+                    input_bytes=input_bytes,
+                    timeout_config=round(timeout, 2),
+                    attempt=attempt,
+                    stage=stage,
+                )
+
+                t_req = time.monotonic()
+                async with stream_request_context(
+                    client, method, url, headers=headers, timeout=timeout, **kwargs
+                ) as res:
+                    status_code = int(res.status_code)
+                    provider_req_id = extract_provider_request_id(res.headers)
+                    body = await res.aread()
+                duration_ms = (time.monotonic() - t_req) * 1000.0
+
+                log_diagnostic(
+                    "response_received",
+                    level=logging.DEBUG,
+                    message=f"百度 OCR 响应已读取（{cls._jobs_stage_label(stage)}）",
+                    service="ocr",
+                    model=model,
+                    endpoint=endpoint,
+                    status_code=status_code,
+                    provider_request_id=provider_req_id,
+                    duration_ms=round(duration_ms, 2),
+                    attempt=attempt,
+                    stage=stage,
+                )
+                await cls._emit(on_event, "response_received", {
+                    "attempt": attempt,
+                    "service": "ocr",
+                    "stage": stage,
+                    "status_code": status_code,
+                    "duration_ms": round(duration_ms, 2),
+                })
+                return status_code, body, provider_req_id
+        finally:
+            GlobalRateLimiter.release()
+
+    @classmethod
+    async def _jobs_request_with_retries(
+        cls,
+        method: str,
+        url: str,
+        *,
+        stage: str,
+        on_event,
+        deadline: float,
+        call_id: str,
+        endpoint: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> bytes:
+        """GET with up to 2 retries (1s, 2s) for transient failures; returns the 2xx body."""
+        max_retries = len(cls.JOB_RETRY_DELAYS)
+        label = cls._jobs_stage_label(stage)
+        attempt = 0
+
+        while True:
+            attempt += 1
+            cls._jobs_check_deadline(deadline)
+            transient_reason: Optional[str] = None
+            try:
+                status, body, _req_id = await cls._jobs_single_request(
+                    method,
+                    url,
+                    stage=stage,
+                    attempt=attempt,
+                    on_event=on_event,
+                    deadline=deadline,
+                    call_id=call_id,
+                    endpoint=endpoint,
+                    headers=headers,
+                    model=model,
+                    **kwargs,
+                )
+            except asyncio.CancelledError:
+                raise
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                transient_reason = type(exc).__name__
+            else:
+                if 200 <= status < 300:
+                    return body
+                if status == 429:
+                    raise OCRQuotaExhaustedError(f"百度 OCR 每日额度耗尽或触发限流（HTTP {status}）")
+                if status >= 500:
+                    transient_reason = f"HTTP {status}"
+                else:
+                    raise OCRServiceError(f"百度 OCR {label}失败（HTTP {status}）")
+
+            if attempt > max_retries:
+                raise OCRServiceError(f"百度 OCR {label}重试耗尽（{transient_reason}）")
+
+            delay = cls.JOB_RETRY_DELAYS[attempt - 1]
+            reason = f"百度 OCR {label}暂时性故障（{transient_reason}），{delay:.0f} 秒后重试"
+            log_diagnostic(
+                "retry_wait",
+                level=logging.WARNING,
+                message=reason,
+                service="ocr",
+                model=model,
+                endpoint=endpoint,
+                failed_stage=stage,
+                exception_type=transient_reason,
+                retry_reason=transient_reason,
+                retry_wait_seconds=delay,
+                attempt=attempt,
+                stage=stage,
+            )
+            await cls._emit(on_event, "retry_wait", {
+                "attempt": attempt,
+                "service": "ocr",
+                "stage": stage,
+                "wait_seconds": delay,
+                "reason": transient_reason,
+            })
+            logger.warning("Baidu OCR %s transient failure (%s), retry %d/%d", stage, transient_reason, attempt, max_retries)
+            await asyncio.sleep(delay)
+
+    @classmethod
+    async def _jobs_submit(
+        cls,
+        jobs_url: str,
+        token: str,
+        image_bytes: bytes,
+        image_format: str,
+        on_event,
+        deadline: float,
+        call_id: str,
+        endpoint: Optional[str],
+    ) -> str:
+        """Submits one multipart job. Never retried: a retry would create a duplicate job."""
+        fmt = (image_format or "png").lower().lstrip(".") or "png"
+        content_type = "image/jpeg" if fmt in {"jpg", "jpeg"} else f"image/{fmt}"
+        optional_payload = {
+            "useDocOrientationClassify": False,
+            "useDocUnwarping": False,
+            "useTextlineOrientation": False,
+            "visualize": False,
+        }
+        data = {
+            "model": cls.JOBS_API_MODEL,
+            "optionalPayload": json.dumps(optional_payload),
+        }
+        files = {"file": (f"page.{fmt}", image_bytes, content_type)}
+        headers = {"Authorization": f"Bearer {token}"}
+
+        status, body, _req_id = await cls._jobs_single_request(
+            "POST",
+            jobs_url,
+            stage="submit",
+            attempt=1,
+            on_event=on_event,
+            deadline=deadline,
+            call_id=call_id,
+            endpoint=endpoint,
+            headers=headers,
+            model=cls.JOBS_API_MODEL,
+            input_bytes=len(image_bytes),
+            data=data,
+            files=files,
+        )
+
+        if status == 429:
+            raise OCRQuotaExhaustedError(f"百度 OCR 每日额度耗尽或触发限流（HTTP {status}）")
+        if not (200 <= status < 300):
+            raise OCRServiceError(f"百度 OCR 任务提交失败（HTTP {status}）")
+
+        payload = cls._jobs_unwrap_payload(body, "提交响应")
+        job_id = payload.get("jobId")
+        if not isinstance(job_id, str) or not job_id.strip():
+            raise OCRServiceError("百度 OCR 提交响应缺少 jobId")
+
+        log_diagnostic(
+            "job_submitted",
+            level=logging.INFO,
+            message="百度 OCR 异步任务已创建",
+            service="ocr",
+            model=cls.JOBS_API_MODEL,
+            endpoint=endpoint,
+            status_code=status,
+            attempt=1,
+            stage="submit",
+        )
+        return job_id.strip()
+
+    @classmethod
+    async def _jobs_poll_until_done(
+        cls,
+        jobs_url: str,
+        token: str,
+        job_id: str,
+        on_event,
+        deadline: float,
+        call_id: str,
+    ) -> str:
+        """Polls GET {jobs_url}/{jobId} every 5s; returns the done-state JSONL URL."""
+        poll_url = f"{jobs_url.rstrip('/')}/{job_id}"
+        poll_endpoint = sanitize_endpoint(poll_url)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        while True:
+            cls._jobs_check_deadline(deadline)
+            body = await cls._jobs_request_with_retries(
+                "GET",
+                poll_url,
+                stage="poll",
+                on_event=on_event,
+                deadline=deadline,
+                call_id=call_id,
+                endpoint=poll_endpoint,
+                headers=headers,
+                model=cls.JOBS_API_MODEL,
+            )
+            data = cls._jobs_unwrap_payload(body, "任务状态响应")
+            state = data.get("state")
+
+            if state == "done":
+                result_url = data.get("resultUrl")
+                json_url = result_url.get("jsonUrl") if isinstance(result_url, dict) else None
+                if not isinstance(json_url, str) or not json_url.strip():
+                    raise OCRServiceError("百度 OCR 任务已完成但缺少 resultUrl.jsonUrl")
+                log_diagnostic(
+                    "job_done",
+                    level=logging.INFO,
+                    message="百度 OCR 异步任务已完成",
+                    service="ocr",
+                    model=cls.JOBS_API_MODEL,
+                    endpoint=poll_endpoint,
+                    stage="poll",
+                )
+                return json_url.strip()
+
+            if state == "failed":
+                err_msg = sanitize_text(str(data.get("errorMsg") or "未知错误"))[:200]
+                log_diagnostic(
+                    "job_failed",
+                    level=logging.ERROR,
+                    message=f"百度 OCR 异步任务失败: {err_msg}",
+                    service="ocr",
+                    model=cls.JOBS_API_MODEL,
+                    endpoint=poll_endpoint,
+                    failed_stage="poll",
+                    stage="poll",
+                )
+                raise OCRServiceError(f"百度 OCR 任务执行失败: {err_msg}")
+
+            if state in ("pending", "running"):
+                log_diagnostic(
+                    "job_poll",
+                    level=logging.DEBUG,
+                    message=f"百度 OCR 异步任务进行中（state={state}）",
+                    service="ocr",
+                    model=cls.JOBS_API_MODEL,
+                    endpoint=poll_endpoint,
+                    stage="poll",
+                )
+                remaining = deadline - time.monotonic()
+                cls._jobs_check_deadline(deadline)
+                await asyncio.sleep(min(cls.JOB_POLL_INTERVAL, remaining))
+                continue
+
+            raise OCRServiceError(f"百度 OCR 任务状态异常（state={state!r}）")
+
+    @classmethod
+    async def _jobs_download_jsonl(
+        cls,
+        json_url: str,
+        on_event,
+        deadline: float,
+        call_id: str,
+    ) -> str:
+        """Downloads the pre-signed JSONL result. The URL is signed, so no token is sent."""
+        body = await cls._jobs_request_with_retries(
+            "GET",
+            json_url,
+            stage="download",
+            on_event=on_event,
+            deadline=deadline,
+            call_id=call_id,
+            endpoint=None,  # signed URL: never logged
+            headers=None,   # pre-signed download must not carry the Authorization token
+            model=cls.JOBS_API_MODEL,
+        )
+        return body.decode("utf-8", errors="replace")
+
+    @classmethod
+    def _jobs_parse_jsonl(cls, text: str) -> str:
+        """Flattens result.ocrResults[].prunedResult.rec_texts into newline-joined text."""
+        lines = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError as exc:
+                raise OCRServiceError(f"百度 OCR 结果 JSONL 解析失败（{type(exc).__name__}）") from exc
+            if not isinstance(obj, dict):
+                raise OCRServiceError("百度 OCR 结果 JSONL 行必须为 JSON 对象")
+
+            result = obj.get("result")
+            if not isinstance(result, dict):
+                raise OCRServiceError("百度 OCR 结果 JSONL 缺少 result 对象")
+            ocr_results = result.get("ocrResults")
+            if not isinstance(ocr_results, list):
+                raise OCRServiceError("百度 OCR 结果 JSONL 缺少 ocrResults 数组")
+
+            for item in ocr_results:
+                pruned = item.get("prunedResult") if isinstance(item, dict) else None
+                if not isinstance(pruned, dict):
+                    raise OCRServiceError("百度 OCR 结果缺少 prunedResult 结构")
+                rec_texts = pruned.get("rec_texts")
+                if not isinstance(rec_texts, list):
+                    raise OCRServiceError("百度 OCR 结果 rec_texts 必须为数组")
+                for entry in rec_texts:
+                    if not isinstance(entry, str):
+                        raise OCRServiceError(f"百度 OCR rec_texts 包含非字符串元素: {type(entry).__name__}")
+                    cleaned = entry.strip()
+                    if cleaned:
+                        lines.append(cleaned)
+
+        if not lines:
+            raise OCRServiceError("百度 OCR 识别文本为空")
+        return "\n".join(lines)
+
     @classmethod
     async def _extract_via_paddleocr_api(
         cls,
@@ -355,159 +779,51 @@ class OCRService:
         override_api_url: Optional[str] = None,
         override_token: Optional[str] = None,
     ) -> str:
-        api_url = (override_api_url or settings.BAIDU_OCR_API_URL or "").strip()
+        """Extracts text for one page through the Baidu PP-OCRv6 asynchronous jobs API.
+
+        Flow: multipart submit (never retried, so no duplicate jobs) → poll
+        GET {jobs_url}/{jobId} every 5 seconds until state == "done" → download the
+        pre-signed JSONL result (no Authorization token) → flatten
+        result.ocrResults[].prunedResult.rec_texts.
+
+        The whole page flow is capped at JOB_TOTAL_TIMEOUT (300s) and every single
+        request at JOB_REQUEST_TIMEOUT (60s).
+        """
+        jobs_url = (override_api_url or settings.BAIDU_OCR_API_URL or "").strip()
         token = (override_token or settings.BAIDU_OCR_TOKEN or "").strip()
 
-        if not api_url or not token:
+        if not jobs_url or not token:
             raise OCRServiceError("百度 OCR 未配置完整 API URL 或 Token")
 
-        # Never append /chat/completions; use the exact api_url provided.
-        endpoint_clean = sanitize_endpoint(api_url)
-        b64_file = base64.b64encode(image_bytes).decode("utf-8")
+        call_id = f"ocr-baidu-job-{int(time.monotonic() * 1000)}"
+        deadline = time.monotonic() + cls.JOB_TOTAL_TIMEOUT
+        endpoint_clean = sanitize_endpoint(jobs_url)
 
-        payload = {
-            "file": b64_file,
-            "fileType": 1,
-            "visualize": False,
-        }
-        headers = {
-            "Authorization": f"token {token}",
-            "Content-Type": "application/json",
-        }
-
-        client = HttpClientProvider.get_client()
-        max_retries = 2
-        attempt = 0
-        backoff_delays = [1.0, 2.0]
-
-        while True:
-            attempt += 1
-            call_id = f"ocr-baidu-{int(time.monotonic() * 1000)}-{attempt}"
-
-            # 1. slot_wait
-            await cls._emit(on_event, "slot_wait", {"attempt": attempt, "service": "ocr"})
-            await GlobalRateLimiter.acquire()
-            t_start = time.monotonic()
-            try:
-                # 2. request_start
-                await cls._emit(on_event, "request_start", {
-                    "attempt": attempt,
-                    "service": "ocr",
-                    "endpoint": endpoint_clean,
-                })
-
-                with call_context(call_id=call_id, attempt=attempt):
-                    try:
-                        async with stream_request_context(
-                            client,
-                            "POST",
-                            api_url,
-                            json=payload,
-                            headers=headers,
-                            timeout=60.0,
-                        ) as res:
-                            status_code = res.status_code
-                            dur_ms = (time.monotonic() - t_start) * 1000.0
-
-                            await cls._emit(on_event, "response_received", {
-                                "attempt": attempt,
-                                "service": "ocr",
-                                "status_code": status_code,
-                                "duration_ms": dur_ms,
-                            })
-
-                            if status_code == 200:
-                                res_bytes = await res.aread()
-                                try:
-                                    data = json.loads(res_bytes.decode("utf-8"))
-                                except Exception as json_err:
-                                    raise OCRServiceError(f"百度 OCR 响应 JSON 解析失败: {json_err}")
-
-                                if "errorCode" not in data and "error_code" not in data:
-                                    raise OCRServiceError("百度 OCR 响应缺少 errorCode 字段")
-
-                                err_code = data.get("errorCode", data.get("error_code"))
-                                if err_code == 429:
-                                    raise OCRQuotaExhaustedError("百度 OCR 每日额度耗尽或限流（errorCode 429）")
-                                if err_code != 0:
-                                    err_msg = data.get("errorMsg", data.get("error_msg", "未知业务错误"))
-                                    raise OCRServiceError(f"百度 OCR 返回错误（{err_code}）: {err_msg}")
-
-                                result = data.get("result")
-                                if not result or not isinstance(result, dict):
-                                    raise OCRServiceError("百度 OCR 响应缺少 result 对象")
-
-                                ocr_results = result.get("ocrResults")
-                                if not isinstance(ocr_results, list) or len(ocr_results) != 1:
-                                    count_str = len(ocr_results) if isinstance(ocr_results, list) else type(ocr_results).__name__
-                                    raise OCRServiceError(f"百度 OCR 单页识别结果数量异常（必须恰好为 1，实际为 {count_str}）")
-
-                                single_page = ocr_results[0]
-                                if not isinstance(single_page, dict):
-                                    raise OCRServiceError("百度 OCR ocrResults[0] 结构异常，必须为对象")
-
-                                pruned = single_page.get("prunedResult")
-                                if not isinstance(pruned, dict):
-                                    raise OCRServiceError("百度 OCR 响应缺少 prunedResult 结构")
-
-                                rec_texts = pruned.get("rec_texts")
-                                if not isinstance(rec_texts, list):
-                                    raise OCRServiceError("百度 OCR rec_texts 必须为数组")
-
-                                lines = []
-                                for item in rec_texts:
-                                    if not isinstance(item, str):
-                                        raise OCRServiceError(f"百度 OCR rec_texts 包含非字符串元素: {type(item).__name__}")
-                                    cleaned = item.strip()
-                                    if cleaned:
-                                        lines.append(cleaned)
-
-                                if not lines:
-                                    raise OCRServiceError("百度 OCR 识别文本为空")
-
-                                return "\n".join(lines)
-
-                            if status_code == 429:
-                                raise OCRQuotaExhaustedError("百度 OCR 每日额度耗尽或触发限流（HTTP 429）")
-
-                            if status_code in {403, 413, 422}:
-                                body_err = await res.aread()
-                                err_summary = body_err.decode("utf-8", errors="replace")[:200]
-                                raise OCRServiceError(f"百度 OCR 请求被拒绝（HTTP {status_code}）: {err_summary}")
-
-                            if 400 <= status_code < 500:
-                                raise OCRServiceError(f"百度 OCR 客户端错误（HTTP {status_code}）")
-
-                            if status_code in {500, 502, 503, 504}:
-                                if attempt > max_retries:
-                                    raise OCRServiceError(f"百度 OCR 服务端错误重试耗尽（HTTP {status_code}）")
-                                delay = backoff_delays[min(attempt - 1, len(backoff_delays) - 1)]
-                                await cls._emit(on_event, "retry_wait", {
-                                    "attempt": attempt,
-                                    "service": "ocr",
-                                    "delay": delay,
-                                    "reason": f"HTTP {status_code}",
-                                })
-                                await asyncio.sleep(delay)
-                                continue
-
-                            raise OCRServiceError(f"百度 OCR 异常状态码（HTTP {status_code}）")
-
-                    except (OCRQuotaExhaustedError, OCRServiceError):
-                        raise
-                    except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as net_err:
-                        if attempt > max_retries:
-                            raise OCRServiceError(f"百度 OCR 网络重试耗尽: {type(net_err).__name__}") from net_err
-                        delay = backoff_delays[min(attempt - 1, len(backoff_delays) - 1)]
-                        await cls._emit(on_event, "retry_wait", {
-                            "attempt": attempt,
-                            "service": "ocr",
-                            "delay": delay,
-                            "reason": type(net_err).__name__,
-                        })
-                        await asyncio.sleep(delay)
-                        continue
-                    except Exception as unk_err:
-                        raise OCRServiceError(f"百度 OCR 识别未知异常: {unk_err}") from unk_err
-            finally:
-                GlobalRateLimiter.release()
+        try:
+            job_id = await cls._jobs_submit(
+                jobs_url,
+                token,
+                image_bytes,
+                image_format,
+                on_event,
+                deadline,
+                call_id,
+                endpoint_clean,
+            )
+            json_url = await cls._jobs_poll_until_done(
+                jobs_url,
+                token,
+                job_id,
+                on_event,
+                deadline,
+                call_id,
+            )
+            jsonl_text = await cls._jobs_download_jsonl(json_url, on_event, deadline, call_id)
+            return cls._jobs_parse_jsonl(jsonl_text)
+        except asyncio.CancelledError:
+            # Cancellation is never a business error: release and keep propagating.
+            raise
+        except OCRServiceError:
+            raise
+        except Exception as exc:
+            raise OCRServiceError(f"百度 OCR 识别未知异常（{type(exc).__name__}）") from exc
