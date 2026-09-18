@@ -41,6 +41,7 @@ interface DesktopStubSeed {
   entries: StubLogEntry[];
   pageSize: number;
   failure: StubFailure | null;
+  unavailable?: string[];
 }
 
 interface StubCalls {
@@ -184,7 +185,7 @@ async function installDesktopStub(page: Page, seed: DesktopStubSeed): Promise<vo
           hasMore: start + pageSize < items.length,
           scannedBytes: items.length,
           scanTruncated: false,
-          unavailable: [],
+          unavailable: s.unavailable ?? [],
           skippedLines: 0,
           requestId: snapshot.requestId,
         };
@@ -434,6 +435,58 @@ test.describe('日志页在 desktopAPI 桩下的交互', () => {
     await expect(page.getByText('task.event.0', { exact: true })).toBeVisible();
     await expect(page.getByText(/查询超时/)).toHaveCount(0);
     await expect(page.getByText(/共 3 条/)).toBeVisible();
+  });
+
+  for (const code of ['EACCES', 'EPERM', 'EIO']) {
+    test(`读取异常 ${code} 显示红色错误态而非零记录，恢复后清除`, async ({ page }) => {
+      await installDesktopStub(page, {
+        entries: makeEntries(3), pageSize: 5,
+        failure: { code: 'LOG_QUERY_FAILED', message: `桌面日志读取失败（${code}）` },
+      });
+      await mockShell(page);
+      await page.goto('/logs');
+      const alert = page.getByRole('alert');
+      await expect(alert).toContainText(code);
+      await expect(alert).toHaveClass(/bg-err\/10/);
+      await expect(alert).toContainText('手动刷新');
+      await expect(page.getByText(/查询失败 · 未取得日志结果/)).toBeVisible();
+      await expect(page.getByText(/共 0 条|当前筛选条件下没有日志记录|缺失文件/)).toHaveCount(0);
+      await page.evaluate(() => {
+        (window as Window & { __desktopStub: { failure: StubFailure | null } }).__desktopStub.failure = null;
+      });
+      await page.getByRole('button', { name: /手动刷新/ }).click();
+      await expect(alert).toHaveCount(0);
+      await expect(page.getByText(/共 3 条/)).toBeVisible();
+    });
+  }
+
+  test('已有记录后读取失败保留旧数据并标注，导出不能清除查询错误', async ({ page }) => {
+    await installDesktopStub(page, { entries: makeEntries(3), pageSize: 5, failure: null });
+    await mockShell(page);
+    await page.goto('/logs');
+    await expect(page.getByText(/共 3 条/)).toBeVisible();
+    await page.evaluate(() => {
+      (window as Window & { __desktopStub: { failure: StubFailure | null } }).__desktopStub.failure = {
+        code: 'LOG_QUERY_FAILED', message: '后台日志读取失败：权限拒绝（EACCES）',
+      };
+    });
+    await page.getByRole('button', { name: /手动刷新/ }).click();
+    await expect(page.getByRole('alert')).toContainText('EACCES');
+    await expect(page.getByText(/保留上次成功读取的记录/)).toBeVisible();
+    await expect(page.getByText('task.event.0', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: /导出诊断包/ }).click();
+    await expect(page.getByRole('alert')).toContainText('EACCES');
+  });
+
+  test('尚未生成日志文件属于正常空态，不显示读取失败', async ({ page }) => {
+    await installDesktopStub(page, {
+      entries: [], pageSize: 5, failure: null, unavailable: ['frontend'],
+    });
+    await mockShell(page);
+    await page.goto('/logs');
+    await expect(page.getByText(/未找到日志文件（可能尚未生成）：前端/)).toBeVisible();
+    await expect(page.getByText('当前筛选条件下没有日志记录。')).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
   });
 
   test('自动刷新开关：开启后按周期查询，关闭后不再增发', async ({ page }) => {

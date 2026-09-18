@@ -168,13 +168,40 @@ interface SourceReadResult {
   truncated: boolean;
   unavailable: boolean;
   skippedLines: number;
+  error?: LogReadError;
 }
 
 interface LineStreamResult {
   bytesRead: number;
   skippedLines: number;
-  /** A read error mid-file (rotation, deletion) — the caller degrades, it never throws. */
+  error?: LogReadError;
   failed: boolean;
+}
+
+/** A sanitized, stage-aware filesystem failure safe to expose through IPC. */
+export class LogReadError extends Error {
+  public readonly source: string;
+  public readonly stage: 'stat' | 'open' | 'read';
+  public readonly code: string;
+
+  constructor(source: string, stage: 'stat' | 'open' | 'read', error: unknown) {
+    const code = readErrorCode(error);
+    const detail = code === 'EACCES' || code === 'EPERM' ? `权限被拒绝（${code}）` : `读取失败（${code}）`;
+    super(`日志读取失败：${source} ${detail}`);
+    this.name = 'LogReadError';
+    this.source = source;
+    this.stage = stage;
+    this.code = code;
+  }
+}
+
+function readErrorCode(error: unknown): string {
+  const code = (error as { code?: unknown })?.code;
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : 'UNKNOWN';
+}
+
+function isMissing(error: unknown): boolean {
+  return readErrorCode(error) === 'ENOENT';
 }
 
 /**
@@ -192,13 +219,15 @@ function streamLines(
   file: string,
   start: number,
   size: number,
-  onLine: (line: string) => void
+  onLine: (line: string) => void,
+  source: string
 ): LineStreamResult {
   const result: LineStreamResult = { bytesRead: 0, skippedLines: 0, failed: false };
   let fd: number;
   try {
     fd = fs.openSync(file, 'r');
-  } catch {
+  } catch (error) {
+    if (!isMissing(error)) result.error = new LogReadError(source, 'open', error);
     result.failed = true;
     return result;
   }
@@ -220,7 +249,8 @@ function streamLines(
       let read = 0;
       try {
         read = fs.readSync(fd, chunk, 0, want, position);
-      } catch {
+      } catch (error) {
+        if (!isMissing(error)) result.error = new LogReadError(source, 'read', error);
         result.failed = true;
         break;
       }
@@ -268,7 +298,8 @@ function streamLines(
       if (tooLong(line)) result.skippedLines += 1;
       else onLine(line);
     }
-  } catch {
+  } catch (error) {
+    if (!isMissing(error)) result.error = new LogReadError(source, 'read', error);
     result.failed = true;
   } finally {
     try {
@@ -298,17 +329,16 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
     entries: [],
     bytes: 0,
     truncated: false,
-    unavailable: false,
+    // Until at least one generation is read successfully, this source is
+    // genuinely unavailable (all candidates may be ENOENT).
+    unavailable: true,
     skippedLines: 0,
   };
-  if (!fs.existsSync(active)) {
-    result.unavailable = true;
-    return result;
-  }
-
   // Read newest first: active file, then .1 … .N.
   const candidates = [active, ...Array.from({ length: LOG_BACKUP_COUNT }, (_, i) => `${active}.${i + 1}`)];
   let budget = options.byteBudget;
+  let attempted = false;
+  let readable = false;
 
   for (let fileIndex = 0; fileIndex < candidates.length; fileIndex += 1) {
     if (budget <= 0) {
@@ -316,16 +346,28 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
       break;
     }
     const candidate = candidates[fileIndex];
-    if (!fs.existsSync(candidate)) continue;
-
+    attempted = true;
     let size = 0;
     try {
-      size = fs.statSync(candidate).size;
-    } catch {
-      // Rotated away between the existence check and the stat: keep going.
-      result.unavailable = true;
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile()) {
+        result.error ??= new LogReadError(source, 'stat', { code: 'EINVAL' });
+        continue;
+      }
+      size = stat.size;
+    } catch (error) {
+      // ENOENT is normal for an absent active/rotated generation. Other failures
+      // must reach the strict query contract instead of becoming "no logs".
+      if (isMissing(error)) continue;
+      result.error ??= new LogReadError(source, 'stat', error);
       continue;
     }
+    if (!Number.isFinite(size) || size < 0) {
+      result.error ??= new LogReadError(source, 'stat', { code: 'EINVAL' });
+      continue;
+    }
+    // An existing empty file is readable too; still open it below so an ACL
+    // failure on an empty file cannot be mistaken for a successful empty scan.
     const take = Math.min(size, budget);
     if (size > take) result.truncated = true;
     const start = size - take;
@@ -338,13 +380,20 @@ function readSource(dir: string, source: string, options: ReadSourceOptions): So
       if (options.accept && !options.accept(entry)) return;
       if (options.withRecordId) entry.record_id = `${source}#${fileIndex}#${lineIndex}`;
       result.entries.push(entry);
-    });
+    }, source);
 
     budget -= stream.bytesRead;
     result.bytes += stream.bytesRead;
     result.skippedLines += stream.skippedLines;
-    if (stream.failed) result.unavailable = true;
+    if (stream.error) {
+      // Queries reject the saved error; exports still collect readable history.
+      result.error ??= stream.error;
+      continue;
+    }
+    if (!stream.failed) readable = true;
   }
+
+  if (!attempted || readable) result.unavailable = false;
 
   // Only export needs this order (its byte cap keeps the newest records); the viewer
   // sorts the merged result once instead of sorting every source and then sorting again.
@@ -405,6 +454,7 @@ export function queryLogs(options: LogQueryOptions): LogQueryResult {
   for (let i = 0; i < sources.length; i += 1) {
     const source = sources[i];
     const read = readSource(dir, source, { byteBudget: budget, accept, withRecordId: true });
+    if (read.error) throw read.error;
     budget -= read.bytes;
     scannedBytes += read.bytes;
     skippedLines += read.skippedLines;

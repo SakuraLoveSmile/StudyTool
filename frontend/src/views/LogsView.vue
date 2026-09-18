@@ -112,10 +112,13 @@
 
     <div v-if="isDesktop" class="surface">
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-sub">
-        <span>
+        <span v-if="queryError">
+          查询失败 · {{ entries.length ? '下方保留上次成功读取的记录，可能不是最新结果' : '未取得日志结果' }}
+        </span>
+        <span v-else>
           共 {{ total }} 条 · 第 {{ page }} 页<template v-if="scanTruncated"> · 扫描结果已截断</template>
           <template v-if="skippedLines > 0"> · 已跳过 {{ skippedLines }} 条超大/损坏记录</template>
-          <template v-if="unavailable.length"> · 缺失文件：{{ unavailable.join('、') }}</template>
+          <template v-if="unavailable.length"> · 未找到日志文件（可能尚未生成）：{{ unavailable.map(sourceLabel).join('、') }}</template>
         </span>
         <div class="flex items-center gap-2">
           <!-- 等待中仍可翻页：翻页会取消在途请求并请求目标页 -->
@@ -138,8 +141,9 @@
         </div>
       </div>
 
-      <p v-if="errorMessage" class="border-b border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
-        {{ errorMessage }}
+      <p v-if="queryError || errorMessage" role="alert" class="border-b border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
+        {{ queryError || errorMessage }}
+        <span v-if="queryError">请根据错误信息处理后，点击“手动刷新”重试。</span>
       </p>
 
       <!-- 加载中（尚无结果）只提示正在读取，绝不显示成"没有日志记录" -->
@@ -152,7 +156,7 @@
         因此不会与"没有日志"混淆。
       -->
       <div
-        v-else-if="!busy && !errorMessage && entries.length === 0"
+        v-else-if="!busy && !queryError && !errorMessage && entries.length === 0"
         class="px-3 py-10 text-center text-xs text-faint"
       >
         当前筛选条件下没有日志记录。
@@ -240,6 +244,7 @@ const hasMore = ref(false);
 const busy = ref(false);
 const exporting = ref(false);
 const errorMessage = ref('');
+const queryError = ref('');
 const scanTruncated = ref(false);
 const skippedLines = ref(0);
 const unavailable = ref<string[]>([]);
@@ -423,7 +428,7 @@ async function refresh(resetPage = false): Promise<void> {
     if (!result?.ok) {
       // 取消/被取代属于正常控制流：不展示错误，也不改动任何已展示数据。
       if (result?.code !== 'LOG_QUERY_CANCELED' && result?.code !== 'LOG_QUERY_SUPERSEDED') {
-        errorMessage.value = queryErrorMessage(result?.code, result?.message);
+        queryError.value = queryErrorMessage(result?.code, result?.message);
         if (!firstQueryTracked) {
           firstQueryTracked = true;
           reportLogQueryFailed(result?.code, result?.message);
@@ -443,13 +448,14 @@ async function refresh(resetPage = false): Promise<void> {
     scanTruncated.value = Boolean(result.scanTruncated);
     skippedLines.value = result.skippedLines ?? 0;
     unavailable.value = result.unavailable ?? [];
+    queryError.value = '';
     errorMessage.value = '';
   } catch (err: any) {
     // 抛错同样可能是旧请求：序号过期时什么都不做。
     if (mySeq !== seq) return;
     if (inFlightRequestId === requestId) inFlightRequestId = null;
     // 保留上次结果与统计字段，只提示错误。
-    errorMessage.value = err?.message || '读取日志失败';
+    queryError.value = err?.message || '读取日志失败';
     if (!firstQueryTracked) {
       firstQueryTracked = true;
       reportLogQueryFailed('IPC_THROW', err?.message);

@@ -43,7 +43,7 @@
  * schedules the job and forwards the result.
  */
 
-import { queryLogs, ALL_SOURCES, type LogEntry } from './log-store';
+import { queryLogs, ALL_SOURCES, LogReadError, type LogEntry } from './log-store';
 import { scrubRecord, FIELD_WHITELIST, type LogSource } from './diagnostics';
 
 export type FeedbackLogSource = 'desktop' | 'backend' | 'frontend';
@@ -239,16 +239,28 @@ export function collectFeedbackLogs(payload: FeedbackJobPayload): FeedbackLogsSu
 
   for (const source of ALL_SOURCES) {
     if (!isFeedbackSource(source)) continue;
-    const result = queryLogs({
-      dir: payload.dir,
-      sources: [source],
-      from,
-      to,
-      sessionId: payload.sessionId,
-      page: 1,
-      pageSize: FEEDBACK_PAGE_SIZE,
-      maxScanBytes: FEEDBACK_SOURCE_SCAN_BUDGET,
-    });
+    let result;
+    try {
+      result = queryLogs({
+        dir: payload.dir,
+        sources: [source],
+        from,
+        to,
+        sessionId: payload.sessionId,
+        page: 1,
+        pageSize: FEEDBACK_PAGE_SIZE,
+        maxScanBytes: FEEDBACK_SOURCE_SCAN_BUDGET,
+      });
+    } catch (error) {
+      // Feedback collection keeps its partial-source contract. The viewer query is
+      // strict, but one unreadable source must not discard readable attachments.
+      if (!(error instanceof LogReadError)) throw error;
+      unavailable.push(source);
+      perSource.set(source, []);
+      perSourceSkipped.set(source, 0);
+      perSourceTruncated.set(source, false);
+      continue;
+    }
     skippedLines += result.skippedLines;
     perSourceSkipped.set(source, result.skippedLines);
     if (result.unavailable.includes(source)) unavailable.push(source);

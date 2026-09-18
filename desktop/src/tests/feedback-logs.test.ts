@@ -56,6 +56,19 @@ function payload(dir: string, overrides: Partial<FeedbackJobPayload> = {}): Feed
   return { dir, sessionId: SESS, appVersion: '1.0.5', now: NOW, ...overrides };
 }
 
+test('a source read failure preserves other feedback attachments and all failures remain explicit', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'desktop.jsonl'));
+  writeLog(dir, 'backend', [entry({ source: 'backend' })]);
+  const partial = collectFeedbackLogs(payload(dir));
+  assert.deepStrictEqual(partial.files.map((file) => file.filename), ['studytool-backend.jsonl']);
+  assert.ok(partial.unavailable.includes('desktop'));
+  fs.unlinkSync(path.join(dir, 'backend.jsonl'));
+  assert.throws(() => collectFeedbackLogs(payload(dir)), (error: unknown) =>
+    error instanceof FeedbackCollectionError && error.code === 'LOG_FEEDBACK_UNAVAILABLE');
+});
+
 /** Splits a collected file into its metadata line and its record lines. */
 function parseFile(text: string): { meta: Record<string, unknown>; records: Record<string, unknown>[] } {
   const lines = text.split('\n').filter((l) => l.length > 0);

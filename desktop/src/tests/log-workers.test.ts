@@ -62,6 +62,60 @@ test('a viewer query is executed by the worker, not by the caller', async () => 
   }
 });
 
+test('filesystem failures cross the real worker boundary as errors and recover after repair', async () => {
+  const root = tempDir();
+  const dir = path.join(root, 'logs');
+  // A file in place of the log directory reliably produces ENOTDIR on all hosts.
+  fs.writeFileSync(dir, 'not a directory');
+  const service = new LogWorkerService();
+  try {
+    const failed = await service.query('q-read-failed', queryOptions(dir));
+    assert.strictEqual(failed.ok, false, 'a filesystem error must not become zero records');
+    if (!failed.ok) {
+      assert.strictEqual(failed.error.code, 'LOG_QUERY_FAILED');
+      assert.strictEqual(failed.error.retryable, false, 'repair is required before a manual retry');
+      assert.match(failed.error.message, /读取失败/);
+      assert.ok(!failed.error.message.includes(root), 'system paths are not exposed');
+    }
+    fs.unlinkSync(dir);
+    fs.mkdirSync(dir);
+    writeLog(dir, 'desktop', [entry({ event: 'read.recovered' })]);
+    const recovered = await service.query('q-read-recovered', queryOptions(dir));
+    assert.ok(recovered.ok);
+    if (recovered.ok) assert.strictEqual(recovered.value.entries[0].event, 'read.recovered');
+  } finally {
+    service.shutdown();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a denied log directory reports permission failure through the worker, then recovers', {
+  skip: process.platform === 'win32' || process.getuid?.() === 0,
+}, async () => {
+  const dir = tempDir();
+  writeLog(dir, 'desktop', [entry({ event: 'permission.recovered' })]);
+  const service = new LogWorkerService();
+  try {
+    fs.chmodSync(dir, 0o000);
+    const failed = await service.query('q-permission-denied', queryOptions(dir));
+    assert.strictEqual(failed.ok, false);
+    if (!failed.ok) {
+      assert.strictEqual(failed.error.code, 'LOG_QUERY_FAILED');
+      assert.match(failed.error.message, /EACCES|EPERM/);
+      assert.match(failed.error.message, /权限/);
+      assert.ok(!failed.error.message.includes(dir));
+    }
+    fs.chmodSync(dir, 0o700);
+    const recovered = await service.query('q-permission-restored', queryOptions(dir));
+    assert.ok(recovered.ok);
+    if (recovered.ok) assert.strictEqual(recovered.value.total, 1);
+  } finally {
+    fs.chmodSync(dir, 0o700);
+    service.shutdown();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('only the newest waiting query is kept; the replaced one is answered as superseded', async () => {
   const dir = tempDir();
   writeLog(dir, 'desktop', [entry()]);

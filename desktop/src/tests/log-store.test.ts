@@ -334,6 +334,128 @@ test('corrupt lines, CRLF endings and a missing source never fail the whole quer
   assert.ok(result.entries.some((e) => e.event === 'legacy.text'), 'the corrupt JSON line degrades to plain text');
 });
 
+test('query surfaces permission and IO failures instead of reporting an unavailable source', () => {
+  const cases: Array<{ stage: 'stat' | 'open' | 'read'; code: string }> = [
+    { stage: 'stat', code: 'EACCES' },
+    { stage: 'open', code: 'EPERM' },
+    { stage: 'read', code: 'EIO' },
+  ];
+
+  for (const failure of cases) {
+    const dir = tempDir();
+    const active = path.join(dir, 'desktop.jsonl');
+    writeLog(dir, 'desktop', [entry({ event: `failure.${failure.stage}` })]);
+    const originalStat = fs.statSync;
+    const originalOpen = fs.openSync;
+    const originalRead = fs.readSync;
+    const fault = (): never => {
+      const error = new Error(failure.code) as NodeJS.ErrnoException;
+      error.code = failure.code;
+      throw error;
+    };
+    try {
+      if (failure.stage === 'stat') {
+        (fs as any).statSync = ((file: fs.PathLike) => {
+          if (String(file) === active) return fault();
+          return originalStat(file);
+        }) as typeof fs.statSync;
+      } else if (failure.stage === 'open') {
+        (fs as any).openSync = ((file: fs.PathLike, ...args: any[]) => {
+          if (String(file) === active) return fault();
+          return (originalOpen as any)(file, ...args);
+        }) as typeof fs.openSync;
+      } else {
+        (fs as any).readSync = ((..._args: any[]) => fault()) as typeof fs.readSync;
+      }
+
+      assert.throws(
+        () => queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] }),
+        (error: any) => {
+          assert.strictEqual(error.code, failure.code);
+          assert.match(error.message, /日志读取失败：desktop/);
+          if (failure.code === 'EACCES' || failure.code === 'EPERM') {
+            assert.match(error.message, /权限被拒绝/);
+          } else {
+            assert.match(error.message, /读取失败/);
+          }
+          assert.ok(!error.message.includes(dir), 'raw paths must not cross the query boundary');
+          return true;
+        }
+      );
+    } finally {
+      (fs as any).statSync = originalStat;
+      (fs as any).openSync = originalOpen;
+      (fs as any).readSync = originalRead;
+    }
+
+    const recovered = queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] });
+    assert.strictEqual(recovered.total, 1, `${failure.stage} failure must be retryable after recovery`);
+  }
+});
+
+test('a missing active file is unavailable only when no rotated generation exists', () => {
+  const dir = tempDir();
+  const rotated = path.join(dir, 'desktop.jsonl.1');
+  fs.writeFileSync(rotated, `${JSON.stringify(entry({ event: 'rotated.only' }))}\n`);
+  const result = queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] });
+  assert.strictEqual(result.total, 1);
+  assert.deepStrictEqual(result.unavailable, []);
+
+  fs.rmSync(rotated);
+  const missing = queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] });
+  assert.strictEqual(missing.total, 0);
+  assert.deepStrictEqual(missing.unavailable, ['desktop']);
+});
+
+test('empty files still require read permission, and unscanned sources are not missing', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), '');
+  const open = t.mock.method(fs, 'openSync', () => {
+    throw Object.assign(new Error('private path'), { code: 'EACCES' });
+  });
+  assert.throws(() => queryLogs({ dir, sources: ['desktop'] }), /读取失败.*EACCES/);
+  open.mock.restore();
+  writeLog(dir, 'desktop', [entry()]);
+  writeLog(dir, 'backend', [entry({ source: 'backend' })]);
+  const truncated = queryLogs({ dir, sources: ['desktop', 'backend'], maxScanBytes: 1 });
+  assert.strictEqual(truncated.scanTruncated, true);
+  assert.deepStrictEqual(truncated.unavailable, []);
+});
+
+test('export keeps newest-first partial results when a rotated file cannot be read', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  writeLog(dir, 'desktop', [
+    entry({ timestamp: new Date(1000).toISOString(), event: 'older' }),
+    entry({ timestamp: new Date(2000).toISOString(), event: 'newer' }),
+  ]);
+  fs.mkdirSync(path.join(dir, 'desktop.jsonl.1'));
+  assert.throws(() => queryLogs({ dir, sources: ['desktop'] }), /读取失败/);
+  const exported = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: 3000 });
+  assert.strictEqual(JSON.parse(exported.files[0].content.split('\n')[0]).event, 'newer');
+});
+
+test('export continues through unreadable generations while queries still fail', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const active = path.join(dir, 'desktop.jsonl');
+  fs.writeFileSync(active, '');
+  const originalOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+    if (String(file) === active) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return originalOpen(file, flags, mode);
+  });
+  fs.mkdirSync(path.join(dir, 'desktop.jsonl.2'));
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl.1'), `${JSON.stringify(entry({ event: 'history.one' }))}\n`);
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl.3'), `${JSON.stringify(entry({ event: 'history.three' }))}\n`);
+  assert.throws(() => queryLogs({ dir, sources: ['desktop'] }), /读取失败/);
+  const exported = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: Date.now() + 1000 });
+  assert.strictEqual(exported.totalEntries, 2);
+  assert.match(exported.files[0].content, /history.one/);
+  assert.match(exported.files[0].content, /history.three/);
+});
+
 test('the scan budget keeps the newest records and flags truncation', () => {
   const dir = tempDir();
   const base = Date.now();
@@ -369,4 +491,3 @@ test('the scan budget keeps the newest records and flags truncation', () => {
     'newest-first ordering survives across rotated files'
   );
 });
-
