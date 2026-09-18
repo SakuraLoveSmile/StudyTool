@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  BACKEND_REQUEST_TIMEOUT_CODE,
+  OCR_BACKEND_REQUEST_TIMEOUT_MS,
   classifyConnectionTestTransportFailure,
   normalizeConnectionTestResult,
 } from '../connection-test';
@@ -104,5 +106,53 @@ describe('classifyConnectionTestTransportFailure', () => {
 
     assert.equal(outcome.event, 'connection_test.unreachable');
     assert.equal(outcome.fields.reason, undefined);
+  });
+
+  it('explains an OCR probe that waited out the 315 s jobs budget', () => {
+    const outcome = classifyConnectionTestTransportFailure(
+      'baidu_ocr',
+      { code: BACKEND_REQUEST_TIMEOUT_CODE, name: 'TimeoutError' },
+      OCR_BACKEND_REQUEST_TIMEOUT_MS
+    );
+
+    assert.equal(outcome.event, 'connection_test.unreachable');
+    assert.equal(outcome.result.ok, false);
+    assert.equal(outcome.result.error_type, 'backend_unreachable');
+    const message = String(outcome.result.message);
+    assert.ok(message.includes('PP-OCRv6'), message);
+    assert.ok(message.includes('315 秒'), message);
+    assert.equal(outcome.fields.reason, BACKEND_REQUEST_TIMEOUT_CODE);
+    assert.equal(outcome.fields.timeout, true);
+    assert.equal(outcome.fields.wait_limit_ms, 315_000);
+  });
+
+  it('keeps the generic message for a non-timeout OCR transport failure', () => {
+    const outcome = classifyConnectionTestTransportFailure(
+      'baidu_ocr',
+      { code: 'ECONNREFUSED', name: 'Error' },
+      12
+    );
+
+    assert.equal(outcome.event, 'connection_test.unreachable');
+    assert.equal(
+      outcome.result.message,
+      '无法请求本地后端服务，请稍后重试或查看运行日志'
+    );
+    assert.equal(outcome.fields.timeout, undefined);
+    assert.equal(outcome.fields.reason, 'ECONNREFUSED');
+  });
+
+  it('keeps the generic timeout message for non-OCR services', () => {
+    const outcome = classifyConnectionTestTransportFailure(
+      'llm',
+      { code: BACKEND_REQUEST_TIMEOUT_CODE, name: 'TimeoutError' },
+      15_000
+    );
+
+    assert.equal(
+      outcome.result.message,
+      '无法请求本地后端服务，请稍后重试或查看运行日志'
+    );
+    assert.equal(outcome.fields.reason, BACKEND_REQUEST_TIMEOUT_CODE);
   });
 });

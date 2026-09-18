@@ -1,6 +1,27 @@
 import { ref, computed, onBeforeUnmount } from 'vue';
 import axios from 'axios';
 
+/** PP-OCRv6 异步 jobs 识别接口地址：新配置（未保存过任何地址）时的默认值。 */
+export const PP_OCR_V6_JOBS_URL = 'https://paddleocr.aistudio-app.com/api/v2/ocr/jobs';
+
+/**
+ * 是否为 PP-OCRv6 jobs 地址。忽略首尾空白、末尾斜杠与查询串，避免同一地址因写法差异
+ * 被判成旧地址。
+ */
+export function isOcrJobsUrl(url: string | null | undefined): boolean {
+  const normalized = String(url ?? '').trim();
+  if (!normalized) return false;
+  const withoutQuery = normalized.split(/[?#]/)[0].replace(/\/+$/, '');
+  return withoutQuery.endsWith('/api/v2/ocr/jobs');
+}
+
+/**
+ * 已保存的旧版（同步预测接口）地址：需要提示用户更新，但绝不静默改写已保存值。
+ */
+export function isLegacyOcrApiUrl(url: string | null | undefined): boolean {
+  return Boolean(String(url ?? '').trim()) && !isOcrJobsUrl(url);
+}
+
 export interface DesktopCredentialsStatus {
   llm: {
     base_url: string;

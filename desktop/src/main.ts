@@ -25,7 +25,10 @@ import { writeArchiveAtomically } from './diagnostic-export';
 import { LogWorkerService, type LogJobError } from './log-workers';
 import {
   classifyConnectionTestTransportFailure,
+  DEFAULT_BACKEND_REQUEST_TIMEOUT_MS,
   normalizeConnectionTestResult,
+  resolveConnectionTestTimeoutMs,
+  terminateRequestOnTimeout,
 } from './connection-test';
 import {
   ThemePreferenceStore,
@@ -687,12 +690,14 @@ function validateIpcSender(event: Electron.IpcMainInvokeEvent): void {
 function makeBackendRequest(
   method: string,
   apiPath: string,
-  body?: any
+  body?: any,
+  timeoutMs: number = DEFAULT_BACKEND_REQUEST_TIMEOUT_MS
 ): Promise<{ status: number; data: any }> {
   return new Promise((resolve, reject) => {
     const postData = body ? JSON.stringify(body) : '';
+    const target = `${BASE_URL}${apiPath}`;
     const req = http.request(
-      `${BASE_URL}${apiPath}`,
+      target,
       {
         method,
         headers: {
@@ -702,7 +707,7 @@ function makeBackendRequest(
           Origin: BASE_URL,
           ...(body ? { 'Content-Length': Buffer.byteLength(postData) } : {}),
         },
-        timeout: 15000,
+        timeout: timeoutMs,
       },
       (res) => {
         let raw = '';
@@ -718,6 +723,9 @@ function makeBackendRequest(
       }
     );
 
+    // `timeout` 选项本身不会终止请求：超时必须 destroy，否则留下悬挂 socket、
+    // 渲染端只能等到自己的超时（OCR 连接测试要等 315 秒，这一点尤其关键）。
+    terminateRequestOnTimeout(req, timeoutMs, target);
     req.on('error', (err) => reject(err));
     if (postData) req.write(postData);
     req.end();
@@ -1186,15 +1194,23 @@ function setupIpcHandlers() {
   ipcMain.handle('desktop:testConnection', async (event, serviceType, customConfig) => {
     validateIpcSender(event);
     const startedAt = Date.now();
+    // PP-OCRv6 是异步 jobs 识别，一次探针要等任务排队与轮询，因此 OCR 单独放宽到 315 秒；
+    // 其余服务（llm/embedding）保持原有 15 秒等待上限。
+    const timeoutMs = resolveConnectionTestTimeoutMs(serviceType);
     try {
-      const res = await makeBackendRequest('POST', '/api/desktop/test-connection', {
-        service_type: serviceType,
-        base_url: customConfig?.base_url,
-        model: customConfig?.model,
-        api_key: customConfig?.api_key,
-        baidu_ocr_url: customConfig?.baidu_ocr_url,
-        baidu_ocr_token: customConfig?.baidu_ocr_token,
-      });
+      const res = await makeBackendRequest(
+        'POST',
+        '/api/desktop/test-connection',
+        {
+          service_type: serviceType,
+          base_url: customConfig?.base_url,
+          model: customConfig?.model,
+          api_key: customConfig?.api_key,
+          baidu_ocr_url: customConfig?.baidu_ocr_url,
+          baidu_ocr_token: customConfig?.baidu_ocr_token,
+        },
+        timeoutMs
+      );
       const outcome = normalizeConnectionTestResult(
         serviceType,
         res.status,

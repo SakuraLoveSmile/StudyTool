@@ -337,8 +337,10 @@
               <ScanText class="h-4 w-4" />
             </div>
             <div>
-              <h2 class="text-base font-semibold text-ink">百度 PaddleOCR API (PP-OCRv5)</h2>
-              <p class="text-xs text-sub">用于扫描版真题与图片讲义的高精度逐页文字识别</p>
+              <h2 class="text-base font-semibold text-ink">百度 PP-OCRv6 API（异步 jobs 识别）</h2>
+              <p class="text-xs text-sub">
+                用于扫描版真题与图片讲义的高精度逐页文字识别：提交识别任务后轮询获取结果，单次识别可能需要数分钟
+              </p>
             </div>
           </div>
           <span
@@ -351,15 +353,24 @@
 
         <div class="mt-6 grid grid-cols-1 gap-4">
           <div>
-            <label class="field-label">完整 API 服务地址 (Full API URL)</label>
+            <label class="field-label">PP-OCRv6 jobs 接口地址</label>
             <input
               v-model="form.baidu_ocr_api_url"
               type="text"
-              placeholder="https://aistudio.baidu.com/serving/api/v1/ocr..."
+              :placeholder="PP_OCR_V6_JOBS_URL"
               class="field mt-1"
             />
             <p class="mt-1 text-[11px] text-faint">
-              请填写完整的 OCR 预测接口 URL。
+              请填写完整的 jobs 接口地址，例如 {{ PP_OCR_V6_JOBS_URL }}。
+            </p>
+            <p
+              v-if="savedOcrUrlIsLegacy"
+              data-ocr-legacy-hint
+              class="mt-2 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] text-warn"
+            >
+              已保存的百度 OCR 地址不是 PP-OCRv6 jobs 地址，请更新为 PP-OCRv6 jobs 地址：{{
+                PP_OCR_V6_JOBS_URL
+              }}。在你点击“保存所有配置”之前，已保存的值不会被自动改写。
             </p>
           </div>
 
@@ -511,7 +522,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, type Component } from 'vue';
+import { ref, reactive, computed, onMounted, type Component } from 'vue';
 import {
   Bot,
   Network,
@@ -528,7 +539,7 @@ import {
   ScrollText,
   Sun,
 } from 'lucide-vue-next';
-import { useDesktop } from '../composables/useDesktop';
+import { useDesktop, PP_OCR_V6_JOBS_URL, isLegacyOcrApiUrl } from '../composables/useDesktop';
 import { useTheme, type ThemePreference } from '../composables/useTheme';
 
 const theme = useTheme();
@@ -630,6 +641,14 @@ const embeddingTestResult = ref<{ ok: boolean; message: string } | null>(null);
 const testingOcr = ref(false);
 const ocrTestResult = ref<{ ok: boolean; message: string } | null>(null);
 
+/**
+ * 已保存的旧版百度 OCR 地址：只在页面上提示“请更新为 PP-OCRv6 jobs 地址”，
+ * 绝不在加载时改写用户已保存的值 —— 只有用户显式点击保存才会写入。
+ */
+const savedOcrUrlIsLegacy = computed(() =>
+  isLegacyOcrApiUrl(credentialsStatus.value?.baidu_ocr.api_url)
+);
+
 onMounted(async () => {
   await fetchStatus();
   if (credentialsStatus.value) {
@@ -637,7 +656,9 @@ onMounted(async () => {
     form.llm_model = credentialsStatus.value.llm.model || 'gpt-4o-mini';
     form.embedding_base_url = credentialsStatus.value.embedding.base_url || 'https://api.openai.com/v1';
     form.embedding_model = credentialsStatus.value.embedding.model || 'text-embedding-3-small';
-    form.baidu_ocr_api_url = credentialsStatus.value.baidu_ocr.api_url || '';
+    // 新配置默认填入 PP-OCRv6 jobs 地址；已有保存值时原样显示，不做静默覆盖。
+    form.baidu_ocr_api_url =
+      credentialsStatus.value.baidu_ocr.api_url || PP_OCR_V6_JOBS_URL;
 
     // Show onboarding wizard if neither LLM nor OCR is configured
     const notConfigured =
