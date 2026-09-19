@@ -200,7 +200,7 @@ async def test_ocr_unit_reports_request_state_with_page_scope(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pdf_parser_maps_ocr_units_to_real_page_numbers(tmp_path, monkeypatch):
-    """PDF 解析：空白页触发 OCR，逐页单元携带真实物理页码。"""
+    """PDF 解析：无文字层的可见内容页触发 OCR，逐页单元携带真实物理页码。"""
     import pymupdf as fitz
     _enable_real_llm(monkeypatch)
     monkeypatch.setattr(settings, "OCR_MODE", "vision_llm")
@@ -209,7 +209,9 @@ async def test_pdf_parser_maps_ocr_units_to_real_page_numbers(tmp_path, monkeypa
     pdf_path = tmp_path / "scan.pdf"
     doc = fitz.open()
     for _ in range(2):
-        doc.new_page(width=200, height=200)  # 空白页 → 需要 OCR
+        p = doc.new_page(width=200, height=200)
+        # 画出可见图形：非纯白渲染才需要 OCR（纯白页在 T1 后会被判空跳过）
+        p.draw_rect(fitz.Rect(10, 10, 50, 50), color=(0, 0, 1), fill=(0, 0, 1))
     doc.save(pdf_path)
     doc.close()
 
@@ -450,3 +452,69 @@ async def test_concurrent_extraction_batches_keep_independent_units():
     assert all(u["state"] == "succeeded" for u in units)
     assert detail["summary"]["succeeded"] == len(units)
     assert detail["summary"]["activeCount"] == 0
+
+
+def test_parse_document_explicit_progress_owns_tasks_progress():
+    """STU-3 P2：progressMode='explicit' 的任务，detail/单元 flush 不得改写 tasks.progress。"""
+    task_id = TaskWorker.create_task("parse_document", f"doc-{uuid.uuid4().hex[:8]}")
+
+    def db_progress():
+        with db_session() as conn:
+            return conn.execute(
+                "SELECT progress FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()["progress"]
+
+    TaskWorker.update_progress_detail(
+        task_id, progressMode="explicit", total=5, succeeded=0, force=True
+    )
+    assert db_progress() == 0, "显式模式 flush 不得派生写 progress"
+
+    for p in (20, 46, 60, 65, 80):
+        TaskWorker.update_task_progress(task_id, p, "m")
+        assert db_progress() == p
+        TaskWorker.update_progress_detail(task_id, force=True)
+        assert db_progress() == p, f"detail flush 不得回退显式进度 {p}"
+        TaskWorker.upsert_exec_unit(
+            task_id, f"page-{p}", kind="page", index=p,
+            state="waiting_slot", action="等待OCR调用名额", force=True
+        )
+        assert db_progress() == p, f"单元 upsert 不得回退显式进度 {p}"
+        TaskWorker.finish_exec_unit(task_id, f"page-{p}", state="succeeded", force=True)
+        assert db_progress() == p, f"单元 finish 不得回退显式进度 {p}"
+
+    # succeeded/total 打满也不得跳到 99：显式进度由执行器独占
+    TaskWorker.update_progress_detail(task_id, succeeded=5, resultCount=5, force=True)
+    assert db_progress() == 80
+
+    TaskWorker.mark_task_completed(task_id, "done")
+    assert db_progress() == 100
+
+
+def test_derived_progress_mode_unchanged_for_other_tasks():
+    """无 progressMode 标志的任务（extract_questions 等）：flush 仍按 succeeded/total 派生。"""
+    task_id = TaskWorker.create_task("extract_questions", f"doc-{uuid.uuid4().hex[:8]}")
+
+    def db_progress():
+        with db_session() as conn:
+            return conn.execute(
+                "SELECT progress FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()["progress"]
+
+    TaskWorker.update_progress_detail(task_id, total=4, succeeded=1, force=True)
+    assert db_progress() == 25
+
+    TaskWorker.upsert_exec_unit(
+        task_id, "qbatch-1", kind="batch", index=1, scope="第 1—4 页",
+        service="llm", state="awaiting_response", action="等待模型响应",
+        request_started=True, force=True
+    )
+    assert db_progress() == 25, "单元 flush 同样走派生 progress"
+
+    TaskWorker.update_task_progress(task_id, 77, "m")
+    assert db_progress() == 77
+
+    TaskWorker.update_progress_detail(task_id, succeeded=3, force=True)
+    assert db_progress() == 75, "派生模式仍按 succeeded/total 覆盖 progress（既有行为）"
+
+    TaskWorker.finish_exec_unit(task_id, "qbatch-1", state="succeeded", force=True)
+    assert db_progress() == 75

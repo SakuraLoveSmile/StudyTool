@@ -655,7 +655,10 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         total = detail.get("total")
         succeeded = detail.get("succeeded", 0)
         pct = None
-        if total is not None and total > 0:
+        # Tasks driving their own explicit progress (e.g. parse_document) must
+        # never have tasks.progress overwritten by the derived succeeded/total
+        # ratio — unit/heartbeat flushes would otherwise bounce it to 0 or 99.
+        if detail.get("progressMode") != "explicit" and total is not None and total > 0:
             pct = min(99, int((succeeded / total) * 100))
 
         now_mono = time.monotonic()
@@ -1091,6 +1094,7 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             failed=0,
             skipped=0,
             currentAction="读取文档信息...",
+            progressMode="explicit",
             force=True
         )
         cls.update_task_progress(task_id, 10, "读取文档信息...")

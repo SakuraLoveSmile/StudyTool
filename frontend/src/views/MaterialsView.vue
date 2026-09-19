@@ -237,9 +237,12 @@
                   </span>
                 </div>
                 <div class="text-xs text-faint mt-1 flex items-center gap-4 flex-wrap">
-                  <span>状态: <strong :class="doc.status === 'completed' ? 'text-ok' : 'text-warn'">{{ doc.status === 'completed' ? '解析完成' : doc.status }}</strong></span>
+                  <span>状态: <strong :class="statusClass(doc.status)">{{ statusText(doc.status) }}</strong></span>
                   <span>总页数/片段: {{ doc.page_count }}</span>
                   <span>上传时间: {{ formatDate(doc.created_at) }}</span>
+                </div>
+                <div v-if="doc.status === 'failed' && doc.error_msg" class="text-xs text-err mt-1 break-all">
+                  失败原因: {{ doc.error_msg }}
                 </div>
               </div>
             </div>
@@ -458,10 +461,16 @@
       :show="selectedDocForChunks !== null"
       title="文档原文切片"
       max-width="4xl"
-      @close="selectedDocForChunks = null"
+      @close="closeChunksModal"
     >
       <div class="space-y-3">
-        <div v-if="docChunks.length === 0" class="text-center py-8 text-faint text-sm">
+        <div v-if="isLoadingChunks" class="text-center py-8 text-faint text-sm">
+          正在加载切片...
+        </div>
+        <div v-else-if="chunksError" class="text-center py-8 text-err text-sm">
+          {{ chunksError }}
+        </div>
+        <div v-else-if="docChunks.length === 0" class="text-center py-8 text-faint text-sm">
           该文档尚未生成切片或正在解析中。
         </div>
         <div v-for="c in docChunks" :key="c.id" class="p-3.5 rounded-xl border border-line bg-raised/50 space-y-2 text-sm">
@@ -613,6 +622,11 @@ const uploadForm = ref({
 // Chunks Drawer & Proofreading
 const selectedDocForChunks = ref<DocumentItem | null>(null);
 const docChunks = ref<DocumentChunk[]>([]);
+const isLoadingChunks = ref(false);
+const chunksError = ref('');
+// 切片弹窗请求身份：每次打开/关闭弹窗递增一次；同一文档关闭重开时 doc.id 相同，
+// 只能靠序号区分新旧请求，旧响应一律丢弃（沿用 LogsView 的 seq 模式）。
+let chunksRequestSeq = 0;
 const isProofreadOpen = ref(false);
 const proofreadChunk = ref<DocumentChunk | null>(null);
 const sourceReadOnly = ref(false);
@@ -795,12 +809,33 @@ const deleteDoc = async (id: string) => {
 };
 
 const viewDocChunks = async (doc: DocumentItem) => {
+  const mySeq = ++chunksRequestSeq;
   selectedDocForChunks.value = doc;
+  docChunks.value = [];
+  chunksError.value = '';
+  isLoadingChunks.value = true;
   try {
-    docChunks.value = await apiClient.getChunks(doc.id);
+    const chunks = await apiClient.getChunks(doc.id);
+    if (mySeq !== chunksRequestSeq || selectedDocForChunks.value?.id !== doc.id) return;
+    docChunks.value = chunks;
   } catch (e) {
     console.error(e);
+    if (mySeq !== chunksRequestSeq || selectedDocForChunks.value?.id !== doc.id) return;
+    chunksError.value = '切片加载失败，请稍后重试';
+  } finally {
+    if (mySeq === chunksRequestSeq && selectedDocForChunks.value?.id === doc.id) {
+      isLoadingChunks.value = false;
+    }
   }
+};
+
+const closeChunksModal = () => {
+  // 关闭即作废在途请求：旧响应回来时序号已不匹配，不会写回已关闭或重开后的弹窗。
+  chunksRequestSeq += 1;
+  selectedDocForChunks.value = null;
+  docChunks.value = [];
+  chunksError.value = '';
+  isLoadingChunks.value = false;
 };
 
 const openProofreadModal = (chunk: DocumentChunk) => {
@@ -829,6 +864,8 @@ const openQuestionSource = async (question: QuestionItem, kind: 'question' | 'an
       : null)
       || (chunks.find(chunk => page !== null && chunk.page_number === page) || chunks[0] || null);
     if (proofreadChunk.value) {
+      // 打开切片弹窗同样消耗一个序号：此前在途的切片请求响应一律视为过期。
+      chunksRequestSeq += 1;
       selectedDocForChunks.value = doc;
       sourceReadOnly.value = true;
       isProofreadOpen.value = true;
@@ -862,6 +899,22 @@ const saveQuestionLinks = async () => {
   } catch (err: any) {
     alert('保存关联失败: ' + err.message);
   }
+};
+
+const statusText = (s: DocumentItem['status']) => {
+  const map: Record<string, string> = {
+    pending: '等待解析',
+    processing: '解析中',
+    completed: '解析完成',
+    failed: '解析失败'
+  };
+  return map[s] || s;
+};
+
+const statusClass = (s: DocumentItem['status']) => {
+  if (s === 'completed') return 'text-ok';
+  if (s === 'failed') return 'text-err';
+  return 'text-warn';
 };
 
 const formatFileType = (t: string) => {

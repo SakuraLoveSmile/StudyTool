@@ -65,6 +65,13 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       testMatch: /specs\/component-level\.spec\.ts/,
     },
+    {
+      // STU-3 资料页回归：材料/任务 API 全部由 spec 内 route 拦截 mock，
+      // 用未配置形态 dev server（5274），不发真实 OCR/反馈请求。
+      name: 'materials-ocr',
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5274' },
+      testMatch: /specs\/materials-ocr\.spec\.ts/,
+    },
   ],
   webServer: [
     {
