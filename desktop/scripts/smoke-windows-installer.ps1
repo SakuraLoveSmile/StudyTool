@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Windows 安装包自动化静默安装与冒烟验证脚本 (兼容 Windows PowerShell 5.1 及 PowerShell 7+)
 
