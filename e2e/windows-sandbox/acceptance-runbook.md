@@ -1,6 +1,7 @@
 # 1.0.6-beta.6 Windows 沙盒与安装兼容性验收执行手册
 
 适用候选包：`rag-study-assistant-desktop-setup-1.0.6-beta.6.exe`（CI `workflow_dispatch` 构建产物）  
+候选包 SHA256：`d64069d3d9dbb94db27c28c4290b85874e91e0d28018e8710e1e9e4bc89d5db8`（CI run `35509516465`；该运行已通过发布前的安装冒烟门禁，冒烟结论 `SUCCESS`、无 `System.dll`/`0xc0000005` 事件）  
 核心背景：彻底防范发布未经安装验证的安装包。此前 beta.4 在 Windows 11 最新构建（如 build 26200）上曾出现过 NSIS 启动时 `System.dll` 崩溃（异常代码 `0xc0000005`）的问题。本次 beta.6 针对 NSIS 打包插件与安装向导进行了专项加固，特制定本手册用于全方位验收安装稳定性与系统兼容性。  
 执行环境要求：
 1. **原故障电脑专项验收**：Windows 11 x64（推荐 build 26200 或更新的 Canary/Dev/Release 预览分支）；
@@ -68,12 +69,13 @@ powershell -ExecutionPolicy Bypass -File .\sandbox-setup.ps1 -UserName st-beta6-
 ```powershell
 whoami                                            # 预期: <计算机名>\<测试账号名>
 echo $env:LOCALAPPDATA                            # 预期测试账号的独立 AppData 路径
-Test-Path "$env:LOCALAPPDATA\Programs\RAG备考助手" # 预期: False（未安装）
+Test-Path "$env:LOCALAPPDATA\Programs\rag-study-assistant-desktop" # 预期: False（未安装）
 Test-Path "$env:LOCALAPPDATA\RAGStudyAssistant"   # 预期: False（数据与日志未生成）
 Get-Process | Where-Object { $_.Name -match 'RAG|backend' } # 预期: 无任何输出
 ```
 
 - **预期**：所有路径均为全新未初始化状态，无残留进程。
+- **路径说明（易错点）**：主程序名是 `RAG备考助手.exe`（取自 `productName`），默认安装目录名却是 `rag-study-assistant-desktop`——`productName` 含非 ASCII 字符时，electron-builder 的 `getWindowsInstallationDirName()` 会回退到 `package.json` 的 `name`。核对路径时不要假定两者同名。
 - **证据**：`ev-PRE-03-isolation.png`。
 
 ---
@@ -185,7 +187,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 W10-1 · 默认路径安装
 - **操作步骤**：
   1. 在干净的 Windows 10 环境中运行安装包；
-  2. 选择默认路径（`%LOCALAPPDATA%\Programs\RAG备考助手`）安装完成。
+  2. 选择默认路径（`%LOCALAPPDATA%\Programs\rag-study-assistant-desktop`，主程序为 `RAG备考助手.exe`）安装完成。
 - **预期结果**：
   - 安装成功，主可执行文件生成在默认目录，extraResources (backend) 完整解压释放；
   - 启动后应用主界面与后台通讯正常。
@@ -231,7 +233,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 - **操作步骤**：
   1. 在存在 mock 数据的环境中，进入「Windows 设置」→「应用」→「已安装的应用」（或控制面板「程序和功能」）；
   2. 找到「RAG备考助手」，点击「卸载」，按向导完成卸载；
-  3. 检查程序目录：`Test-Path "$env:LOCALAPPDATA\Programs\RAG备考助手"`；
+  3. 检查程序目录：`Test-Path "$env:LOCALAPPDATA\Programs\rag-study-assistant-desktop"`（必须是 electron-builder 实际使用的目录名；原先写作 `RAG备考助手` 时该检查恒为 False，会掩盖卸载不干净的问题）；
   4. 检查用户数据目录：`Test-Path "$env:LOCALAPPDATA\RAGStudyAssistant"`；
   5. 再次运行 1.0.6-beta.6 安装包完成全新安装并启动。
 - **预期结果**：

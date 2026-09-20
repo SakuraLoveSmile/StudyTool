@@ -423,8 +423,8 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
 | **Feedback 发布配置门禁**（本轮 T4） | 发布构建注入反馈配置 | Windows 发布构建显式注入 `https://feedback.xn--fhqths51enha.cn` 与 `appId=rag`，不依赖 `.env.local`；缺失或地址无效即构建失败 | 已通过（2026-09-15 Windows CI 实跑：校验步骤通过、构建通过；单测证明缺失/非法即失败） |
 | | 实际挂载与截图遮罩 | 安装包内反馈入口可见、独立登录可用、日志详情区域默认截图遮罩、外部链接走系统浏览器；不得以组件文件存在替代实际挂载验证 | 实现中（日志详情已加截图遮罩；**实际挂载尚未验证**） |
 | **安装器启动崩溃加固与冒烟**（T1.1/T1.2） | NSIS 安全目录读取补丁 | 回移上游 `a356198`：`Push/Pop` 保护寄存器替换 `System::Store`，`lstrcpynW` 限制长度，`CoTaskMemFree` 安全释放；`beforePack` 钩子自动应用，首次/幂等/版本不符/模板漂移硬门禁全部单测通过 | 已通过（自动化单测全绿） |
-| | 安装冒烟测试脚本与 CI 拦截 | 提供 `smoke-windows-installer.ps1`，环境隔离检测（拒碰已有安装）、`/S /currentuser` 静默安装、180s 超时强杀、崩溃取证；CI 构建后发布前强制门禁，失败阻止发布但保留证据 | 已通过（脚本交付、CI 接入） |
-| | 候选包与实机验收规程（T1.3） | 升级至 `1.0.6-beta.6`，精确锁定 `electron-builder@25.1.8`；编制 `e2e/windows-sandbox/acceptance-runbook.md`，制定 Win11 build 26200 连续 3 次取消再安装验证及 Win10 兼容性验收 | 待体验（待实机执行验收） |
+| | 安装冒烟测试脚本与 CI 拦截 | 提供 `smoke-windows-installer.ps1`，环境隔离检测（拒碰已有安装）、`/S /currentuser` 静默安装、180s 超时强杀、崩溃取证；CI 构建后发布前强制门禁，失败阻止发布但保留证据 | 已通过（CI run `35509516465` 冒烟结论 SUCCESS；门禁在前三次运行中实际拦截了 3 个问题） |
+| | 候选包与实机验收规程（T1.3） | 升级至 `1.0.6-beta.6`，精确锁定 `electron-builder@25.1.8`；编制 `e2e/windows-sandbox/acceptance-runbook.md`，制定 Win11 build 26200 连续 3 次取消再安装验证及 Win10 兼容性验收 | 待体验（候选包已发布为 Pre-release，待在干净实机执行验收） |
 
 ---
 
@@ -463,8 +463,21 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
   - 制定原故障 Windows 11 build 26200 专项验收：连续 3 次打开向导并取消（验证解压与取消阶段不崩溃）、第 4 次完成安装、桌面与开始菜单快捷方式启动、退出后重启；核查无 `System.dll` 事件。
   - 制定 Windows 10 x64 路径兼容性、覆盖升级数据保留、卸载后重装验证方案。
 
-### 3. 当前状态与结论
-- **状态**：**待体验**（本地自动化单测 135 项全绿、代码审查 PASS、CI 门禁与沙盒执行规程已完备，待在干净 Windows 11 build 26200 原故障实机执行验证）。
+### 3. 候选包发布与 CI 实测证据（2026-09-20）
+
+- **已发布候选包**：GitHub Pre-release `desktop-v1.0.6-beta.6`（仓库 `SakuraLoveSmile/StudyTool-Releases`），资产为安装包、`.blockmap`、`latest.yml`、`RELEASE_MANIFEST.json`、`SHA256SUMS.txt`；`latest` 仍指向 `desktop-v1.0.5`，旧包未被覆盖或改写。
+- **候选包 SHA256**：`d64069d3d9dbb94db27c28c4290b85874e91e0d28018e8710e1e9e4bc89d5db8`（安装包与清单一致）。
+- **打包元数据**（`RELEASE_MANIFEST.json` 的 `packaging` 段）：`builder_version = 25.1.8`、`upstream_patch_commit = a356198ec7c54c7795659342bff36d9a5162cd93`、`patched_template_sha256 = 519a23385d3b3da4ce3925f9b9c34e2b8d2b98a1bcc8a510f721f56cffe910ee`。
+- **CI 实测**：运行 `35509516465` 全绿（5m28s），发布前安装冒烟门禁通过，冒烟结论 `SUCCESS`：
+  - 安装退出码 `0`、耗时 24.43 秒、未超时；隔离预检 `precheck_clean = true`；
+  - 卸载注册项已写入（`RAG备考助手 1.0.6-beta.6`）；
+  - 主程序实际落盘位置 `%LOCALAPPDATA%\Programs\rag-study-assistant-desktop\RAG备考助手.exe`；
+  - `critical_system_dll_crash = false`，事件日志中无 `System.dll` / `0xc0000005` / `Application Error` 记录。
+- **门禁有效性实证**：该门禁并非空转——同一候选包在前三次运行中依次拦截了 3 个真实缺陷（`node.cmd` 不存在导致打包中断、PowerShell 脚本缺 UTF-8 BOM 导致 PS 5.1 解析失败、冒烟脚本按错误目录名/程序名硬编码查找主程序），修复后第四次运行才放行发布。
+- **注意（验收边界）**：CI runner 为 Windows Server 2022，**不等于**原故障机 Windows 11 build 26200；上述结论只证明“打包产物可被静默安装且无对应崩溃事件”，交互向导的连续取消/安装/快捷方式启动仍需按手册在真机执行。
+
+### 4. 当前状态与结论
+- **状态**：**待体验**（本地自动化单测 135 项全绿、代码审查 PASS、候选包已通过 CI 安装冒烟并发布为 Pre-release；待在干净 Windows 11 build 26200 原故障实机执行交互验收）。
 
 ---
 
