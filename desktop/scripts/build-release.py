@@ -55,6 +55,16 @@ def npx_executable() -> str:
     return "npx.cmd" if os.name == "nt" else "npx"
 
 
+def node_executable() -> str:
+    """Return the executable name that Python can launch on each host OS."""
+    return "node.cmd" if os.name == "nt" else "node"
+
+
+ELECTRON_BUILDER_PINNED_VERSION = "25.1.8"
+NSIS_UPSTREAM_PATCH_COMMIT = "a356198ec7c54c7795659342bff36d9a5162cd93"
+NSIS_PATCHED_TEMPLATE_SHA256 = "519a23385d3b3da4ce3925f9b9c34e2b8d2b98a1bcc8a510f721f56cffe910ee"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -535,6 +545,16 @@ def main():
     # 5. Run desktop unit tests
     run_command([npm_executable(), "test"], desktop_dir, "Running desktop unit tests")
 
+    # 5b. Verify and apply NSIS template patch ahead of electron-builder
+    print("\n[Step 5b] Verifying and applying NSIS multiUser template patch...")
+    patch_script = desktop_dir / "scripts" / "patch-nsis-template.js"
+    if patch_script.is_file():
+        run_command(
+            [node_executable(), str(patch_script)],
+            desktop_dir,
+            "Verifying / applying NSIS template patch ahead of packaging",
+        )
+
     # 6. Package with electron-builder
     if sys.platform == "win32" or os.environ.get("FORCE_BUILD_WIN"):
         run_command(
@@ -581,6 +601,12 @@ def main():
     manifest = {
         "build_time": datetime.now(timezone.utc).isoformat(),
         "version": package_version,
+        "packaging": {
+            "builder": "electron-builder",
+            "builder_version": ELECTRON_BUILDER_PINNED_VERSION,
+            "upstream_patch_commit": NSIS_UPSTREAM_PATCH_COMMIT,
+            "patched_template_sha256": NSIS_PATCHED_TEMPLATE_SHA256,
+        },
         "feedback": read_feedback_dependency(frontend_dir),
         "frontend_assets": sorted(served_assets),
         "installers": [],

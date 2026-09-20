@@ -126,6 +126,26 @@ jobs:
           VITE_FEEDBACK_APP_ID: ${{ env.VITE_FEEDBACK_APP_ID }}
         run: python desktop/scripts/build-release.py
 
+      - name: Run Windows installer smoke test
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem desktop/release -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "Installer executable (.exe) not found in desktop/release"
+          }
+          $evidenceDir = "desktop/release/smoke-evidence"
+          New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+          Write-Host "Running Windows installer smoke test on $($installer.FullName)..."
+          powershell -ExecutionPolicy Bypass -File desktop/scripts/smoke-windows-installer.ps1 -InstallerPath $installer.FullName -EvidenceDir $evidenceDir -TimeoutSeconds 180
+
+      - name: Upload smoke test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-study-assistant-smoke-evidence-${{ env.RELEASE_VERSION }}
+          if-no-files-found: ignore
+          path: desktop/release/smoke-evidence/
+
       - name: Upload build artifacts to the workflow
         uses: actions/upload-artifact@v4
         with:
