@@ -88,22 +88,54 @@
               {{ savingScope ? '保存中…' : '保存' }}
             </button>
           </div>
-          <div v-if="chapters.length === 0" class="mt-4 rounded-lg bg-stone-50 px-3 py-3 text-xs text-stone-400">
+          <div class="mt-3 min-h-[40px]">
+            <div
+              v-if="scopeStatus === 'success'"
+              class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-4 text-emerald-700"
+              role="status"
+              aria-live="polite"
+            >
+              {{ scopeMessage }}
+            </div>
+            <div
+              v-else-if="scopeStatus === 'warning'"
+              class="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-4 text-amber-700"
+              role="alert"
+            >
+              <span>{{ scopeMessage }}</span>
+              <button
+                type="button"
+                class="shrink-0 text-xs font-medium text-brand-600 hover:underline disabled:opacity-50"
+                :disabled="loading"
+                @click="retryScopeRefresh"
+              >
+                重试刷新
+              </button>
+            </div>
+            <div
+              v-else-if="scopeStatus === 'error'"
+              class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-4 text-rose-700"
+              role="alert"
+            >
+              {{ scopeMessage }}
+            </div>
+          </div>
+          <div v-if="chapters.length === 0" class="mt-3 rounded-lg bg-stone-50 px-3 py-3 text-xs text-stone-400">
             暂无章节，请先在回忆卡页面创建章节或导入内容。
           </div>
-          <div v-else class="mt-4 max-h-64 space-y-1.5 overflow-y-auto pr-1">
+          <div v-else class="mt-3 max-h-64 space-y-1.5 overflow-y-auto pr-1">
             <label
               v-for="chapter in chapters"
               :key="chapter.id"
               class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors hover:bg-stone-50"
             >
-              <input v-model="selectedChapterIds" type="checkbox" :value="chapter.id" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
+              <input v-model="selectedChapterIds" type="checkbox" :value="chapter.id" :disabled="savingScope" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" @change="markScopeDirty" />
               <span class="min-w-0 flex-1 truncate text-stone-700">{{ chapter.name }}</span>
               <span class="shrink-0 text-[11px] text-stone-400">{{ chapter.card_count }}</span>
             </label>
           </div>
           <label class="mt-3 flex cursor-pointer items-center gap-2 border-t border-stone-100 pt-3 text-xs text-stone-600">
-            <input v-model="includeUnassigned" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
+            <input v-model="includeUnassigned" type="checkbox" :disabled="savingScope" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" @change="markScopeDirty" />
             包含未分类卡片
           </label>
         </section>
@@ -118,21 +150,38 @@
               {{ savingSettings ? '保存中…' : '保存' }}
             </button>
           </div>
-          <div class="mt-4 space-y-3 text-xs">
+          <div class="mt-3 min-h-[40px]">
+            <div
+              v-if="settingsStatus === 'success'"
+              class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-4 text-emerald-700"
+              role="status"
+              aria-live="polite"
+            >
+              {{ settingsMessage }}
+            </div>
+            <div
+              v-else-if="settingsStatus === 'error'"
+              class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-4 text-rose-700"
+              role="alert"
+            >
+              {{ settingsMessage }}
+            </div>
+          </div>
+          <div class="mt-3 space-y-3 text-xs">
             <label class="block">
               <span class="field-label">每日新卡上限（1–100）</span>
-              <input v-model.number="settings.daily_new_limit" type="number" min="1" max="100" step="1" class="field" placeholder="未配置" />
+              <input v-model.number="settings.daily_new_limit" type="number" min="1" max="100" step="1" class="field" placeholder="未配置" :disabled="savingSettings" @input="markSettingsDirty" />
             </label>
             <label class="block">
               <span class="field-label">每日复习上限（1–100）</span>
-              <input v-model.number="settings.daily_review_limit" type="number" min="1" max="100" class="field" placeholder="未配置" />
+              <input v-model.number="settings.daily_review_limit" type="number" min="1" max="100" class="field" placeholder="未配置" :disabled="savingSettings" @input="markSettingsDirty" />
             </label>
             <label class="flex cursor-pointer items-center gap-2 text-stone-600">
-              <input v-model="settings.auto_advance" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
+              <input v-model="settings.auto_advance" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" :disabled="savingSettings" @change="markSettingsDirty" />
               评分后自动进入下一张
             </label>
             <label class="flex cursor-pointer items-center gap-2 text-stone-600">
-              <input v-model="settings.show_hints" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" />
+              <input v-model="settings.show_hints" type="checkbox" class="rounded border-stone-300 text-brand-600 focus:ring-brand-500" :disabled="savingSettings" @change="markSettingsDirty" />
               揭示前显示提示
             </label>
           </div>
@@ -201,9 +250,31 @@ const selectedChapterIds = ref<string[]>([]);
 const includeUnassigned = ref(true);
 const loading = ref(false);
 const busy = ref(false);
-const savingSettings = ref(false);
-const savingScope = ref(false);
 const pageError = ref('');
+
+type CardSaveStatus = 'idle' | 'saving' | 'success' | 'error';
+type ScopeSaveStatus = CardSaveStatus | 'warning';
+
+const scopeStatus = ref<ScopeSaveStatus>('idle');
+const scopeMessage = ref('');
+const settingsStatus = ref<CardSaveStatus>('idle');
+const settingsMessage = ref('');
+const savingScope = computed(() => scopeStatus.value === 'saving');
+const savingSettings = computed(() => settingsStatus.value === 'saving');
+
+const markScopeDirty = () => {
+  if (scopeStatus.value !== 'saving') {
+    scopeStatus.value = 'idle';
+    scopeMessage.value = '';
+  }
+};
+
+const markSettingsDirty = () => {
+  if (settingsStatus.value !== 'saving') {
+    settingsStatus.value = 'idle';
+    settingsMessage.value = '';
+  }
+};
 
 const completionPercent = computed(() => {
   if (!today.value.total) return 0;
@@ -248,13 +319,15 @@ const applyScope = (scope: LearningScope) => {
   includeUnassigned.value = scope.include_unassigned;
 };
 
-const refreshToday = async () => {
+const refreshToday = async (): Promise<boolean> => {
   loading.value = true;
   pageError.value = '';
   try {
     applyToday(await apiClient.getTodayLearning());
+    return true;
   } catch (error) {
     pageError.value = error instanceof Error ? error.message : '加载今日学习失败，请稍后重试。';
+    return false;
   } finally {
     loading.value = false;
   }
@@ -389,35 +462,55 @@ const nullableDailyLimit = (value: number | null | undefined): number | null => 
 };
 
 const saveSettings = async () => {
-  savingSettings.value = true;
+  const snapshot = { ...settings.value };
+  settingsStatus.value = 'saving';
+  settingsMessage.value = '';
   try {
     settings.value = await apiClient.updateLearningSettings({
-      daily_new_limit: nullableDailyLimit(settings.value.daily_new_limit),
-      daily_review_limit: nullableDailyLimit(settings.value.daily_review_limit),
-      reveal_after_seconds: settings.value.reveal_after_seconds === null ? null : Math.max(0, Number(settings.value.reveal_after_seconds) || 0),
-      auto_advance: settings.value.auto_advance,
-      show_hints: settings.value.show_hints,
+      daily_new_limit: nullableDailyLimit(snapshot.daily_new_limit),
+      daily_review_limit: nullableDailyLimit(snapshot.daily_review_limit),
+      reveal_after_seconds: snapshot.reveal_after_seconds === null || snapshot.reveal_after_seconds === undefined ? null : Math.max(0, Number(snapshot.reveal_after_seconds) || 0),
+      auto_advance: snapshot.auto_advance,
+      show_hints: snapshot.show_hints,
     });
+    settingsStatus.value = 'success';
+    settingsMessage.value = '今日设置已保存';
   } catch (error) {
-    pageError.value = error instanceof Error ? error.message : '保存设置失败，请稍后重试。';
-  } finally {
-    savingSettings.value = false;
+    settingsStatus.value = 'error';
+    settingsMessage.value = error instanceof Error ? error.message : '保存设置失败，请稍后重试。';
   }
 };
 
 const saveScope = async () => {
-  savingScope.value = true;
+  const chapterIds = [...selectedChapterIds.value];
+  const unassigned = includeUnassigned.value;
+  scopeStatus.value = 'saving';
+  scopeMessage.value = '';
   try {
     const scope = await apiClient.updateLearningScope({
-      chapter_ids: selectedChapterIds.value,
-      include_unassigned: includeUnassigned.value,
+      chapter_ids: chapterIds,
+      include_unassigned: unassigned,
     });
     applyScope(normaliseScope(scope));
-    await refreshToday();
+    const refreshed = await refreshToday();
+    if (refreshed) {
+      scopeStatus.value = 'success';
+      scopeMessage.value = '学习范围已保存';
+    } else {
+      scopeStatus.value = 'warning';
+      scopeMessage.value = '学习范围已保存，今日队列刷新失败，可重试刷新';
+    }
   } catch (error) {
-    pageError.value = error instanceof Error ? error.message : '保存学习范围失败，请稍后重试。';
-  } finally {
-    savingScope.value = false;
+    scopeStatus.value = 'error';
+    scopeMessage.value = error instanceof Error ? error.message : '保存学习范围失败，请稍后重试。';
+  }
+};
+
+const retryScopeRefresh = async () => {
+  const refreshed = await refreshToday();
+  if (refreshed && scopeStatus.value === 'warning') {
+    scopeStatus.value = 'success';
+    scopeMessage.value = '学习范围已保存';
   }
 };
 
