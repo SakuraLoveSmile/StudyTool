@@ -60,9 +60,17 @@ function Write-SmokeLog {
 # 0. 基础环境与配置常量
 # -----------------------------------------------------------------------------
 $APP_ID = "com.rag.studyassistant"
-$PRODUCT_NAME = "RAG备考助手"
-$DEFAULT_INSTALL_DIR = Join-Path $env:LOCALAPPDATA "Programs\$PRODUCT_NAME"
-$DEFAULT_APP_EXE = Join-Path $DEFAULT_INSTALL_DIR "$PRODUCT_NAME.exe"
+# 主程序文件名来自 electron-builder 的 PRODUCT_FILENAME（= productName）。
+$PRODUCT_FILENAME = "RAG备考助手"
+$APP_EXE_NAME = "$PRODUCT_FILENAME.exe"
+# 安装目录名来自 APP_FILENAME，与主程序名并不是一回事：getWindowsInstallationDirName()
+# 只在 productFilename 完全匹配 ^[-_+0-9a-zA-Z .]+$ 时才采用它，含中文时回退到
+# package.json 的 name。所以真实目录名是 rag-study-assistant-desktop，而不是
+# "RAG备考助手"。下面的默认值仅作兜底，真实位置一律以注册表记录为准。
+$INSTALL_DIR_NAME = "rag-study-assistant-desktop"
+$INSTALL_ROOT = Join-Path $env:LOCALAPPDATA "Programs"
+$DEFAULT_INSTALL_DIR = Join-Path $INSTALL_ROOT $INSTALL_DIR_NAME
+$DEFAULT_APP_EXE = Join-Path $DEFAULT_INSTALL_DIR $APP_EXE_NAME
 $UNINSTALL_REG_PATH = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$APP_ID"
 $APP_REG_PATH = "HKCU:\Software\$APP_ID"
 
@@ -92,6 +100,68 @@ $summary = [ordered]@{
   verdict                   = "PENDING"
   failure_reasons           = @()
   process_snapshot          = @()
+}
+
+# -----------------------------------------------------------------------------
+# 主程序定位：以安装器实际写入的注册表为准，避免对目录名/文件名的硬编码假设
+# -----------------------------------------------------------------------------
+function Resolve-InstalledExecutable {
+  param([string]$UninstallKeyPath)
+
+  # 1) 卸载项的 DisplayIcon 记录主程序绝对路径（形如 "<path>,0"）
+  if ($UninstallKeyPath -and (Test-Path -Path $UninstallKeyPath)) {
+    $iconProp = (Get-ItemProperty -Path $UninstallKeyPath -Name DisplayIcon -ErrorAction SilentlyContinue).DisplayIcon
+    if ($iconProp) {
+      $iconPath = ($iconProp -replace ',\s*\d+\s*$', '').Trim('"').Trim()
+      if ($iconPath -and ($iconPath -match '(?i)\.exe$') -and (Test-Path -Path $iconPath -PathType Leaf)) {
+        return $iconPath
+      }
+    }
+    # 2) 卸载项本身不写 InstallLocation；它由应用注册表项 Software\<APP_GUID> 持有，
+    #    这里用卸载项 key 名推导同一个 GUID（见 installer.nsh 的 registryAddInstallInfo）。
+    $appGuid = Split-Path -Path $UninstallKeyPath -Leaf
+    if ($appGuid) {
+      $appKey = "HKCU:\Software\$appGuid"
+      if (Test-Path -Path $appKey) {
+        $installLocation = (Get-ItemProperty -Path $appKey -Name InstallLocation -ErrorAction SilentlyContinue).InstallLocation
+        if ($installLocation) {
+          $candidate = Join-Path $installLocation $APP_EXE_NAME
+          if (Test-Path -Path $candidate -PathType Leaf) { return $candidate }
+        }
+      }
+    }
+  }
+
+  # 3) 已知默认目录（含历史假设的中文目录名，保持向后兼容）
+  foreach ($dir in @($DEFAULT_INSTALL_DIR, (Join-Path $INSTALL_ROOT $PRODUCT_FILENAME))) {
+    $candidate = Join-Path $dir $APP_EXE_NAME
+    if (Test-Path -Path $candidate -PathType Leaf) { return $candidate }
+  }
+
+  # 4) 在 Programs 下按与应用相关的目录名兜底搜索
+  if (Test-Path -Path $INSTALL_ROOT) {
+    foreach ($dirItem in (Get-ChildItem -Path $INSTALL_ROOT -Directory -ErrorAction SilentlyContinue)) {
+      if ($dirItem.Name -match '(?i)rag|studytool|备考') {
+        $candidate = Join-Path $dirItem.FullName $APP_EXE_NAME
+        if (Test-Path -Path $candidate -PathType Leaf) { return $candidate }
+      }
+    }
+  }
+
+  return $null
+}
+
+function Get-InstallRootListing {
+  # 校验失败时留下真实目录清单，避免下一轮继续靠猜
+  if (-not (Test-Path -Path $INSTALL_ROOT)) { return @("(no such directory: $INSTALL_ROOT)") }
+  $lines = @()
+  foreach ($dirItem in (Get-ChildItem -Path $INSTALL_ROOT -Directory -ErrorAction SilentlyContinue)) {
+    $lines += "[dir] $($dirItem.FullName)"
+    foreach ($fileItem in (Get-ChildItem -Path $dirItem.FullName -Filter '*.exe' -ErrorAction SilentlyContinue)) {
+      $lines += "    [exe] $($fileItem.Name)"
+    }
+  }
+  return $lines
 }
 
 # -----------------------------------------------------------------------------
@@ -151,8 +221,9 @@ if (Test-Path -Path $uninstallBase) {
 }
 
 # 3. 检查默认安装路径与主 exe
-if (Test-Path -Path $DEFAULT_APP_EXE) {
-  $conflicts.Add("默认安装路径下已存在主程序: $DEFAULT_APP_EXE")
+$preExistingExe = Resolve-InstalledExecutable -UninstallKeyPath $null
+if ($preExistingExe) {
+  $conflicts.Add("已存在安装好的主程序: $preExistingExe")
 } elseif (Test-Path -Path $DEFAULT_INSTALL_DIR) {
   $conflicts.Add("默认安装目录已存在: $DEFAULT_INSTALL_DIR")
 }
@@ -403,18 +474,7 @@ if ($timedOut) {
   Write-SmokeLog "SUCCESS" "进程退出码正常 (0)"
 }
 
-# 2. 主执行文件存在性校验
-$exeExists = Test-Path -Path $DEFAULT_APP_EXE
-if (-not $exeExists) {
-  $err = "校验失败：主程序可执行文件未生成: $DEFAULT_APP_EXE"
-  Write-SmokeLog "ERROR" $err
-  $failureReasons.Add($err)
-} else {
-  $exeItem = Get-Item -Path $DEFAULT_APP_EXE
-  Write-SmokeLog "SUCCESS" "主程序可执行文件存在: $DEFAULT_APP_EXE ($([math]::Round($exeItem.Length / 1MB, 2)) MB)"
-}
-
-# 3. 注册表卸载信息校验
+# 2. 注册表卸载信息校验（先做：主程序定位依赖它的记录）
 $regExists = Test-Path -Path $UNINSTALL_REG_PATH
 $matchedUninstallKey = $null
 if ($regExists) {
@@ -441,11 +501,30 @@ if ($regExists) {
   }
 }
 
+# 3. 主执行文件存在性校验（位置以注册表记录为准，不做目录/文件名硬编码假设）
+$installedExePath = Resolve-InstalledExecutable -UninstallKeyPath $matchedUninstallKey
+$exeExists = [bool]$installedExePath
+if (-not $exeExists) {
+  $err = "校验失败：未找到已安装的主程序 ($APP_EXE_NAME)；已核对注册表 DisplayIcon/InstallLocation 与默认目录 $DEFAULT_INSTALL_DIR"
+  Write-SmokeLog "ERROR" $err
+  $failureReasons.Add($err)
+  # 留下真实目录清单，下一轮不再靠猜
+  $rootListing = Get-InstallRootListing
+  Write-SmokeLog "ERROR" "Programs 目录实际内容:"
+  foreach ($line in $rootListing) { Write-SmokeLog "ERROR" "  $line" }
+  $listingFile = Join-Path $resolvedEvidenceDir "install-root-listing.txt"
+  [System.IO.File]::WriteAllText($listingFile, (($rootListing -join [Environment]::NewLine) + [Environment]::NewLine), [System.Text.Encoding]::UTF8)
+} else {
+  $exeItem = Get-Item -Path $installedExePath
+  Write-SmokeLog "SUCCESS" "主程序可执行文件存在: $installedExePath ($([math]::Round($exeItem.Length / 1MB, 2)) MB)"
+}
+
 # 更新 summary 汇总对象
 $summary.duration_seconds          = [math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
 $summary.timed_out                 = $timedOut
 $summary.installer_exit_code       = $installerExitCode
 $summary.installed_exe_exists      = $exeExists
+$summary.installed_exe_path        = if ($installedExePath) { $installedExePath } else { $DEFAULT_APP_EXE }
 $summary.uninstall_reg_exists      = $regExists
 $summary.uninstall_reg_key         = if ($matchedUninstallKey) { $matchedUninstallKey } else { $UNINSTALL_REG_PATH }
 $summary.crash_events_count        = $crashEvents.Count
