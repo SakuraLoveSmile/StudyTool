@@ -1,4 +1,4 @@
-# 专业课备考助手 MVP (Major Exam Prep Assistant)
+# 学习助手 (StudyTool)
 
 > 公网多人部署：见 [部署与备份说明](deploy/README.md) 和 [本次上线执行记录](RELEASE.md)。公网模式使用独立账号、每用户数据库及上传目录；下方快速启动仅用于本机开发，不可直接暴露公网。
 

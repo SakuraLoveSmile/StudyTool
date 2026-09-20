@@ -33,7 +33,7 @@ def isolated_desktop_env(tmp_path, monkeypatch):
     """Setup an isolated desktop environment for tests."""
     data_dir = tmp_path / "desktop_data"
     data_dir.mkdir(parents=True)
-    monkeypatch.setenv("RAG_DESKTOP_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("STUDYTOOL_DESKTOP_DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DESKTOP_MODE", True)
     monkeypatch.setattr(settings, "DESKTOP_INSTANCE_TOKEN", "test-secret-token-12345")
@@ -61,14 +61,14 @@ def test_desktop_access_middleware_enforces_token_and_host(isolated_desktop_env)
     # 3. /api/desktop/status with invalid token should be rejected (401)
     res_bad_token = client.get(
         "/api/desktop/status",
-        headers={"X-RAG-Instance-Token": "wrong-token", "Host": "127.0.0.1:18764"},
+        headers={"X-StudyTool-Instance-Token": "wrong-token", "Host": "127.0.0.1:18764"},
     )
     assert res_bad_token.status_code == 401
 
     # 4. /api/desktop/status with invalid host should be rejected (403)
     res_bad_host = client.get(
         "/api/desktop/status",
-        headers={"X-RAG-Instance-Token": "test-secret-token-12345", "Host": "attacker.com:18764"},
+        headers={"X-StudyTool-Instance-Token": "test-secret-token-12345", "Host": "attacker.com:18764"},
     )
     assert res_bad_host.status_code == 403
     assert res_bad_host.json()["detail"]["code"] == "INVALID_HOST"
@@ -76,7 +76,7 @@ def test_desktop_access_middleware_enforces_token_and_host(isolated_desktop_env)
     # 5. /api/desktop/status with valid token and host should succeed
     res_valid = client.get(
         "/api/desktop/status",
-        headers={"X-RAG-Instance-Token": "test-secret-token-12345", "Host": "127.0.0.1:18764"},
+        headers={"X-StudyTool-Instance-Token": "test-secret-token-12345", "Host": "127.0.0.1:18764"},
     )
     assert res_valid.status_code == 200
     data = res_valid.json()
@@ -92,7 +92,7 @@ def test_desktop_access_middleware_rejects_cross_origin_writes(isolated_desktop_
         "/api/desktop/config/validate",
         json={"new_embedding_model": "test"},
         headers={
-            "X-RAG-Instance-Token": "test-secret-token-12345",
+            "X-StudyTool-Instance-Token": "test-secret-token-12345",
             "Host": "127.0.0.1:18764",
             "Origin": "http://evil-site.com",
         },
@@ -105,7 +105,7 @@ def test_desktop_access_middleware_rejects_cross_origin_writes(isolated_desktop_
         "/api/desktop/config/validate",
         json={"new_embedding_model": settings.EMBEDDING_MODEL},
         headers={
-            "X-RAG-Instance-Token": "test-secret-token-12345",
+            "X-StudyTool-Instance-Token": "test-secret-token-12345",
             "Host": "127.0.0.1:18764",
             "Origin": "http://127.0.0.1:18764",
         },
@@ -117,7 +117,7 @@ def test_desktop_access_middleware_rejects_cross_origin_writes(isolated_desktop_
 def test_embedding_lock_when_vectors_exist(isolated_desktop_env):
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "test-secret-token-12345",
+        "X-StudyTool-Instance-Token": "test-secret-token-12345",
         "Host": "127.0.0.1:18764",
         "Origin": "http://127.0.0.1:18764",
     }
@@ -358,7 +358,7 @@ def test_maintenance_mode_rejects_mutating_user_writes(isolated_desktop_env):
     from app.desktop import MaintenanceManager
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "test-secret-token-12345",
+        "X-StudyTool-Instance-Token": "test-secret-token-12345",
         "Host": "127.0.0.1:18764",
         "Origin": "http://127.0.0.1:18764",
     }

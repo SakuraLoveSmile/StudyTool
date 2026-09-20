@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   StudyTool 1.0.6-beta.3 · D4 Windows 沙盒验收 —— 临时宿主账号创建脚本。
 
@@ -10,11 +10,11 @@
   验收结束后必须运行同目录 sandbox-teardown.ps1 完成清理（删账号、删 profile、核对 ACL）。
 
   为什么必须用独立账号做隔离（冻结契约 D4 背景，切勿改用环境变量省事）：
-    - 桌面日志目录固定为 %LOCALAPPDATA%\RAGStudyAssistant\logs
-      （desktop/src/backend-manager.ts 的 getLogDir() 不读 RAG_DESKTOP_DATA_DIR）；
-    - 后端数据目录 %LOCALAPPDATA%\RAGStudyAssistant\data 可被
-      RAG_DESKTOP_DATA_DIR 改道，但日志目录不行；
-    - Electron userData 在 %APPDATA%\<productName> 下（productName=RAG备考助手）。
+    - 桌面日志目录固定为 %LOCALAPPDATA%\StudyTool\logs
+      （desktop/src/backend-manager.ts 的 getLogDir() 不读 STUDYTOOL_DESKTOP_DATA_DIR）；
+    - 后端数据目录 %LOCALAPPDATA%\StudyTool\data 可被
+      STUDYTOOL_DESKTOP_DATA_DIR 改道，但日志目录不行；
+    - Electron userData 在 %APPDATA%\<productName> 下（productName=学习助手）。
     因此「全新日志/数据/userData」只能靠另一个 Windows 账号的 AppData 获得。
 
 .PARAMETER UserName
@@ -106,7 +106,7 @@ try {
   $profileRoot = "C:\Users\$UserName"
   $localBase   = "$profileRoot\AppData\Local"
   $roamBase    = "$profileRoot\AppData\Roaming"
-  $ragLocal    = "$localBase\RAGStudyAssistant"
+  $appLocal     = "$localBase\StudyTool"
 
   Emit '---------------- 步骤 2/3：生成该账号的 profile ----------------'
   Emit 'profile（C:\Users\<账号>）无法由本脚本预创建，需要先让 Windows 为该账号初始化一次。'
@@ -121,14 +121,14 @@ try {
   Emit '切到该账号会话后，安装应用【之前】执行以下检查，预期全新（回传输出）:'
   Emit "  whoami                                          → 期望: $env:COMPUTERNAME\$UserName"
   Emit "  echo `$env:LOCALAPPDATA                          → 期望: $localBase"
-  Emit "  Test-Path `"`$env:LOCALAPPDATA\RAGStudyAssistant`"  → 期望: False（日志/数据目录尚未生成）"
-  Emit "  Get-ChildItem `"`$env:APPDATA`" -Filter '*RAG*'     → 期望: 无输出（Electron userData 未生成）"
-  Emit "  Get-Process | ? {`$_.Name -match 'RAG|backend'}  → 期望: 无输出（无遗留进程）"
+  Emit "  Test-Path `"`$env:LOCALAPPDATA\StudyTool`"  → 期望: False（日志/数据目录尚未生成）"
+  Emit "  Get-ChildItem `"`$env:APPDATA`" -Filter '*学习助手*'  → 期望: 无输出（Electron userData 未生成）"
+  Emit "  Get-Process | ? {`$_.Name -match '学习助手|backend'}  → 期望: 无输出（无遗留进程）"
   Emit ''
   Emit '该账号下验收会涉及的三个路径（写进记录，ACL 演示与核对都用得到）:'
-  Emit "  桌面日志目录:   $ragLocal\logs"
-  Emit "  后端数据目录:   $ragLocal\data   （RAG_DESKTOP_DATA_DIR 只能改它，改不了 logs）"
-  Emit "  Electron userData: $roamBase\RAG备考助手  （productName；若不存在则看 $roamBase\rag-study-assistant-desktop）"
+  Emit "  桌面日志目录:   $appLocal\logs"
+  Emit "  后端数据目录:   $appLocal\data   （STUDYTOOL_DESKTOP_DATA_DIR 只能改它，改不了 logs）"
+  Emit "  Electron userData: $roamBase\学习助手  （productName；若不存在则看 $roamBase\studytool）"
   Emit ''
   if ($generated) {
     Emit '==================== 账号密码（仅此一次显示，立即记录） ===================='

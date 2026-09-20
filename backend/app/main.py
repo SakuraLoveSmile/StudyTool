@@ -62,7 +62,7 @@ def bootstrap_desktop(input_stream=None):
     if _desktop_bootstrapped:
         return
     _desktop_bootstrapped = True
-    os.environ["RAG_DESKTOP_MODE"] = "1"
+    os.environ["STUDYTOOL_DESKTOP_MODE"] = "1"
 
     stream = input_stream or sys.stdin
     line = stream.readline()
@@ -94,7 +94,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # `bootstrap_desktop()` stays gated on script execution so importing this module (tests,
 # uvicorn --reload child, tooling) can never block on reading stdin.
 _running_as_script = __name__ == "__main__"
-if _running_as_script and ("--desktop" in sys.argv or os.environ.get("RAG_DESKTOP_MODE") == "1"):
+if _running_as_script and ("--desktop" in sys.argv or os.environ.get("STUDYTOOL_DESKTOP_MODE") == "1"):
     bootstrap_desktop()
 
 from app.diagnostics import (
@@ -235,7 +235,7 @@ async def lifespan(app: FastAPI):
         shutdown_diagnostics()
 
 app = FastAPI(
-    title="专业课备考助手 MVP",
+    title="学习助手",
     description="单机个人专业课备考知识库、考点统计、背诵卡与练习批改系统",
     version="1.0.0",
     lifespan=lifespan,
@@ -302,7 +302,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default=None, help="Host to listen on")
     args, _ = parser.parse_known_args()
 
-    if args.desktop or os.environ.get("RAG_DESKTOP_MODE") == "1":
+    if args.desktop or os.environ.get("STUDYTOOL_DESKTOP_MODE") == "1":
         bootstrap_desktop()
 
     from app.config import settings

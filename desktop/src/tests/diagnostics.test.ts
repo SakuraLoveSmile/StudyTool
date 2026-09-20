@@ -106,8 +106,8 @@ test('redaction: secrets, URL query strings, user paths and file names', () => {
     'GET https://api.example.com/v1/models'
   );
   // User paths.
-  assert.ok(!scrubString('C:\\Users\\测试用户\\AppData\\Local\\RAGStudyAssistant\\data\\app.db').includes('测试用户'));
-  assert.ok(!scrubString('/Users/someone/Library/Application Support/RAGStudyAssistant/logs').includes('someone'));
+  assert.ok(!scrubString('C:\\Users\\测试用户\\AppData\\Local\\StudyTool\\data\\app.db').includes('测试用户'));
+  assert.ok(!scrubString('/Users/someone/Library/Application Support/StudyTool/logs').includes('someone'));
   assert.ok(!scrubString('~/Documents/private/notes').includes('private'));
   // Document file names.
   assert.strictEqual(scrubString('failed to parse 2024真题.pdf'), 'failed to parse <file>');

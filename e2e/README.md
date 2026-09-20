@@ -1,6 +1,6 @@
-# RAG 反馈接入 e2e（Playwright）
+# 学习助手 反馈接入 e2e（Playwright）
 
-独立依赖树。**本目录的任何内容都不会进入 RAG 前端依赖**：不写
+独立依赖树。**本目录的任何内容都不会进入前端依赖**：不写
 `frontend/package.json`、`frontend/package-lock.json`、`frontend/vendor/`。
 
 ## 运行
@@ -13,7 +13,7 @@ npx playwright test --reporter=list
 
 ## 模式与选择理由
 
-两种页面形态 = **同一份 RAG 前端源码**、两个 Vite dev server，用 `webServer[].env` 注入
+两种页面形态 = **同一份前端源码**、两个 Vite dev server，用 `webServer[].env` 注入
 不同的构建期变量（Vite 会把进程环境里 `VITE_` 前缀的变量暴露为 `import.meta.env`）：
 
 | project | 端口 | 构建期变量 | 用途 |

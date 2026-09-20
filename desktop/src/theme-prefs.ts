@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
+import { configDir as appConfigDir } from './app-paths';
 
 // electron.nativeTheme 只能在 Electron 主进程内使用；node:test 里 require('electron')
 // 只返回二进制路径字符串。与 credentials-store 的 safeStorage 同款懒加载。
@@ -59,30 +59,7 @@ export class ThemePreferenceStore {
   private readonly filePath: string;
 
   constructor(customConfigDir?: string) {
-    let configDir: string;
-    if (customConfigDir) {
-      configDir = customConfigDir;
-    } else if (process.platform === 'win32' || process.env.LOCALAPPDATA) {
-      configDir = path.join(
-        process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-        'RAGStudyAssistant',
-        'config'
-      );
-    } else if (process.platform === 'darwin') {
-      configDir = path.join(
-        os.homedir(),
-        'Library',
-        'Application Support',
-        'RAGStudyAssistant',
-        'config'
-      );
-    } else {
-      configDir = path.join(
-        process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-        'RAGStudyAssistant',
-        'config'
-      );
-    }
+    const configDir = customConfigDir || appConfigDir();
     fs.mkdirSync(configDir, { recursive: true });
     this.filePath = path.join(configDir, 'theme.json');
   }

@@ -83,7 +83,7 @@ test.describe('组件/分块加载失败', () => {
     await expect.poll(() => errors.some((e) => e.includes('[rag:feedback]')), { timeout: 10_000 }).toBe(true);
     const diagnostic = errors.filter((e) => e.includes('[rag:feedback]')).join('\n');
     expect(diagnostic).toContain('组件加载失败');
-    expect(diagnostic, '诊断不得含 RAG 用户名').not.toContain('alice');
+    expect(diagnostic, '诊断不得含用户名').not.toContain('alice');
     expect(diagnostic, '诊断不得含 csrf 令牌').not.toContain('csrf-rag-0001');
     expect(diagnostic, '诊断不得含 Cookie').not.toMatch(/cookie/i);
     expect(diagnostic, '诊断不得含查询参数形式的令牌').not.toMatch(/token=/i);

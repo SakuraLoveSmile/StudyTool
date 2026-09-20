@@ -5,7 +5,7 @@
       <div class="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift shadow-brand-600/30">
         <BookOpen class="h-7 w-7" />
       </div>
-      <h1 class="font-display text-2xl font-bold tracking-tight text-ink sm:text-3xl">考研专业课备考助手</h1>
+      <h1 class="font-display text-2xl font-bold tracking-tight text-ink sm:text-3xl">学习助手</h1>
       <p class="mt-2 text-sm text-sub">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
     </div>
 

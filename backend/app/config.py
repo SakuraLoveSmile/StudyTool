@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     model_config = SettingsConfigDict(
-        env_file=None if (os.environ.get("RAG_DESKTOP_MODE") or "--desktop" in sys.argv) else ".env",
+        env_file=None if (os.environ.get("STUDYTOOL_DESKTOP_MODE") or "--desktop" in sys.argv) else ".env",
         extra="allow",
     )
 
@@ -98,17 +98,17 @@ class Settings(BaseSettings):
 
     @property
     def desktop_root_path(self) -> Path:
-        custom = os.environ.get("RAG_DESKTOP_DATA_DIR")
+        custom = os.environ.get("STUDYTOOL_DESKTOP_DATA_DIR")
         if custom:
             p = Path(custom).resolve()
         elif self.DATA_DIR != "./data":
             p = Path(self.DATA_DIR).resolve()
         elif os.name == "nt" or "LOCALAPPDATA" in os.environ:
-            p = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "RAGStudyAssistant"
+            p = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "StudyTool"
         elif sys.platform == "darwin":
-            p = Path.home() / "Library" / "Application Support" / "RAGStudyAssistant"
+            p = Path.home() / "Library" / "Application Support" / "StudyTool"
         else:
-            p = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "RAGStudyAssistant"
+            p = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "StudyTool"
         p.mkdir(parents=True, exist_ok=True)
         return p
 

@@ -26,7 +26,7 @@ JSONL_URL = "https://ocr-result.example.com/probe.jsonl?X-Amz-Signature=feedface
 TOKEN = "probe-token-abc"
 
 DESKTOP_HEADERS = {
-    "X-RAG-Instance-Token": "test-secret-token-12345",
+    "X-StudyTool-Instance-Token": "test-secret-token-12345",
     "Host": "127.0.0.1:18764",
     "Origin": "http://127.0.0.1:18764",
 }
@@ -37,7 +37,7 @@ def isolated_desktop_env(tmp_path, monkeypatch):
     """Same isolation the other desktop tests use (own data dir + instance token)."""
     data_dir = tmp_path / "desktop_data"
     data_dir.mkdir(parents=True)
-    monkeypatch.setenv("RAG_DESKTOP_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("STUDYTOOL_DESKTOP_DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DESKTOP_MODE", True)
     monkeypatch.setattr(settings, "DESKTOP_INSTANCE_TOKEN", "test-secret-token-12345")

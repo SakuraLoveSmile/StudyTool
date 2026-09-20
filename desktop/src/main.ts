@@ -6,6 +6,7 @@ import http from 'http';
 import { autoUpdater } from 'electron-updater';
 import { CancellationToken } from 'electron-updater/out/types';
 import { isPortAvailable } from './port-checker';
+import { ensureAppDataMigration } from './app-paths';
 import { CredentialsStore, CredentialsUpdateRequest } from './credentials-store';
 import { BackendManager } from './backend-manager';
 import {
@@ -211,6 +212,9 @@ if (!gotTheLock) {
 
 // 2. Generate random 32-byte instance token for this launch
 const instanceToken = crypto.randomBytes(32).toString('hex');
+// 更名 StudyTool / 学习助手 后的一次性数据根目录迁移：必须在任何存储组件
+// （凭据 / 外观偏好 / 日志）解析路径之前执行，失败只回退旧目录。
+ensureAppDataMigration();
 const credentialsStore = new CredentialsStore();
 /** 外观偏好独立成文件，不与模型密钥/学习数据混存（T3）。 */
 const themeStore = new ThemePreferenceStore();
@@ -227,9 +231,9 @@ backendManager = new BackendManager(PORT, HOST, instanceToken, credentialsStore,
 // spawned — so a startup failure still leaves evidence on disk. One session id is minted
 // per launch and shared by the desktop / backend / frontend log streams.
 const SESSION_ID =
-  (process.env.RAG_SESSION_ID || '').trim() || `sess-${crypto.randomBytes(4).toString('hex')}`;
-process.env.RAG_SESSION_ID = SESSION_ID;
-process.env.RAG_APP_VERSION = app.getVersion();
+  (process.env.STUDYTOOL_SESSION_ID || '').trim() || `sess-${crypto.randomBytes(4).toString('hex')}`;
+process.env.STUDYTOOL_SESSION_ID = SESSION_ID;
+process.env.STUDYTOOL_APP_VERSION = app.getVersion();
 
 const LOG_DIR = backendManager.getLogDir();
 const desktopLogger: DiagnosticsLogger = initDiagnostics({
@@ -702,7 +706,7 @@ function makeBackendRequest(
         method,
         headers: {
           'Content-Type': 'application/json',
-          'X-RAG-Instance-Token': instanceToken,
+          'X-StudyTool-Instance-Token': instanceToken,
           Host: `${HOST}:${PORT}`,
           Origin: BASE_URL,
           ...(body ? { 'Content-Length': Buffer.byteLength(postData) } : {}),
@@ -874,7 +878,7 @@ async function createWindow() {
     height: 860,
     minWidth: 1024,
     minHeight: 700,
-    title: '专业课备考助手',
+    title: '学习助手',
     // 与实际主题一致的预渲染底色：深色模式下冷启动不闪白。
     backgroundColor: windowBackgroundFor(themePreference),
     webPreferences: {
@@ -974,7 +978,7 @@ app.whenReady().then(async () => {
         (url.hostname === '127.0.0.1' || url.hostname === 'localhost') &&
         String(url.port) === String(PORT)
       ) {
-        details.requestHeaders['X-RAG-Instance-Token'] = instanceToken;
+        details.requestHeaders['X-StudyTool-Instance-Token'] = instanceToken;
       }
     } catch {
       // ignore
@@ -1276,7 +1280,7 @@ function setupIpcHandlers() {
     if (!mainWindow) return null;
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择恢复数据备份包',
-      filters: [{ name: 'RAG 归档文件', extensions: ['tar.gz', 'tgz', 'gz'] }],
+      filters: [{ name: '学习助手 归档文件', extensions: ['tar.gz', 'tgz', 'gz'] }],
       properties: ['openFile'],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
@@ -1289,8 +1293,8 @@ function setupIpcHandlers() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '选择备份导出保存位置',
-      defaultPath: `rag-backup-${stamp}.tar.gz`,
-      filters: [{ name: 'RAG 归档文件', extensions: ['tar.gz'] }],
+      defaultPath: `studytool-backup-${stamp}.tar.gz`,
+      filters: [{ name: '学习助手 归档文件', extensions: ['tar.gz'] }],
     });
     if (result.canceled || !result.filePath) return null;
     return result.filePath;

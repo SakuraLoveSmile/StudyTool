@@ -79,7 +79,7 @@ test.describe('路由保留草稿', () => {
 });
 
 test.describe('组件内独立登录', () => {
-  test('登录在组件内完成：只打反馈服务，不依赖 RAG 会话', async ({ page }) => {
+  test('登录在组件内完成：只打反馈服务，不依赖宿主会话', async ({ page }) => {
     const { host, svc } = await openConfiguredApp(page, [feedbackRules.loginOk(), feedbackRules.sessionOk()]);
 
     await openPanel(page);
@@ -101,7 +101,7 @@ test.describe('组件内独立登录', () => {
     const state = await readWidgetState(page);
     expect(state.accessToken).toBe('mock-token-0001');
 
-    // RAG 宿主会话完全没被用于这件事：没有宿主登录请求，也没有宿主登出。
+    // 宿主会话完全没被用于这件事：没有宿主登录请求，也没有宿主登出。
     expect(host.login, '不应调用宿主登录接口').toBe(0);
     expect(host.logout).toBe(0);
   });
@@ -199,7 +199,7 @@ test.describe('迟到响应不进入新会话', () => {
     expect(old.draftText).toBe('切世代前提交的内容');
     expect(old.lastFeedbackId, '提交在途时尚未写入反馈标识').toBeNull();
 
-    // 身份/世代切换：登出销毁旧实例 → 换成另一个 RAG 用户建立新会话 → 新实例（服务地址不变）
+    // 身份/世代切换：登出销毁旧实例 → 换成另一个用户建立新会话 → 新实例（服务地址不变）
     await page.getByRole('button', { name: '退出' }).click();
     await expect(widget(page)).toHaveCount(0);
 

@@ -1,9 +1,9 @@
 import { ChildProcess, spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
 import http from 'http';
 import { CredentialsStore, CredentialsData, CredentialsUpdateRequest } from './credentials-store';
+import { dataDir, logDir } from './app-paths';
 
 export type ManagerLogLevel = 'INFO' | 'WARN' | 'ERROR';
 
@@ -125,16 +125,16 @@ export class BackendManager {
     // Isolate environment: do NOT inherit development .env or model keys
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      RAG_DESKTOP_MODE: '1',
+      STUDYTOOL_DESKTOP_MODE: '1',
       // Keep packaged diagnostics and data out of the read-only application
       // resources directory, including before the backend consumes stdin.
-      RAG_DESKTOP_DATA_DIR: path.dirname(this.getDataDir()),
+      STUDYTOOL_DESKTOP_DATA_DIR: path.dirname(this.getDataDir()),
       LOG_DIR: this.getLogDir(),
       PORT: String(this.port),
       HOST: this.host,
       // One session id per launch, shared by desktop / backend / frontend log streams.
-      RAG_SESSION_ID: process.env.RAG_SESSION_ID || '',
-      RAG_APP_VERSION: process.env.RAG_APP_VERSION || '',
+      STUDYTOOL_SESSION_ID: process.env.STUDYTOOL_SESSION_ID || '',
+      STUDYTOOL_APP_VERSION: process.env.STUDYTOOL_APP_VERSION || '',
     };
 
     console.log(`[BackendManager] Spawning backend: ${command} ${spawnArgs.join(' ')}`);
@@ -255,7 +255,7 @@ export class BackendManager {
           {
             method: 'GET',
             headers: {
-              'X-RAG-Instance-Token': this.instanceToken,
+              'X-StudyTool-Instance-Token': this.instanceToken,
               Host: `${this.host}:${this.port}`,
             },
             timeout: 1000,
@@ -379,8 +379,8 @@ export class BackendManager {
         cwd,
         env: {
           ...process.env,
-          RAG_DESKTOP_MODE: '1',
-          RAG_DESKTOP_DATA_DIR: path.dirname(this.getDataDir()),
+          STUDYTOOL_DESKTOP_MODE: '1',
+          STUDYTOOL_DESKTOP_DATA_DIR: path.dirname(this.getDataDir()),
           LOG_DIR: this.getLogDir(),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -645,42 +645,11 @@ export class BackendManager {
   }
 
   public getDataDir(): string {
-    if (process.env.RAG_DESKTOP_DATA_DIR) {
-      return path.resolve(process.env.RAG_DESKTOP_DATA_DIR, 'data');
-    }
-    let rootDir = '';
-    if (process.platform === 'win32' || process.env.LOCALAPPDATA) {
-      rootDir = path.join(
-        process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-        'RAGStudyAssistant'
-      );
-    } else if (process.platform === 'darwin') {
-      rootDir = path.join(os.homedir(), 'Library', 'Application Support', 'RAGStudyAssistant');
-    } else {
-      rootDir = path.join(
-        process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-        'RAGStudyAssistant'
-      );
-    }
-    return path.join(rootDir, 'data');
+    return dataDir();
   }
 
   public getLogDir(): string {
-    if (process.platform === 'win32' || process.env.LOCALAPPDATA) {
-      return path.join(
-        process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-        'RAGStudyAssistant',
-        'logs'
-      );
-    } else if (process.platform === 'darwin') {
-      return path.join(os.homedir(), 'Library', 'Application Support', 'RAGStudyAssistant', 'logs');
-    } else {
-      return path.join(
-        process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-        'RAGStudyAssistant',
-        'logs'
-      );
-    }
+    return logDir();
   }
 
   public async getStatus(): Promise<{ idle: boolean; active_tasks: number }> {
@@ -704,7 +673,7 @@ export class BackendManager {
           method,
           headers: {
             'Content-Type': 'application/json',
-            'X-RAG-Instance-Token': this.instanceToken,
+            'X-StudyTool-Instance-Token': this.instanceToken,
             Host: `${this.host}:${this.port}`,
             Origin: `http://${this.host}:${this.port}`,
             ...(body ? { 'Content-Length': Buffer.byteLength(postData) } : {}),

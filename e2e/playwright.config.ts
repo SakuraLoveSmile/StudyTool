@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * 两种页面形态用同一份 RAG 前端源码、两个 Vite dev server：
+ * 两种页面形态用同一份前端源码、两个 Vite dev server：
  *  - "unconfigured"（5274）：完全不提供 VITE_FEEDBACK_API_BASE / VITE_FEEDBACK_APP_ID
  *  - "configured"  （5275）：提供两个构建期变量
  *

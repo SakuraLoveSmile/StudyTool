@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Automated release pipeline for RAG Windows Desktop Application.
+"""Automated release pipeline for StudyTool (学习助手) Windows Desktop Application.
 
 Stages:
 1. Verify environment & dependencies.
@@ -461,7 +461,7 @@ def main():
     pyinstaller_dir = desktop_dir / "pyinstaller"
 
     print("==================================================")
-    print(" RAG Windows Desktop Release Pipeline ")
+    print(" StudyTool (学习助手) Windows Desktop Release Pipeline ")
     print("==================================================")
 
     # 0. Check environment

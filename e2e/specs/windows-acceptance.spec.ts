@@ -543,7 +543,7 @@ test.describe('data-feedback-capture-mask（DOM 级存在性）', () => {
 
 test.describe('Windows 候选安装包验收（本机不可验证，禁止假通过）', () => {
   test.fixme('干净安装：NSIS 安装 → 首次启动 → 日志页读取真实 jsonl', async () => {
-    // 需要：windows-2022 CI 产物 rag-study-assistant-windows-<ver>（或用户 Windows 机构建）。
+    // 需要：windows-2022 CI 产物 studytool-windows-<ver>（或用户 Windows 机构建）。
     // 验证点：安装器跑完 → 启动 → 顶部「日志」入口 → 列表来自真实
     // %APPDATA%/logs/*.jsonl → 打开日志目录弹出真实目录 → 导出诊断包产出 zip。
   });

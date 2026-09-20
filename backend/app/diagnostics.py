@@ -23,8 +23,8 @@ INSTANCE_ID: str = f"inst-{uuid.uuid4().hex[:8]}"
 # Identity fields shared with the desktop main process (see desktop/src/diagnostics.ts).
 # The Electron main process mints one session id per launch and passes it down, so the
 # desktop / backend / frontend files can be correlated for a single startup.
-SESSION_ID: str = os.environ.get("RAG_SESSION_ID", "").strip() or f"sess-{uuid.uuid4().hex[:8]}"
-APP_VERSION: str = os.environ.get("RAG_APP_VERSION", "").strip()
+SESSION_ID: str = os.environ.get("STUDYTOOL_SESSION_ID", "").strip() or f"sess-{uuid.uuid4().hex[:8]}"
+APP_VERSION: str = os.environ.get("STUDYTOOL_APP_VERSION", "").strip()
 LOG_SOURCE: str = "backend"
 
 # Storage policy (release gates: 5 MiB per file, 5 rotated files, 7 day retention).

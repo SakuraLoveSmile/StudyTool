@@ -96,7 +96,7 @@ docker compose --env-file deploy/.env build frontend
 **B. 在反馈服务后台登记上线后的真实来源。** 必须精确匹配浏览器实际 origin，**不要使用通配符**：
 
 - `appId`：`studytool`
-- 名称：RAG 备考助手
+- 名称：学习助手
 - 允许来源：`https://$DOMAIN`（即上线后的 HTTPS origin）
 
 若还要保留本机调试，`http://127.0.0.1:5174` 必须**单独再登记一条**；登记一个不会覆盖另一个。

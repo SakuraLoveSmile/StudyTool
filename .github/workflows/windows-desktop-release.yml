@@ -142,14 +142,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rag-study-assistant-smoke-evidence-${{ env.RELEASE_VERSION }}
+          name: studytool-smoke-evidence-${{ env.RELEASE_VERSION }}
           if-no-files-found: ignore
           path: desktop/release/smoke-evidence/
 
       - name: Upload build artifacts to the workflow
         uses: actions/upload-artifact@v4
         with:
-          name: rag-study-assistant-windows-${{ env.RELEASE_VERSION }}
+          name: studytool-windows-${{ env.RELEASE_VERSION }}
           if-no-files-found: error
           path: |
             desktop/release/*.exe
@@ -190,5 +190,5 @@ jobs:
               $createArgs += '--prerelease'
               $createArgs += '--latest=false'
             }
-            gh release create $env:RELEASE_TAG @files --repo $env:RELEASE_REPO --title "RAG Study Assistant $env:RELEASE_VERSION" --notes "Windows x64 desktop release $env:RELEASE_VERSION" @createArgs
+            gh release create $env:RELEASE_TAG @files --repo $env:RELEASE_REPO --title "学习助手 $env:RELEASE_VERSION" --notes "Windows x64 desktop release $env:RELEASE_VERSION" @createArgs
           }

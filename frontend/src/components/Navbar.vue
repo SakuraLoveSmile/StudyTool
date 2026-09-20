@@ -7,7 +7,7 @@
             <BookOpen class="h-5 w-5" />
           </div>
           <div class="min-w-0">
-            <h1 class="truncate font-display text-base font-bold tracking-tight text-ink sm:text-lg">考研专业课备考助手</h1>
+            <h1 class="truncate font-display text-base font-bold tracking-tight text-ink sm:text-lg">学习助手</h1>
             <p class="hidden text-xs text-faint sm:block">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
           </div>
         </router-link>

@@ -162,7 +162,7 @@ class DesktopAccessMiddleware:
 
     When settings.DESKTOP_MODE is True:
     - Enforces Host header is 127.0.0.1:18764 or 127.0.0.1.
-    - Enforces valid X-RAG-Instance-Token for all /api/* routes.
+    - Enforces valid X-StudyTool-Instance-Token for all /api/* routes.
     - Validates Origin for state-mutating requests.
     - If MaintenanceManager is active, rejects non-GET mutating user requests with 503.
     - Rejects path traversal and unauthorized frames.
@@ -208,7 +208,7 @@ class DesktopAccessMiddleware:
             await reject(500, "INSECURE_CONFIGURATION", "桌面端未注入安全实例令牌，拒绝服务")
             return
 
-        provided_token = request.headers.get("X-RAG-Instance-Token", "").strip()
+        provided_token = request.headers.get("X-StudyTool-Instance-Token", "").strip()
         if not provided_token or not hmac.compare_digest(provided_token, expected_token):
             await reject(401, "DESKTOP_AUTH_REQUIRED", "未授权的桌面实例访问：实例令牌无效或缺失")
             return

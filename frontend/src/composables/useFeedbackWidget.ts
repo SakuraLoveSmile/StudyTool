@@ -52,7 +52,7 @@ function sanitizeDetail(error: unknown): string {
 export interface UseFeedbackWidgetOptions {
   /** 挂载容器（App 根部的空 div）。容器出现/消失时自动挂载/卸载实例。 */
   container: Ref<HTMLElement | null>;
-  /** 挂载门禁：RAG 会话初始化完成（auth.ready）且允许展示应用外壳。 */
+  /** 挂载门禁：会话初始化完成（auth.ready）且允许展示应用外壳。 */
   enabled: Ref<boolean>;
   /** 实例键 `userId:sessionEpoch`。键变化即重建实例，新实例绝不继承旧身份。 */
   instanceKey: Ref<string>;
@@ -65,10 +65,10 @@ export interface UseFeedbackWidgetOptions {
 /**
  * 反馈组件实例生命周期与身份隔离。
  *
- * - 只传路由名称作为 page-label；不传 URL、查询参数、RAG 用户信息或后台日志；
+ * - 只传路由名称作为 page-label；不传 URL、查询参数、用户信息或后台日志；
  * - 实例键 = `userId:sessionEpoch`，键变化时**先清空服务身份再移除旧实例**；
  * - 不重新实现组件已有的幂等键、状态轮询与草稿所有权（全部由组件内部负责）；
- * - 不向组件传递 RAG 密码、Cookie 或令牌。
+ * - 不向组件传递密码、Cookie 或令牌。
  */
 export function useFeedbackWidget(options: UseFeedbackWidgetOptions) {
   // 只读构建期配置：客户端不持有 AI / Kaneo 密钥（归档目标由服务端登记）。

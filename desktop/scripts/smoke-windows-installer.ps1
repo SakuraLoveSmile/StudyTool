@@ -1,9 +1,9 @@
-﻿<#
+<#
 .SYNOPSIS
   Windows 安装包自动化静默安装与冒烟验证脚本 (兼容 Windows PowerShell 5.1 及 PowerShell 7+)
 
 .DESCRIPTION
-  用于在干净的一次性测试环境或 Windows 沙盒环境中，对 RAG 备考助手安装包（如 1.0.6-beta.6）进行自动化静默安装测试。
+  用于在干净的一次性测试环境或 Windows 沙盒环境中，对 学习助手安装包（如 1.0.6-beta.6）进行自动化静默安装测试。
   功能包括：
     1. 参数校验与目录初始化：验证安装包文件存在，创建并校验证据目录；
     2. 严格环境隔离检查：若检测到已有安装、旧版注册表或残留进程，则拒绝触碰并退出；
@@ -13,7 +13,7 @@
     6. 安装完整性校验：验证进程退出码、主程序可执行文件生成、注册表卸载项完整性。
 
 .PARAMETER InstallerPath
-  待测试的安装包路径（例如 rag-study-assistant-desktop-setup-1.0.6-beta.6.exe）。
+  待测试的安装包路径（例如 studytool-setup-1.0.6-beta.6.exe）。
 
 .PARAMETER EvidenceDir
   证据输出目录。测试汇总 json、崩溃事件日志等将保存在此目录下。
@@ -22,7 +22,7 @@
   静默安装最长等待超时时间（秒），默认 180 秒。
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-installer.ps1 -InstallerPath "C:\dist\rag-study-assistant-desktop-setup-1.0.6-beta.6.exe" -EvidenceDir "C:\evidence"
+  powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-installer.ps1 -InstallerPath "C:\dist\studytool-setup-1.0.6-beta.6.exe" -EvidenceDir "C:\evidence"
 #>
 
 [CmdletBinding()]
@@ -59,15 +59,15 @@ function Write-SmokeLog {
 # -----------------------------------------------------------------------------
 # 0. 基础环境与配置常量
 # -----------------------------------------------------------------------------
-$APP_ID = "com.rag.studyassistant"
+$APP_ID = "com.sakurasep.studytool"
 # 主程序文件名来自 electron-builder 的 PRODUCT_FILENAME（= productName）。
-$PRODUCT_FILENAME = "RAG备考助手"
+$PRODUCT_FILENAME = "学习助手"
 $APP_EXE_NAME = "$PRODUCT_FILENAME.exe"
 # 安装目录名来自 APP_FILENAME，与主程序名并不是一回事：getWindowsInstallationDirName()
 # 只在 productFilename 完全匹配 ^[-_+0-9a-zA-Z .]+$ 时才采用它，含中文时回退到
-# package.json 的 name。所以真实目录名是 rag-study-assistant-desktop，而不是
-# "RAG备考助手"。下面的默认值仅作兜底，真实位置一律以注册表记录为准。
-$INSTALL_DIR_NAME = "rag-study-assistant-desktop"
+# package.json 的 name。所以真实目录名是 studytool，而不是
+# "学习助手"。下面的默认值仅作兜底，真实位置一律以注册表记录为准。
+$INSTALL_DIR_NAME = "studytool"
 $INSTALL_ROOT = Join-Path $env:LOCALAPPDATA "Programs"
 $DEFAULT_INSTALL_DIR = Join-Path $INSTALL_ROOT $INSTALL_DIR_NAME
 $DEFAULT_APP_EXE = Join-Path $DEFAULT_INSTALL_DIR $APP_EXE_NAME
@@ -194,7 +194,7 @@ $summary.evidence_dir = $resolvedEvidenceDir
 Write-SmokeLog "INFO" "--- 阶段 1/4: 执行严格环境隔离检查 ---"
 $conflicts = [System.Collections.Generic.List[string]]::new()
 
-# 1. 检查 HKCU:\Software\com.rag.studyassistant
+# 1. 检查 HKCU:\Software\com.sakurasep.studytool
 if (Test-Path -Path $APP_REG_PATH) {
   $conflicts.Add("注册表已存在软件应用配置项: $APP_REG_PATH")
 }
@@ -204,14 +204,15 @@ if (Test-Path -Path $UNINSTALL_REG_PATH) {
   $conflicts.Add("注册表已存在软件卸载项: $UNINSTALL_REG_PATH")
 }
 
-# 检查是否有其它包含 RAG备考助手 的卸载项
+# 检查是否有其它包含 学习助手 的卸载项（同时拒绝更名前 RAG备考助手 的残留：
+# appId 已变，旧版安装项是独立应用，并存会造成端口与数据目录冲突）
 $uninstallBase = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
 if (Test-Path -Path $uninstallBase) {
   try {
     $subKeys = Get-ChildItem -Path $uninstallBase -ErrorAction SilentlyContinue
     foreach ($k in $subKeys) {
       $dispName = (Get-ItemProperty -Path $k.PSPath -Name DisplayName -ErrorAction SilentlyContinue).DisplayName
-      if ($dispName -and $dispName -match 'RAG.*备考助手') {
+      if ($dispName -and $dispName -match '(学习助手|RAG.*备考助手)') {
         $conflicts.Add("卸载注册表中发现同名记录: $($k.PSPath) (DisplayName: $dispName)")
       }
     }
@@ -228,8 +229,8 @@ if ($preExistingExe) {
   $conflicts.Add("默认安装目录已存在: $DEFAULT_INSTALL_DIR")
 }
 
-# 4. 检查是否有相关后台进程正在运行
-$runningProcs = Get-Process | Where-Object { $_.ProcessName -match '^(RAG备考助手|backend)$' }
+# 4. 检查是否有相关后台进程正在运行（含更名前的主程序名 RAG备考助手）
+$runningProcs = Get-Process | Where-Object { $_.ProcessName -match '^(学习助手|RAG备考助手|backend)$' }
 if ($runningProcs) {
   foreach ($p in $runningProcs) {
     $conflicts.Add("检测到正在运行的相关进程: PID=$($p.Id), Name=$($p.ProcessName)")
@@ -361,7 +362,7 @@ try {
       $matched = ($prov -match 'Application Error|Windows Error Reporting') -or
                  ($msg -match 'System\.dll') -or
                  ($msg -match '0xc0000005') -or
-                 ($msg -match 'RAG备考助手') -or
+                 ($msg -match '学习助手') -or
                  ($msg -match [regex]::Escape($installerFileName))
 
       if ($matched) {
@@ -419,7 +420,7 @@ if ($systemDllCrashes.Count -gt 0) {
 $crashEventsFile = Join-Path $resolvedEvidenceDir "installer-crash-events.txt"
 $logBuilder = [System.Text.StringBuilder]::new()
 [void]$logBuilder.AppendLine("=========================================================================")
-[void]$logBuilder.AppendLine("RAG备考助手 Windows 安装冒烟 - 事件与崩溃日志取证")
+[void]$logBuilder.AppendLine("学习助手 Windows 安装冒烟 - 事件与崩溃日志取证")
 [void]$logBuilder.AppendLine("生成时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
 [void]$logBuilder.AppendLine("扫描范围: $($eventSearchStart.ToString('yyyy-MM-dd HH:mm:ss')) 至今 (近10分钟)")
 [void]$logBuilder.AppendLine("发现关键 System.dll / 0xc0000005 崩溃: $hasCriticalCrash")
@@ -446,7 +447,7 @@ Write-SmokeLog "INFO" "事件取证已写入: $crashEventsFile"
 # 获取当前进程快照
 $procSnapshots = @()
 try {
-  $runningNow = Get-Process | Where-Object { $_.ProcessName -match '^(RAG备考助手|backend|rag-study-assistant)' }
+  $runningNow = Get-Process | Where-Object { $_.ProcessName -match '^(学习助手|RAG备考助手|backend)' }
   if ($runningNow) {
     foreach ($p in $runningNow) {
       $procSnapshots += [ordered]@{
@@ -486,7 +487,7 @@ if ($regExists) {
     $keys = Get-ChildItem -Path $uninstallBase -ErrorAction SilentlyContinue
     foreach ($k in $keys) {
       $dn = (Get-ItemProperty -Path $k.PSPath -Name DisplayName -ErrorAction SilentlyContinue).DisplayName
-      if ($dn -and $dn -match 'RAG.*备考助手') {
+      if ($dn -and $dn -match '(学习助手|RAG.*备考助手)') {
         $regExists = $true
         $matchedUninstallKey = $k.PSPath
         Write-SmokeLog "SUCCESS" "找到卸载注册表项: $($k.PSPath) (DisplayName: $dn)"

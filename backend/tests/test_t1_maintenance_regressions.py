@@ -16,7 +16,7 @@ from app.main import app
 def desktop_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "desktop_data"
     data_dir.mkdir(parents=True)
-    monkeypatch.setenv("RAG_DESKTOP_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("STUDYTOOL_DESKTOP_DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DESKTOP_MODE", True)
     monkeypatch.setattr(settings, "DESKTOP_INSTANCE_TOKEN", "test-token-xyz")
@@ -67,7 +67,7 @@ def test_shutdown_requires_lease_verification(desktop_env):
     """
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "test-token-xyz",
+        "X-StudyTool-Instance-Token": "test-token-xyz",
         "Host": "127.0.0.1:18764",
         "Origin": "http://127.0.0.1:18764",
     }
@@ -81,7 +81,7 @@ def test_drain_tasks_repeatable_and_clears_wal(desktop_env):
     """Regression: drain must be idempotent, safely repeatable, and flush WAL without locking errors."""
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "test-token-xyz",
+        "X-StudyTool-Instance-Token": "test-token-xyz",
         "Host": "127.0.0.1:18764",
         "Origin": "http://127.0.0.1:18764",
     }
@@ -144,8 +144,8 @@ def test_real_subprocess_single_stdin_bootstrap(tmp_path):
     env = {
         **os.environ,
         "PYTHONPATH": str(backend_dir),
-        "RAG_DESKTOP_MODE": "1",
-        "RAG_DESKTOP_DATA_DIR": str(data_dir),
+        "STUDYTOOL_DESKTOP_MODE": "1",
+        "STUDYTOOL_DESKTOP_DATA_DIR": str(data_dir),
     }
 
     proc = subprocess.Popen(
@@ -168,7 +168,7 @@ def test_real_subprocess_single_stdin_bootstrap(tmp_path):
         req = urllib.request.Request(
             url,
             headers={
-                "X-RAG-Instance-Token": token,
+                "X-StudyTool-Instance-Token": token,
                 "Host": f"127.0.0.1:{free_port}",
             },
         )
@@ -248,7 +248,7 @@ def test_drain_requires_lease_and_reports_explicit_failure(desktop_env, monkeypa
     """
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "test-token-xyz",
+        "X-StudyTool-Instance-Token": "test-token-xyz",
         "Host": "127.0.0.1:18764",
         "Origin": "http://127.0.0.1:18764",
     }

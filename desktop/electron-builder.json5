@@ -1,6 +1,6 @@
 {
-  appId: "com.rag.studyassistant",
-  productName: "RAG备考助手",
+  appId: "com.sakurasep.studytool",
+  productName: "学习助手",
   directories: {
     output: "release"
   },
@@ -33,14 +33,14 @@
     ]
   },
   nsis: {
-    artifactName: "rag-study-assistant-desktop-setup-${version}.${ext}",
+    artifactName: "studytool-setup-${version}.${ext}",
     oneClick: false,
     perMachine: false,
     allowToChangeInstallationDirectory: true,
     deleteAppDataOnUninstall: false,
     createDesktopShortcut: true,
     createStartMenuShortcut: true,
-    shortcutName: "RAG专业课备考助手"
+    shortcutName: "学习助手"
   },
   publish: {
     provider: "github",

@@ -166,8 +166,8 @@ def test_sanitize_text_masks_paths_url_params_and_file_names():
     assert sanitize_text(
         "GET https://api.example.com/v1/models?api-key=secret&user=bob"
     ) == "GET https://api.example.com/v1/models"
-    assert "测试用户" not in sanitize_text(r"C:\Users\测试用户\AppData\Local\RAGStudyAssistant\data\app.db")
-    assert "someone" not in sanitize_text("/Users/someone/Library/Application Support/RAGStudyAssistant/logs")
+    assert "测试用户" not in sanitize_text(r"C:\Users\测试用户\AppData\Local\StudyTool\data\app.db")
+    assert "someone" not in sanitize_text("/Users/someone/Library/Application Support/StudyTool/logs")
     assert "private" not in sanitize_text("~/Documents/private/notes")
     assert sanitize_text("failed to parse 2024真题.pdf") == "failed to parse <file>"
     # Source module names stay readable: they are diagnostics, not user content.

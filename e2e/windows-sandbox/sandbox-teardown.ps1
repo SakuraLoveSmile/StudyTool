@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   StudyTool 1.0.6-beta.3 · D4 Windows 沙盒验收 —— 清理脚本（必须与 sandbox-setup.ps1 配套）。
 
@@ -60,7 +60,7 @@ try {
   Emit '管理员权限: 确认'
 
   $profileRoot = "C:\Users\$UserName"
-  $ragLocal    = "$profileRoot\AppData\Local\RAGStudyAssistant"
+  $appLocal     = "$profileRoot\AppData\Local\StudyTool"
 
   # ---------------------------------------------------------------- 1. 强制注销该账号的活动会话
   Emit '--- 步骤 1/6：注销该账号的活动会话 ---'
@@ -88,16 +88,16 @@ try {
   }
   if ($loggedOff) { Start-Sleep -Seconds 2 }
 
-  # ---------------------------------------------------------------- 2. 结束该账号下的 RAG 相关进程
-  Emit '--- 步骤 2/6：结束该账号名下/目录下的 RAG 相关进程 ---'
+  # ---------------------------------------------------------------- 2. 结束该账号下的应用相关进程
+  Emit '--- 步骤 2/6：结束该账号名下/目录下的应用相关进程 ---'
   # 判定口径（宁宽勿窄，但全部限定在该账号自己的地盘）：
   #   a) 可执行路径位于 C:\Users\<账号> 之下（含按用户安装的 Programs 目录与后端 backend.exe）；
-  #   b) 命令行/路径含 RAGStudyAssistant；
-  #   c) 进程名为 RAG备考助手 或 backend，且路径落在该账号目录内。
+  #   b) 命令行/路径含 StudyTool（兼容更名前遗留的 RAGStudyAssistant）；
+  #   c) 进程名为 学习助手 或 backend，且路径落在该账号目录内。
   $targets = Get-CimInstance Win32_Process | Where-Object {
     ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($profileRoot, [System.StringComparison]::OrdinalIgnoreCase)) -or
-    ($_.CommandLine -and $_.CommandLine -match 'RAGStudyAssistant') -or
-    ($_.Name -match '^(RAG备考助手|backend)\.exe$' -and $_.ExecutablePath -and $_.ExecutablePath -like "*$UserName*")
+    ($_.CommandLine -and $_.CommandLine -match 'StudyTool|RAGStudyAssistant') -or
+    ($_.Name -match '^(学习助手|backend)\.exe$' -and $_.ExecutablePath -and $_.ExecutablePath -like "*$UserName*")
   }
   if ($targets) {
     foreach ($p in $targets) {
@@ -133,15 +133,15 @@ try {
 
   # ---------------------------------------------------------------- 4. 恢复演示期间加过的 ACL 拒绝
   Emit '--- 步骤 4/6：恢复 ACL（兜底，runbook 用例 G 应已恢复） ---'
-  if (Test-Path $ragLocal) {
-    Emit "对 $ragLocal 执行 /remove:d + /reset（含子项 /T）："
-    if ($PSCmdlet.ShouldProcess($ragLocal, "icacls /remove:d $UserName /T 与 /reset /T")) {
-      icacls $ragLocal /remove:d $UserName /T 2>&1 | ForEach-Object { Emit "  $_" }
-      icacls $ragLocal /reset /T 2>&1 | ForEach-Object { Emit "  $_" }
+  if (Test-Path $appLocal) {
+    Emit "对 $appLocal 执行 /remove:d + /reset（含子项 /T）："
+    if ($PSCmdlet.ShouldProcess($appLocal, "icacls /remove:d $UserName /T 与 /reset /T")) {
+      icacls $appLocal /remove:d $UserName /T 2>&1 | ForEach-Object { Emit "  $_" }
+      icacls $appLocal /reset /T 2>&1 | ForEach-Object { Emit "  $_" }
     }
     Emit 'ACL 兜底恢复完成（账号随后整体删除， orphaned ACE 随 profile 一并消失）。'
   } else {
-    Emit "$ragLocal 不存在，无需恢复 ACL。"
+    Emit "$appLocal 不存在，无需恢复 ACL。"
   }
 
   # ---------------------------------------------------------------- 5. 删除账号与 profile
@@ -201,9 +201,9 @@ try {
 
   $stillProc = Get-CimInstance Win32_Process | Where-Object {
     ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($profileRoot, [System.StringComparison]::OrdinalIgnoreCase)) -or
-    ($_.CommandLine -and $_.CommandLine -match 'RAGStudyAssistant')
+    ($_.CommandLine -and $_.CommandLine -match 'StudyTool|RAGStudyAssistant')
   }
-  if (-not $stillProc) { Emit 'CHECK 无遗留 RAG 进程: PASS' } else {
+  if (-not $stillProc) { Emit 'CHECK 无遗留应用进程: PASS' } else {
     $stillProc | ForEach-Object { Fail "遗留进程 PID=$($_.ProcessId) $($_.Name)" }
   }
 
