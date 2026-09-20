@@ -422,6 +422,49 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
 | | 导出与取消 | 原生保存对话框导出 ZIP（脱敏日志 + 版本/平台/校验值清单），默认 24 小时、最多 7 天、原始日志上限 20 MiB 且截断有标注；取消不留半成品，不打包数据库、资料或凭据 | 实现中（打包、截断与原子写入已测；原生对话框取消路径待实机） |
 | **Feedback 发布配置门禁**（本轮 T4） | 发布构建注入反馈配置 | Windows 发布构建显式注入 `https://feedback.xn--fhqths51enha.cn` 与 `appId=rag`，不依赖 `.env.local`；缺失或地址无效即构建失败 | 已通过（2026-09-15 Windows CI 实跑：校验步骤通过、构建通过；单测证明缺失/非法即失败） |
 | | 实际挂载与截图遮罩 | 安装包内反馈入口可见、独立登录可用、日志详情区域默认截图遮罩、外部链接走系统浏览器；不得以组件文件存在替代实际挂载验证 | 实现中（日志详情已加截图遮罩；**实际挂载尚未验证**） |
+| **安装器启动崩溃加固与冒烟**（T1.1/T1.2） | NSIS 安全目录读取补丁 | 回移上游 `a356198`：`Push/Pop` 保护寄存器替换 `System::Store`，`lstrcpynW` 限制长度，`CoTaskMemFree` 安全释放；`beforePack` 钩子自动应用，首次/幂等/版本不符/模板漂移硬门禁全部单测通过 | 已通过（自动化单测全绿） |
+| | 安装冒烟测试脚本与 CI 拦截 | 提供 `smoke-windows-installer.ps1`，环境隔离检测（拒碰已有安装）、`/S /currentuser` 静默安装、180s 超时强杀、崩溃取证；CI 构建后发布前强制门禁，失败阻止发布但保留证据 | 已通过（脚本交付、CI 接入） |
+| | 候选包与实机验收规程（T1.3） | 升级至 `1.0.6-beta.6`，精确锁定 `electron-builder@25.1.8`；编制 `e2e/windows-sandbox/acceptance-runbook.md`，制定 Win11 build 26200 连续 3 次取消再安装验证及 Win10 兼容性验收 | 待体验（待实机执行验收） |
+
+---
+
+## Windows 安装器启动崩溃修复与 1.0.6-beta.6 执行记录
+
+### 1. 背景与根因
+- 在 Windows 11 build 26200 环境下测试 beta.4 安装包时，启动向导初始化出现 `System.dll / 0xc0000005 / 0x1581` 内存访问越界崩溃。
+- 根因：`electron-builder@25.1.8` 附带的 `app-builder-lib/templates/nsis/multiUser.nsh` 中，在读取用户程序目录（`FOLDERID_UserProgramFiles`）时使用了 `System::Store S` 与 `System::Store L`，以及不安全的内存直读操作 `*$2(&w${NSIS_MAX_STRLEN} .s)`，在高版本 Windows 内核下导致寄存器上下文损坏或指针越界。
+
+### 2. 修复任务与落地情况
+- **T1.1 修复安装目录读取（补丁与 beforePack 钩子）**：
+  - 精确采用上游 commit `a356198ec7c54c7795659342bff36d9a5162cd93`。
+  - 使用 `Push $1` / `Push $2` 与 `Pop $2` / `Pop $1` 保护寄存器，移除问题 `System::Store`。
+  - 初始化 `StrCpy $2 0`，调用 Win32 `KERNEL32::lstrcpynW` 限制长度安全复制字符串。
+  - 无论 API 是否成功，只要分配指针不为 0 即调用 `OLE32::CoTaskMemFree(p r2)` 释放系统返回内存。
+  - 保留历史已安装目录识别、用户程序自定义目录、查询失败时的 `$LocalAppData\Programs` 默认回退以及 `/D` 参数覆写行为。
+  - 编写 `desktop/scripts/patch-nsis-template.js`，作为 CommonJS `beforePack` 钩子配置在 `desktop/electron-builder.json5`。
+  - 严格校验 `app-builder-lib` 版本（必须精确为 25.1.8），核验原始模板 SHA256（`afa90464...`）与已修补 SHA256（`519a2338...`）；未知漂移立即中断构建；重复运行零写盘幂等。
+  - 自动化单元测试 `desktop/tests/patch-nsis-template.test.js`（Node 内置 test runner）：首次应用、幂等性、版本错误防御、模板漂移防御 4 大场景共 6 项测试 100% 通过。
+- **T1.2 防止再次发布未经安装验证的包（冒烟脚本与 CI 门禁）**：
+  - 新增 `desktop/scripts/smoke-windows-installer.ps1`：
+    - 参数：`-InstallerPath`、`-EvidenceDir`、`-TimeoutSeconds`（默认 180s）。
+    - 严格隔离检测：执行前核对注册表配置项、卸载项、默认安装目录及运行进程，检测到已有安装立即抛出异常并以非零退出，绝不触碰已有环境。
+    - 静默安装：`/S /currentuser` 参数运行。
+    - 超时守护：180 秒超时自动通过 `taskkill` 强杀子进程树。
+    - 崩溃取证：采集最近 Application 与 System 事件日志，定向过滤 `System.dll`、`0xc0000005`、`Application Error` 导出到 `installer-crash-events.txt` 与 `smoke-summary.json`。
+    - 完整性校验：退出码 0、主 exe 存在、卸载项生成，全部满足退出 0，任一失败退出 1。
+  - 接入现有 CI（`.github/workflows/windows-desktop-release.yml`）：
+    - 在打包构建完成后、向 Releases 发布之前接入冒烟步骤；
+    - 冒烟失败自动阻止后续发布步骤，但通过 `if: always()` 将证据作为 Artifact 上传。
+  - 发布清单增强（`desktop/scripts/build-release.py`）：
+    - 在 `RELEASE_MANIFEST.json` 中注入 `builder_version: 25.1.8`、`upstream_patch_commit: a356198...` 与 `patched_template_sha256: 519a2338...`。
+- **T1.3 候选包与兼容性验收规程**：
+  - 桌面端版本升级为 `1.0.6-beta.6`，`package.json` 与 `package-lock.json` 精确锁定 `electron-builder` 为 `25.1.8`。
+  - 更新 `e2e/windows-sandbox/acceptance-runbook.md`，确立三条红线（全流程合成数据、严禁真实生产提交、强制收尾清理）。
+  - 制定原故障 Windows 11 build 26200 专项验收：连续 3 次打开向导并取消（验证解压与取消阶段不崩溃）、第 4 次完成安装、桌面与开始菜单快捷方式启动、退出后重启；核查无 `System.dll` 事件。
+  - 制定 Windows 10 x64 路径兼容性、覆盖升级数据保留、卸载后重装验证方案。
+
+### 3. 当前状态与结论
+- **状态**：**待体验**（本地自动化单测 135 项全绿、代码审查 PASS、CI 门禁与沙盒执行规程已完备，待在干净 Windows 11 build 26200 原故障实机执行验证）。
 
 ---
 
