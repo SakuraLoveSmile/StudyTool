@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   StudyTool 1.0.6-beta.3 · D4 Windows 沙盒验收 —— 清理脚本（必须与 sandbox-setup.ps1 配套）。
 

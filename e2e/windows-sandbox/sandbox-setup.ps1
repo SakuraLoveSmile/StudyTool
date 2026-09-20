@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   StudyTool 1.0.6-beta.3 · D4 Windows 沙盒验收 —— 临时宿主账号创建脚本。
 
