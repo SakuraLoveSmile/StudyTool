@@ -1,7 +1,7 @@
-# 1.0.6-beta.6 Windows 沙盒与安装兼容性验收执行手册
+# 1.0.7-beta.1 Windows 沙盒与安装兼容性验收执行手册
 
-适用候选包：`rag-study-assistant-desktop-setup-1.0.6-beta.6.exe`（CI `workflow_dispatch` 构建产物）  
-候选包 SHA256：`d64069d3d9dbb94db27c28c4290b85874e91e0d28018e8710e1e9e4bc89d5db8`（CI run `35509516465`；该运行已通过发布前的安装冒烟门禁，冒烟结论 `SUCCESS`、无 `System.dll`/`0xc0000005` 事件）  
+适用候选包：`studytool-setup-1.0.7-beta.1.exe`（CI `workflow_dispatch` 构建产物）  
+候选包 SHA256：（待回填：取本次 CI 运行发布的 `SHA256SUMS.txt` 与 `RELEASE_MANIFEST.json`；冒烟门禁结论须为 `SUCCESS`、无 `System.dll`/`0xc0000005` 事件）  
 核心背景：彻底防范发布未经安装验证的安装包。此前 beta.4 在 Windows 11 最新构建（如 build 26200）上曾出现过 NSIS 启动时 `System.dll` 崩溃（异常代码 `0xc0000005`）的问题。本次 beta.6 针对 NSIS 打包插件与安装向导进行了专项加固，特制定本手册用于全方位验收安装稳定性与系统兼容性。  
 执行环境要求：
 1. **原故障电脑专项验收**：Windows 11 x64（推荐 build 26200 或更新的 Canary/Dev/Release 预览分支）；
@@ -36,11 +36,11 @@
 
 ### 1.1 候选包完整性校验（主账号或任意会话）
 
-- 取得 CI 构建产物 `rag-study-assistant-desktop-setup-1.0.6-beta.6.exe` 与对应的 `SHA256SUMS.txt`。
+- 取得 CI 构建产物 `studytool-setup-1.0.7-beta.1.exe` 与对应的 `SHA256SUMS.txt`。
 - 在 PowerShell 中执行哈希计算：
 
   ```powershell
-  certutil -hashfile .\rag-study-assistant-desktop-setup-1.0.6-beta.6.exe SHA256
+  certutil -hashfile .\studytool-setup-1.0.7-beta.1.exe SHA256
   Get-Content .\SHA256SUMS.txt
   ```
 
@@ -69,13 +69,13 @@ powershell -ExecutionPolicy Bypass -File .\sandbox-setup.ps1 -UserName st-beta6-
 ```powershell
 whoami                                            # 预期: <计算机名>\<测试账号名>
 echo $env:LOCALAPPDATA                            # 预期测试账号的独立 AppData 路径
-Test-Path "$env:LOCALAPPDATA\Programs\rag-study-assistant-desktop" # 预期: False（未安装）
-Test-Path "$env:LOCALAPPDATA\RAGStudyAssistant"   # 预期: False（数据与日志未生成）
-Get-Process | Where-Object { $_.Name -match 'RAG|backend' } # 预期: 无任何输出
+Test-Path "$env:LOCALAPPDATA\Programs\studytool" # 预期: False（未安装）
+Test-Path "$env:LOCALAPPDATA\StudyTool"   # 预期: False（数据与日志未生成）
+Get-Process | Where-Object { $_.Name -match '学习助手|backend' } # 预期: 无任何输出
 ```
 
 - **预期**：所有路径均为全新未初始化状态，无残留进程。
-- **路径说明（易错点）**：主程序名是 `RAG备考助手.exe`（取自 `productName`），默认安装目录名却是 `rag-study-assistant-desktop`——`productName` 含非 ASCII 字符时，electron-builder 的 `getWindowsInstallationDirName()` 会回退到 `package.json` 的 `name`。核对路径时不要假定两者同名。
+- **路径说明（易错点）**：主程序名是 `学习助手.exe`（取自 `productName`），默认安装目录名却是 `studytool`——`productName` 含非 ASCII 字符时，electron-builder 的 `getWindowsInstallationDirName()` 会回退到 `package.json` 的 `name`。核对路径时不要假定两者同名。
 - **证据**：`ev-PRE-03-isolation.png`。
 
 ---
@@ -100,7 +100,7 @@ $EvidenceDir = "C:\TestEvidence\beta6-smoke"
 
 # 执行自动化冒烟脚本
 powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-installer.ps1 `
-  -InstallerPath ".\release\rag-study-assistant-desktop-setup-1.0.6-beta.6.exe" `
+  -InstallerPath ".\release\studytool-setup-1.0.7-beta.1.exe" `
   -EvidenceDir $EvidenceDir `
   -TimeoutSeconds 180
 ```
@@ -127,7 +127,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 W11-1 · 连续 3 次打开安装向导并取消（防崩溃核心验证）
 - **背景**：beta.4 在向导解压初始化及取消退出时，由于 NSIS 模板内插件调用时序问题，曾触发 0xc0000005 访问违规。
 - **操作步骤**：
-  1. 双击 `rag-study-assistant-desktop-setup-1.0.6-beta.6.exe` 启动安装向导；
+  1. 双击 `studytool-setup-1.0.7-beta.1.exe` 启动安装向导；
   2. 出现向导欢迎界面后，不点击下一步，直接点击窗口上的「取消」按钮，并在确认弹窗中选择「是」退出向导；
   3. **重复执行上述步骤 1~2 连续 3 次**。
 - **预期结果**：
@@ -140,8 +140,8 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 - **操作步骤**：
   1. 在完成 W11-1 的 3 次取消后，第 4 次双击打开安装包；
   2. 正常走完安装向导：点击「下一步」→ 查看并保持默认安装目录 → 点击「安装」；
-  3. 等待安装进度条走完，到达「正在完成 RAG 备考助手 安装向导」页面；
-  4. 勾选「运行 RAG 备考助手」，点击「完成」。
+  3. 等待安装进度条走完，到达「正在完成 学习助手 安装向导」页面；
+  4. 勾选「运行 学习助手」，点击「完成」。
 - **预期结果**：
   - 安装向导各页面渲染正常，进度条流畅无卡死；
   - 顺利完成安装并成功拉起主程序，展示初始化或登录界面。
@@ -150,9 +150,9 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 W11-3 · 桌面与开始菜单快捷方式启动验证
 - **操作步骤**：
   1. 完全退出当前运行的应用（右上角关闭，确认进程退出）；
-  2. 检查 Windows 桌面，双击桌面快捷方式「RAG专业课备考助手」启动应用；
+  2. 检查 Windows 桌面，双击桌面快捷方式「学习助手」启动应用；
   3. 退出应用；
-  4. 打开 Windows 开始菜单，在所有应用中找到「RAG专业课备考助手」，点击启动应用。
+  4. 打开 Windows 开始菜单，在所有应用中找到「学习助手」，点击启动应用。
 - **预期结果**：
   - 桌面与开始菜单快捷方式图标正常显示；
   - 两种方式均能正常秒级唤起主程序，前端页面与 backend 进程正常运转。
@@ -161,10 +161,10 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 W11-4 · 进程彻底退出与冷重启验证
 - **操作步骤**：
   1. 在应用主界面点击关闭按钮退出；
-  2. 打开任务管理器（`Taskmgr`）或 PowerShell 执行 `Get-Process | ? { $_.Name -match 'RAG|backend' }`，核查进程树；
+  2. 打开任务管理器（`Taskmgr`）或 PowerShell 执行 `Get-Process | ? { $_.Name -match '学习助手|backend' }`，核查进程树；
   3. 等待 3 秒，再次双击快捷方式启动应用（冷重启）。
 - **预期结果**：
-  - 应用关闭后，主进程 `RAG备考助手.exe` 与后端子进程 `backend.exe` 在 2 秒内干净退出，无后台僵尸进程残留；
+  - 应用关闭后，主进程 `学习助手.exe` 与后端子进程 `backend.exe` 在 2 秒内干净退出，无后台僵尸进程残留；
   - 二次冷重启正常，各功能就绪。
 - **证据文件**：`ev-W11-4-clean-exit.png`、`ev-W11-4-cold-restart.png`。
 
@@ -173,7 +173,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
   1. 按 `Win + R` 输入 `eventvwr.msc` 打开事件查看器；
   2. 导航至「Windows 日志」→「应用程序」；
   3. 在右侧点击「筛选当前日志...」，事件级别勾选「关键」「错误」「警告」，事件来源筛选 `Application Error` 与 `Windows Error Reporting`；
-  4. 查看最近 30 分钟内与安装包、`RAG备考助手.exe` 相关的记录。
+  4. 查看最近 30 分钟内与安装包、`学习助手.exe` 相关的记录。
 - **预期结果**：
   - 事件列表中**绝无**涉及 `System.dll` 或错误代码 `0xc0000005` 的故障条目；
   - 无与安装向导有关的致命异常。
@@ -187,7 +187,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 W10-1 · 默认路径安装
 - **操作步骤**：
   1. 在干净的 Windows 10 环境中运行安装包；
-  2. 选择默认路径（`%LOCALAPPDATA%\Programs\rag-study-assistant-desktop`，主程序为 `RAG备考助手.exe`）安装完成。
+  2. 选择默认路径（`%LOCALAPPDATA%\Programs\studytool`，主程序为 `学习助手.exe`）安装完成。
 - **预期结果**：
   - 安装成功，主可执行文件生成在默认目录，extraResources (backend) 完整解压释放；
   - 启动后应用主界面与后台通讯正常。
@@ -208,37 +208,39 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 W10-3 · 带空格路径安装验证
 - **操作步骤**：
   1. 运行安装包，自定义安装目录为带空格的路径，例如：
-     `C:\My Custom Apps\RAG Study Assistant`；
+     `C:\My Custom Apps\StudyTool`；
   2. 执行安装直至完成，通过生成的桌面快捷方式启动。
 - **预期结果**：
   - 安装顺利完成，快捷方式属性中的可执行路径带正确的双引号转义；
   - 主程序拉起 backend 进程时，命令行参数路径正确包裹转义，无截断或解析失败异常。
 - **证据文件**：`ev-W10-3-space-path.png`。
 
-#### 用例 W10-4 · 覆盖升级与 AppData 数据保留（合成 Mock 数据）
+#### 用例 W10-4 · 升级安装与 AppData 数据保留（合成 Mock 数据）
+- **背景（更名后的契约变化）**：appId 已由 `com.rag.studyassistant` 改为 `com.sakurasep.studytool`，旧版安装项在注册表中是独立应用，新安装包**不会**覆盖旧版；数据根目录已由 `RAGStudyAssistant` 更名为 `StudyTool`，新版本首次启动时自动整体迁移（迁移失败则回退旧目录，绝不丢数据）。
 - **操作步骤**：
   1. 在测试机上预先安装历史版本（如 1.0.5 或 beta.3）；
   2. 启动旧版本，生成合成的 mock 备考材料和学习配置（生成测试科目、导入一段 mock 文本）；
   3. 查看数据目录 `%LOCALAPPDATA%\RAGStudyAssistant\data` 与 `logs`，记录文件快照：
      `Get-ChildItem -Recurse "$env:LOCALAPPDATA\RAGStudyAssistant" | Select-Object FullName`
-  4. 不卸载旧版本，直接双击运行 `rag-study-assistant-desktop-setup-1.0.6-beta.6.exe` 执行覆盖安装；
-  5. 安装完成后启动应用。
+  4. 不卸载旧版本，直接双击运行 `studytool-setup-1.0.7-beta.1.exe` 执行安装（与旧版并存）；
+  5. 安装完成后启动新版本应用。
 - **预期结果**：
-  - 安装向导平稳覆盖旧二进制程序，无文件占用报错；
-  - 启动后，此前生成的 mock 备考科目、历史记录完好无损；
-  - `%LOCALAPPDATA%\RAGStudyAssistant` 目录下的用户数据库与配置完全保留。
+  - 新版本独立安装成功，与旧版互不覆盖、各自可启动；
+  - 首次启动后 `%LOCALAPPDATA%\RAGStudyAssistant` 已整体迁移为 `%LOCALAPPDATA%\StudyTool`；
+  - 迁移后此前生成的 mock 备考科目、历史记录完好无损；
+  - `%LOCALAPPDATA%\StudyTool` 目录下的用户数据库与配置完全保留。
 - **证据文件**：`ev-W10-4-upgrade-preserve.png`。
 
 #### 用例 W10-5 · 卸载后重装验证（契约：deleteAppDataOnUninstall = false）
 - **操作步骤**：
   1. 在存在 mock 数据的环境中，进入「Windows 设置」→「应用」→「已安装的应用」（或控制面板「程序和功能」）；
-  2. 找到「RAG备考助手」，点击「卸载」，按向导完成卸载；
-  3. 检查程序目录：`Test-Path "$env:LOCALAPPDATA\Programs\rag-study-assistant-desktop"`（必须是 electron-builder 实际使用的目录名；原先写作 `RAG备考助手` 时该检查恒为 False，会掩盖卸载不干净的问题）；
-  4. 检查用户数据目录：`Test-Path "$env:LOCALAPPDATA\RAGStudyAssistant"`；
-  5. 再次运行 1.0.6-beta.6 安装包完成全新安装并启动。
+  2. 找到「学习助手」，点击「卸载」，按向导完成卸载；
+  3. 检查程序目录：`Test-Path "$env:LOCALAPPDATA\Programs\studytool"`（必须是 electron-builder 实际使用的目录名；`productName` 含中文，安装目录回退为 `package.json` 的 `name`，写作 `学习助手` 时该检查恒为 False，会掩盖卸载不干净的问题）；
+  4. 检查用户数据目录：`Test-Path "$env:LOCALAPPDATA\StudyTool"`；
+  5. 再次运行 1.0.7-beta.1 安装包完成全新安装并启动。
 - **预期结果**：
   - 卸载后，程序文件目录被完全清理（输出 False）；
-  - **用户数据目录 `%LOCALAPPDATA%\RAGStudyAssistant` 完整保留（输出 True）**，契约 `deleteAppDataOnUninstall: false` 严格生效；
+  - **用户数据目录 `%LOCALAPPDATA%\StudyTool` 完整保留（输出 True）**，契约 `deleteAppDataOnUninstall: false` 严格生效；
   - 重新安装后启动，原有 mock 资料依然存在，无需重新配置。
 - **证据文件**：`ev-W10-5-uninstall-retain.png`、`ev-W10-5-reinstall-ok.png`。
 
@@ -258,14 +260,14 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 REG-2 · 附件预览元数据核对与移除
 - **操作步骤**：点击任一附件「预览」，核对首行 metadata；关闭预览，点击另一附件「移除」。
 - **预期**：
-  - 首行 metadata 包含 `"kind":"feedback-log-collection"`、`"app_version":"1.0.6-beta.6"`、`"from"/"to"` 等字段；
+  - 首行 metadata 包含 `"kind":"feedback-log-collection"`、`"app_version":"1.0.7-beta.1"`、`"from"/"to"` 等字段；
   - 移除后卡片消失，计数相应减少。
 - **证据文件**：`ev-REG-2-preview.png`。
 
 #### 用例 REG-3 · 权限拒绝 (ACL) 容灾回归
 - **操作步骤**：
   1. 退出应用，在沙盒账号下执行：
-     `icacls "$env:LOCALAPPDATA\RAGStudyAssistant\logs" /deny "$env:USERNAME:(OI)(CI)(R)" /T`
+     `icacls "$env:LOCALAPPDATA\StudyTool\logs" /deny "$env:USERNAME:(OI)(CI)(R)" /T`
   2. 启动应用并打开反馈面板。
 - **预期**：
   - 应用仍能正常启动运行（日志目录异常不阻断主程序）；
@@ -281,7 +283,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 
 1. 确认演示期间添加的任何 ACL 限制均已恢复：
    ```powershell
-   icacls "$env:LOCALAPPDATA\RAGStudyAssistant\logs"
+   icacls "$env:LOCALAPPDATA\StudyTool\logs"
    ```
 2. 登出当前测试账号会话，切换回主管理员账号；
 3. 打开管理员 PowerShell，执行 teardown 脚本：
@@ -292,7 +294,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 4. 核对 teardown 输出，末尾三项核对必须全部为 `PASS`：
    - `CHECK 账号不存在: PASS`
    - `CHECK profile 已清除: PASS`
-   - `CHECK 无遗留 RAG 进程: PASS`
+   - `CHECK 无遗留应用进程: PASS`
 - **证据文件**：`ev-Z1-teardown-pass.png`。
 
 ---
@@ -306,7 +308,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 | **操作系统版本** | 例: Windows 11 Pro 24H2 (OS Build 26200.5000) / Win 10 22H2 |
 | **测试硬件/架构** | x86_64 / 物理机 / Windows Sandbox / 虚拟机 |
 | **源码 Commit ID** | 例: `f27aa23` (或对应的 Git SHA) |
-| **安装包文件名** | `rag-study-assistant-desktop-setup-1.0.6-beta.6.exe` |
+| **安装包文件名** | `studytool-setup-1.0.7-beta.1.exe` |
 | **安装包 SHA256** |  |
 | **测试执行人** |  |
 | **执行日期** | YYYY-MM-DD |

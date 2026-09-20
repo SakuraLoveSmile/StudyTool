@@ -1,7 +1,7 @@
 {
-  "name": "rag-study-assistant-desktop",
-  "version": "1.0.6-beta.6",
-  "description": "RAG 备考助手 Windows 桌面版",
+  "name": "studytool",
+  "version": "1.0.7-beta.1",
+  "description": "学习助手 Windows 桌面版",
   "main": "dist/main.js",
   "private": true,
   "scripts": {
