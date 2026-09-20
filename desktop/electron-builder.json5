@@ -4,6 +4,7 @@
   directories: {
     output: "release"
   },
+  beforePack: "./scripts/patch-nsis-template.js",
   files: [
     "dist/**/*",
     "package.json"
