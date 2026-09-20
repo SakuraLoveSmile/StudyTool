@@ -56,8 +56,13 @@ def npx_executable() -> str:
 
 
 def node_executable() -> str:
-    """Return the executable name that Python can launch on each host OS."""
-    return "node.cmd" if os.name == "nt" else "node"
+    """Return the executable name that Python can launch on each host OS.
+
+    Unlike npm/npx, Node.js ships only ``node.exe`` on Windows — there is no
+    ``node.cmd`` shim, so ``CreateProcess`` fails with WinError 2 when the
+    ``.cmd`` suffix is assumed (observed on the windows-2022 release runner).
+    """
+    return "node.exe" if os.name == "nt" else "node"
 
 
 ELECTRON_BUILDER_PINNED_VERSION = "25.1.8"
