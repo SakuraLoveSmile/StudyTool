@@ -481,6 +481,36 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
 
 ---
 
+## 产品更名 StudyTool / 学习助手 与 1.0.7-beta.1 发布记录
+
+### 1. 背景与目标
+- 产品更名：用户可见名称统一为「学习助手」，包名 `studytool`，appId `com.sakurasep.studytool`，数据根目录 `StudyTool`，内部契约 `STUDYTOOL_*` / `X-StudyTool-Instance-Token`。
+- 数据零丢失：主进程启动时一次性把遗留的 `RAGStudyAssistant` 根目录整体改名为 `StudyTool`；新旧并存时保留新目录，改名失败则静默回退旧目录，功能不中断。
+- appId 变更意味着旧 beta 安装项与新包在注册表中相互独立，新包**不会**覆盖升级旧版，需先卸载旧版（冒烟脚本与验收手册已按此契约更新）。
+
+### 2. 关键实现
+- 新增 `desktop/src/app-paths.ts` 作为数据路径真源（路径解析纯净、迁移显式一次性执行），`credentials-store` / `theme-prefs` / `backend-manager` 全部改为共用；保留原有语义差异——data 目录读 `STUDYTOOL_DESKTOP_DATA_DIR` 覆盖，logs/config 不读（沙盒隔离契约依赖此行为）。
+- 桌面↔后端契约两端同步改名；Windows 冒烟、沙盒 setup/teardown、验收手册同步新标识，并**有意保留**对旧版安装项与旧进程名的拒绝匹配（appId 变更后新旧版并存需显式冲突，否则会互相争抢端口与数据目录）。
+- 本地验证：desktop `npm run build` + 单测 145 项全绿（含 9 项数据迁移用例）、backend `pytest` 293 项全绿、frontend `npm run build` 通过、`npm ci --dry-run` 通过。
+
+### 3. 候选包发布与 CI 实测证据（2026-09-20）
+
+- **已发布候选包**：GitHub Pre-release `desktop-v1.0.7-beta.1`（仓库 `SakuraLoveSmile/StudyTool-Releases`），资产为安装包、`.blockmap`、`latest.yml`、`RELEASE_MANIFEST.json`、`SHA256SUMS.txt`；`latest` 仍指向 `desktop-v1.0.5`，旧包未被覆盖或改写。
+- **候选包 SHA256**：`92a805649997810c49a6da9e7af61a05b0087fb6b4698c5fb954338b35a99732`（安装包与清单一致）。
+- **打包元数据**（`RELEASE_MANIFEST.json`）：`builder_version = 25.1.8`、`upstream_patch_commit = a356198ec7c54c7795659342bff36d9a5162cd93`、`patched_template_sha256 = 519a23385d3b3da4ce3925f9b9c34e2b8d2b98a1bcc8a510f721f56cffe910ee`；反馈组件 tarball 为 `feedback-web-0.4.1-studytool.1.tgz`。
+- **CI 实测**：运行 `35524997850` 全绿（约 4 分钟），发布前安装冒烟门禁通过，冒烟结论 `SUCCESS`：
+  - 安装退出码 `0`、耗时 16.98 秒、未超时；隔离预检干净（无任何历史残留）；
+  - 卸载注册项 DisplayName 为 `学习助手 1.0.7-beta.1`（新 appId 派生的 GUID，与旧 beta 安装项相互独立）；
+  - 主程序实际落盘位置 `%LOCALAPPDATA%\Programs\studytool\学习助手.exe`（180.04 MB）——安装目录与程序名均已切换为新标识；
+  - `critical_system_dll_crash = false`，事件日志中无 `System.dll` / `0xc0000005` / `Application Error` 记录。
+- **失败与修复记录**：首次运行 `35524314076` 在冒烟步骤失败——更名编辑时抹掉了三个 PowerShell 脚本的 UTF-8 BOM，PowerShell 按 ANSI(cp936) 解析中文导致语法错误（与历史 `ee5ac95` 同一类问题）；补回 BOM（`f92d904`）后重跑通过。安装包本身在首次运行即构建成功，新产物名 `studytool-setup-1.0.7-beta.1.exe` 生效。
+- **注意（验收边界）**：CI runner 为 Windows Server 2022，**不等于**原故障机 Windows 11 build 26200；上述结论只证明“打包产物可被静默安装且无对应崩溃事件”，数据目录迁移、新旧版并存、覆盖升级数据保留等仍需按 `e2e/windows-sandbox/acceptance-runbook.md` 在真机执行。
+
+### 4. 当前状态与结论
+- **状态**：**待体验**（更名改动本地全量测试通过、候选包已通过 CI 安装冒烟并发布为 Pre-release；待在干净 Windows 实机执行交互验收，重点验证 `RAGStudyAssistant → StudyTool` 数据迁移与旧版并存冲突）。
+
+---
+
 # 历史执行记录（公网多租户部署模式 - 归档）
 
 目标：统一 HTTPS 网站，最多 10 人人工开户，独立资料及学习记录，空库上线。
