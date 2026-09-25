@@ -804,7 +804,9 @@ class LearningService:
             JOIN recall_chapters ch ON ch.id = rc.chapter_id
             JOIN recall_card_revisions rr
               ON rr.card_id = rc.id
-             AND COALESCE(NULLIF(rr.revision_no, 0), rr.revision_number) = rc.current_revision_no
+             AND (rr.id = rc.published_revision_id OR
+                  (rc.published_revision_id IS NULL AND
+                   COALESCE(NULLIF(rr.revision_no, 0), rr.revision_number) = rc.current_revision_no))
             WHERE rc.is_archived = 0
               AND COALESCE(rc.status, '') NOT IN ('archived', 'rejected', 'draft')
               AND COALESCE(rc.publication_status, rc.status, '') IN ('published', 'approved')
@@ -873,9 +875,9 @@ class LearningService:
                     """
                     INSERT INTO learning_progress
                       (id, card_id, chapter_id, card_revision_id, layer,
-                       content_revision_no, state, status, interval_index,
+                       content_revision_no, state, status, interval_index, new_round,
                        due_date, first_study_date, state_version, version, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'new', 'new', 0, ?, NULL, 1, 1, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, 'new', 'new', 0, 0, ?, NULL, 1, 1, CURRENT_TIMESTAMP)
                     """,
                     (progress_id, card_id, chapter_id, card_revision_id, layer,
                      content_revision_no, study_date.isoformat()),
@@ -886,21 +888,17 @@ class LearningService:
             else:
                 progress = cls._progress(db, card_id, layer)
         elif int(progress.get("content_revision_no") or 0) != int(content_revision_no):
-            # Content revisions never silently inherit an answer schedule.  A
-            # changed revision starts a fresh learning state and increments its
-            # optimistic version, while the old day unit is invalidated below.
+            # A normal publish keeps the existing schedule. Only the explicit
+            # reset_progress operation starts the card over.
             db.execute(
                 """
                 UPDATE learning_progress
                 SET chapter_id = COALESCE(?, chapter_id), card_revision_id = COALESCE(?, card_revision_id),
-                    content_revision_no = ?, state = 'new', status = 'new', interval_index = 0,
-                    repetitions = 0, interval_days = 0, due_date = ?, due_at = NULL,
-                    first_study_date = NULL, last_studied_at = NULL, last_reviewed_at = NULL,
-                    review_count = 0, state_version = COALESCE(state_version, 1) + 1,
+                    content_revision_no = ?, state_version = COALESCE(state_version, 1) + 1,
                     version = COALESCE(version, 1) + 1, updated_at = CURRENT_TIMESTAMP
                 WHERE card_id = ? AND layer = ?
                 """,
-                (chapter_id, card_revision_id, content_revision_no, study_date.isoformat(), card_id, layer),
+                (chapter_id, card_revision_id, content_revision_no, card_id, layer),
             )
             progress = cls._progress(db, card_id, layer)
         if progress is None:  # pragma: no cover - defensive against malformed schema
@@ -1210,6 +1208,7 @@ class LearningService:
             """
             SELECT u.*, rc.knowledge_point_id, rc.chapter_id,
                    rc.current_revision_no AS card_current_revision_no,
+                   COALESCE(NULLIF(pr.revision_no, 0), pr.revision_number) AS card_published_revision_no,
                    rc.is_paused AS card_is_paused,
                    rc.is_archived AS card_is_archived,
                    ch.title AS chapter_title,
@@ -1224,6 +1223,7 @@ class LearningService:
             JOIN recall_chapters ch ON ch.id = rc.chapter_id
             LEFT JOIN recall_card_revisions rr
               ON rr.card_id = rc.id AND rr.revision_no = u.content_revision_no
+            LEFT JOIN recall_card_revisions pr ON pr.id = rc.published_revision_id
             WHERE u.study_date = ?
             ORDER BY
               CASE u.unit_type WHEN 'carryover' THEN 0 WHEN 'review' THEN 1 ELSE 2 END,
@@ -1323,9 +1323,9 @@ class LearningService:
             attempts = row.get("attempts") or []
             current = [a for a in attempts if int(a.get("round") or 0) == current_round]
             unresolved = any(str(a.get("status") or "pending") in {"pending", "revealed"} for a in current)
-            # Review/carryover units only participate in round one; new units
-            # participate in each round that has been opened.
-            if kind in {"review", "carryover"} and current_round > 1:
+            # Review units only participate in round one; new and carryover units
+            # participate in rounds they are scheduled for.
+            if kind == "review" and current_round > 1:
                 unresolved = False
             if unresolved:
                 pending += 1
@@ -1337,7 +1337,7 @@ class LearningService:
         next_item = None
         if day.get("status") == "active":
             for row in active_rows:
-                if str(row.get("unit_type")) in {"review", "carryover"} and current_round > 1:
+                if str(row.get("unit_type")) == "review" and current_round > 1:
                     continue
                 attempts = [a for a in row.get("attempts", []) if int(a.get("round") or 0) == current_round]
                 attempts.sort(key=lambda a: int(a.get("attempt_index") or 0))
@@ -1581,7 +1581,7 @@ class LearningService:
                     continue
                 if str(unit.get("source_status") or "").strip().lower() in {"invalid", "missing", "rejected", "deleted"}:
                     continue
-                if str(unit.get("unit_type")) in {"review", "carryover"} and current_round > 1:
+                if str(unit.get("unit_type")) == "review" and current_round > 1:
                     continue
                 attempts = [a for a in unit.get("attempts", []) if int(a.get("round") or 0) == current_round]
                 attempts.sort(key=lambda a: int(a.get("attempt_index") or 0))
@@ -1865,6 +1865,7 @@ class LearningService:
                         )
                         after_state["interval_index"] = int(progress_before.get("interval_index") or 0)
                         after_state["interval_days"] = int(progress_before.get("interval_days") or 0)
+                        after_state["new_round"] = int(progress_before.get("new_round") or 0)
                         after_state["next_review_date"] = (
                             progress_before.get("due_date") or day_date.isoformat()
                         )
@@ -1876,6 +1877,7 @@ class LearningService:
                 after_interval = int(after_state.get("interval_index") or 0)
                 if after_interval < 0:
                     after_interval = 0
+                after_new_round = int(after_state.get("new_round") or 0)
                 due = after_state.get("next_review_date") or day_date
                 due_date = _parse_date(due, "due_date")
                 first_study = progress_before.get("first_study_date") or day_date.isoformat()
@@ -1891,6 +1893,7 @@ class LearningService:
                     UPDATE learning_progress
                     SET chapter_id = COALESCE(chapter_id, ?), card_revision_id = ?,
                         content_revision_no = ?, state = ?, status = ?, interval_index = ?,
+                        new_round = ?,
                         repetitions = ?, interval_days = ?, due_date = ?, due_at = ?,
                         first_study_date = ?, last_studied_at = ?, last_reviewed_at = ?,
                         review_count = ?, state_version = ?, version = COALESCE(version, 1) + 1,
@@ -1900,7 +1903,7 @@ class LearningService:
                     (
                         unit.get("chapter_id"), unit.get("card_revision_id"),
                         int(unit["content_revision_no"]), after_state_name, after_state_name,
-                        after_interval, repetitions, interval_days, due_date.isoformat(),
+                        after_interval, after_new_round, repetitions, interval_days, due_date.isoformat(),
                         due_date.isoformat() + "T00:00:00+00:00", str(first_study), now_stamp,
                         now_stamp, review_count, progress_version,
                         unit["card_id"], unit["layer"],
@@ -1981,11 +1984,11 @@ class LearningService:
             if unit.get("invalid_reason"):
                 continue
             kind = str(unit.get("unit_type") or "review")
-            if kind in {"review", "carryover"} and current_round > 1:
+            if kind == "review" and current_round > 1:
                 continue
             current = [a for a in unit.get("attempts", []) if int(a.get("round") or 0) == current_round]
             if not current:
-                return False
+                continue
             # A primary forgotten attempt must be followed by its additional
             # attempt; no other rating creates an additional attempt.
             primary = next((a for a in current if int(a.get("attempt_index") or 0) == 0), None)
@@ -1999,7 +2002,7 @@ class LearningService:
 
     @classmethod
     def _needs_next_round(cls, db: sqlite3.Connection, unit: Mapping[str, Any], study_date: date) -> bool:
-        if str(unit.get("unit_type")) != "new":
+        if str(unit.get("unit_type")) not in {"new", "carryover"}:
             return False
         progress = cls._progress(db, str(unit["card_id"]), str(unit["layer"]))
         if not progress:
@@ -2046,10 +2049,9 @@ class LearningService:
                         "UPDATE learning_days SET current_round = ?, state_version = COALESCE(state_version, 1) + 1, updated_at = CURRENT_TIMESTAMP WHERE study_date = ?",
                         (next_round, day_date.isoformat()),
                     )
-                    # Only new units take all three rounds.  Review/carryover
-                    # units are intentionally one-attempt daily reviews.
+                    # New and carryover units take all needed rounds; review units are one-attempt daily reviews.
                     for unit in rows:
-                        if unit.get("invalid_reason") or str(unit.get("unit_type")) != "new":
+                        if unit.get("invalid_reason") or str(unit.get("unit_type")) not in {"new", "carryover"}:
                             continue
                         if cls._needs_next_round(db, unit, day_date):
                             cls._insert_attempt(db, unit, next_round, attempt_kind="primary", attempt_index=0)

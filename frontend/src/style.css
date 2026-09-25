@@ -169,3 +169,8 @@ progress.progress-warning::-webkit-progress-value {
 progress.progress-warning::-moz-progress-bar {
   background: #f59e0b;
 }
+
+body:has([role="dialog"][aria-modal="true"]) feedback-widget {
+  visibility: hidden;
+  pointer-events: none;
+}

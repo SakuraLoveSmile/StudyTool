@@ -282,7 +282,7 @@
                 <span
                   v-if="overallStats.recent_5yr_window.length > 0"
                   class="px-2 py-0.5 rounded text-xs font-semibold"
-                  :class="item.recent_5yr_count >= 2 ? 'bg-err/10 text-err' : (item.recent_5yr_count === 1 ? 'bg-warn/10 text-warn' : 'bg-raised text-faint')"
+                  :class="recentWindowBadgeClass(item)"
                 >
                   {{ item.recent_5yr_count }} / {{ overallStats.recent_5yr_window.length }} 年
                 </span>
@@ -554,6 +554,7 @@ const isExtractionModalOpen = ref(false);
 const isAddModalOpen = ref(false);
 const isMergeModalOpen = ref(false);
 const isLegacyModalOpen = ref(false);
+let fetchGeneration = 0;
 
 const newKpForm = ref({
   name: '',
@@ -602,6 +603,7 @@ const filteredPointStats = computed(() => {
 });
 
 const fetchAll = async () => {
+  const token = ++fetchGeneration;
   try {
     isRefreshing.value = true;
     const [overall, list, legacy] = await Promise.all([
@@ -609,6 +611,7 @@ const fetchAll = async () => {
       apiClient.getKnowledgePointsStats(),
       apiClient.getLegacyKnowledgePoints()
     ]);
+    if (token !== fetchGeneration) return;
     overallStats.value = overall;
     pointStats.value = list;
     legacyKPs.value = legacy;
@@ -617,7 +620,7 @@ const fetchAll = async () => {
   } catch (e) {
     console.error('Failed to load stats:', e);
   } finally {
-    isRefreshing.value = false;
+    if (token === fetchGeneration) isRefreshing.value = false;
   }
 };
 
@@ -651,6 +654,19 @@ const priorityTagStyle = (tag: string) => {
   if (tag === 'important') return 'bg-err/10 text-err border-err/30';
   if (tag === 'deferred') return 'bg-raised text-sub border-line';
   return 'bg-accent/10 text-accent border-accent/30';
+};
+
+const recentWindowBadgeClass = (item: KnowledgePointStats) => {
+  const windowLen = overallStats.value.recent_5yr_window.length;
+  if (windowLen === 0) return 'bg-raised text-faint';
+  const ratio = item.recent_5yr_count / windowLen;
+  if (item.recent_5yr_count >= 2 || ratio >= 0.4) {
+    return 'bg-err/10 text-err font-bold';
+  }
+  if (item.recent_5yr_count >= 1) {
+    return 'bg-warn/10 text-warn';
+  }
+  return 'bg-raised text-faint';
 };
 
 const updatePriorityTag = async (item: KnowledgePointStats) => {

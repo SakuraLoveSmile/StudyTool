@@ -609,5 +609,26 @@ def test_unfinished_new_card_carries_over_and_reopen_preserves_progress(tmp_path
         ).fetchone()
         assert progress["status"] == "learning"
         assert progress["repetitions"] >= 1
+
+        # The carryover card can advance rounds on Day Two to complete its mastery sequence
+        attempt_r1 = day_two["next_item"]["attempt_id"]
+        LearningService.reveal(conn=conn, study_date=DAY_TWO, attempt_id=attempt_r1)
+        LearningService.rate(conn=conn, study_date=DAY_TWO, attempt_id=attempt_r1, rating="mastered", request_id="carry-r1")
+        adv1 = LearningService.advance(conn=conn, study_date=DAY_TWO)
+        assert adv1["current_round"] == 2
+
+        day_two_r2 = LearningService.get_today(conn=conn, study_date=DAY_TWO)
+        attempt_r2 = day_two_r2["next_item"]["attempt_id"]
+        LearningService.reveal(conn=conn, study_date=DAY_TWO, attempt_id=attempt_r2)
+        LearningService.rate(conn=conn, study_date=DAY_TWO, attempt_id=attempt_r2, rating="mastered", request_id="carry-r2")
+        adv2 = LearningService.advance(conn=conn, study_date=DAY_TWO)
+        assert adv2["status"] == "completed"
+
+        progress_after = conn.execute(
+            "SELECT status, interval_index, due_date FROM learning_progress WHERE card_id = (SELECT card_id FROM learning_day_units WHERE study_date = ? LIMIT 1)",
+            (DAY_TWO,),
+        ).fetchone()
+        assert progress_after["status"] == "review"
+        assert progress_after["interval_index"] == 0
     finally:
         conn.close()

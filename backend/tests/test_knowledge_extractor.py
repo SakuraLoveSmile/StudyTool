@@ -177,6 +177,37 @@ def test_candidate_matching_and_apply(monkeypatch):
         assert new_kp is not None
         assert new_kp["is_deleted"] == 0
         assert new_kp["source_type"] == "extracted"
+        # priority_tag must use the frontend's valid set ('important', 'normal', 'deferred')
+        assert new_kp["priority_tag"] == "normal"
+
+def test_latest_extraction_pending_review():
+    doc_id = _setup_test_doc_and_chunks()
+    batch_dict = KnowledgeExtractor.create_extraction_batch([doc_id])
+    batch_id = batch_dict["id"]
+
+    res = client.get("/api/analysis/extractions/latest")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["id"] == batch_id
+    assert data["task_status"] in ("pending", "processing")
+    assert data["pending_candidates"] == 0
+
+    # Simulate a finished task that still has unreviewed candidates
+    with db_session() as conn:
+        conn.execute("UPDATE tasks SET status = 'completed' WHERE id = ?", (batch_dict["task_id"],))
+        conn.execute("UPDATE extraction_batches SET status = 'completed' WHERE id = ?", (batch_id,))
+        conn.execute("""
+            INSERT INTO extraction_candidates (id, extraction_id, name, citations_json, status, match_type)
+            VALUES ('cand-pending-1', ?, '待核对考点', '[]', 'pending', 'new')
+        """, (batch_id,))
+
+    res2 = client.get("/api/analysis/extractions/latest")
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["id"] == batch_id
+    assert data2["pending_candidates"] == 1
+    assert data2["candidates_count"] == 1
+    assert data2["task_status"] == "completed"
 
 def test_question_link_suggestions_zero_hallucination():
     doc_id = _setup_test_doc_and_chunks()

@@ -1,6 +1,6 @@
-# 1.0.7-beta.1 Windows 沙盒与安装兼容性验收执行手册
+# 1.0.8-beta.1 Windows 沙盒与安装兼容性验收执行手册
 
-适用候选包：`studytool-setup-1.0.7-beta.1.exe`（CI `workflow_dispatch` 构建产物）  
+适用候选包：`studytool-setup-1.0.8-beta.1.exe`（CI `workflow_dispatch` 构建产物）  
 候选包 SHA256：`92a805649997810c49a6da9e7af61a05b0087fb6b4698c5fb954338b35a99732`（CI run `35524997850`；该运行已通过发布前的安装冒烟门禁，冒烟结论 `SUCCESS`、无 `System.dll`/`0xc0000005` 事件）  
 核心背景：彻底防范发布未经安装验证的安装包。此前 beta.4 在 Windows 11 最新构建（如 build 26200）上曾出现过 NSIS 启动时 `System.dll` 崩溃（异常代码 `0xc0000005`）的问题。本次 beta.6 针对 NSIS 打包插件与安装向导进行了专项加固，特制定本手册用于全方位验收安装稳定性与系统兼容性。  
 执行环境要求：
@@ -308,7 +308,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 | **操作系统版本** | 例: Windows 11 Pro 24H2 (OS Build 26200.5000) / Win 10 22H2 |
 | **测试硬件/架构** | x86_64 / 物理机 / Windows Sandbox / 虚拟机 |
 | **源码 Commit ID** | 例: `f27aa23` (或对应的 Git SHA) |
-| **安装包文件名** | `studytool-setup-1.0.7-beta.1.exe` |
+| **安装包文件名** | `studytool-setup-1.0.8-beta.1.exe` |
 | **安装包 SHA256** |  |
 | **测试执行人** |  |
 | **执行日期** | YYYY-MM-DD |

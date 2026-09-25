@@ -13,6 +13,16 @@
 
       <div class="flex items-center gap-2">
         <button
+          v-if="card"
+          type="button"
+          class="btn btn-secondary text-xs"
+          :disabled="isConverting"
+          @click="openConvertModal"
+        >
+          <BookOpen class="w-3.5 h-3.5 mr-1 text-accent" />
+          <span>转入回忆卡</span>
+        </button>
+        <button
           v-if="selectedKp"
           type="button"
           class="btn btn-primary text-xs"
@@ -306,6 +316,82 @@
       :content="activeQuote?.snippet || ''"
       @close="isQuoteModalOpen = false"
     />
+
+    <!-- Convert to Recall Card Modal -->
+    <BaseModal
+      :show="isConvertModalOpen"
+      :title="`转入回忆卡：${selectedKp?.name || ''}`"
+      max-width="lg"
+      @close="!isConverting && (isConvertModalOpen = false)"
+    >
+      <div class="space-y-4 text-sm">
+        <p class="text-xs text-sub leading-relaxed">
+          将当前知识点学习卡的内容转化为「回忆卡」，直接纳入艾宾浩斯间隔复习与今日背诵任务队列。
+        </p>
+
+        <div v-if="convertError" class="rounded-xl border border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
+          {{ convertError }}
+        </div>
+        <div v-if="convertSuccess" class="rounded-xl border border-ok/30 bg-ok/10 px-3 py-2 text-xs text-ok flex items-center gap-1.5">
+          <Check class="w-4 h-4 text-ok shrink-0" />
+          <span>已成功转入回忆卡库并发布！可在今日学习或回忆卡库中查看。</span>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-sub mb-1.5">归属章节</label>
+          <select v-model="convertChapterId" class="field text-xs w-full" :disabled="isConverting">
+            <option v-for="ch in chapters" :key="ch.id" :value="ch.id">{{ ch.name }}</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-sub mb-1.5">转化内容维度</label>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              class="border rounded-xl p-2.5 text-xs text-center transition-colors"
+              :class="convertTarget === 'both' ? 'border-accent bg-accent/10 font-bold text-accent' : 'border-line bg-surface text-sub'"
+              @click="convertTarget = 'both'"
+            >
+              速记 + 答题结构
+            </button>
+            <button
+              type="button"
+              class="border rounded-xl p-2.5 text-xs text-center transition-colors"
+              :class="convertTarget === 'concise' ? 'border-accent bg-accent/10 font-bold text-accent' : 'border-line bg-surface text-sub'"
+              @click="convertTarget = 'concise'"
+            >
+              仅精简速记
+            </button>
+            <button
+              type="button"
+              class="border rounded-xl p-2.5 text-xs text-center transition-colors"
+              :class="convertTarget === 'structure' ? 'border-accent bg-accent/10 font-bold text-accent' : 'border-line bg-surface text-sub'"
+              @click="convertTarget = 'structure'"
+            >
+              仅答题骨架
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-sub mb-1.5">生成的回忆卡内容预览</label>
+          <div class="rounded-xl border border-line bg-raised/60 p-3 space-y-2 text-xs max-h-48 overflow-y-auto font-mono">
+            <div><span class="text-faint font-semibold">问题：</span><span class="text-ink">{{ convertTarget === 'structure' ? `【答题框架】${selectedKp?.name}` : `【简述】${selectedKp?.name}` }}</span></div>
+            <div class="border-t border-line/60 pt-2"><span class="text-faint font-semibold">参考答案：</span><p class="text-ink whitespace-pre-wrap mt-1">{{ convertTarget === 'concise' ? card?.concise_content : convertTarget === 'structure' ? card?.answer_structure : `【精简速记】\n${card?.concise_content}\n\n【答题结构模型】\n${card?.answer_structure}` }}</p></div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn btn-secondary text-xs" :disabled="isConverting" @click="isConvertModalOpen = false">取消</button>
+          <button type="button" class="btn btn-primary text-xs" :disabled="isConverting || convertSuccess" @click="handleConvertToRecallCard">
+            {{ isConverting ? '正在转入…' : '确认转入回忆卡' }}
+          </button>
+        </div>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -314,10 +400,12 @@ import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   Sparkles, Loader2, Bookmark, GitFork, FileText, Split, Quote,
-  HelpCircle, AlertTriangle, Search
+  HelpCircle, AlertTriangle, Search, BookOpen, Check
 } from 'lucide-vue-next';
 import { apiClient, sessionTransport } from '../api/client';
 import type { KnowledgePoint, StudyCard, CitationItem, QuestionItem } from '../types';
+import type { LearningChapter } from '../types/learning';
+import BaseModal from '../components/BaseModal.vue';
 import SourceQuoteModal from '../components/SourceQuoteModal.vue';
 import EmptyState from '../components/EmptyState.vue';
 
@@ -339,6 +427,73 @@ const assistantResult = ref<any>(null);
 // Quote Modal
 const isQuoteModalOpen = ref(false);
 const activeQuote = ref<CitationItem | null>(null);
+
+// Convert to Recall Card
+const isConvertModalOpen = ref(false);
+const convertTarget = ref<'concise' | 'structure' | 'both'>('both');
+const isConverting = ref(false);
+const convertSuccess = ref(false);
+const convertError = ref('');
+const chapters = ref<LearningChapter[]>([]);
+const convertChapterId = ref<string>('');
+
+const openConvertModal = async () => {
+  if (!card.value || !selectedKp.value) return;
+  convertError.value = '';
+  convertSuccess.value = false;
+  try {
+    chapters.value = await apiClient.listLearningChapters();
+    if (chapters.value.length === 0) {
+      const created = await apiClient.createLearningChapter({ name: selectedKp.value.chapter || '考点卡片' });
+      chapters.value = [created];
+    }
+    const matched = chapters.value.find(c => c.name === selectedKp.value?.chapter);
+    convertChapterId.value = matched ? matched.id : chapters.value[0].id;
+  } catch (e) {
+    console.error(e);
+  }
+  isConvertModalOpen.value = true;
+};
+
+const handleConvertToRecallCard = async () => {
+  if (!card.value || !selectedKp.value || !convertChapterId.value) return;
+  isConverting.value = true;
+  convertError.value = '';
+  try {
+    let prompt = `【简述】${selectedKp.value.name}`;
+    let answer = '';
+    let hint = selectedKp.value.chapter ? `所属章节：${selectedKp.value.chapter}` : undefined;
+
+    if (convertTarget.value === 'concise') {
+      answer = card.value.concise_content;
+    } else if (convertTarget.value === 'structure') {
+      prompt = `【答题框架】${selectedKp.value.name}`;
+      answer = card.value.answer_structure;
+    } else {
+      answer = `【精简速记】\n${card.value.concise_content}\n\n【答题结构模型】\n${card.value.answer_structure}`;
+    }
+
+    await apiClient.createRecallCard({
+      chapter_id: convertChapterId.value,
+      knowledge_point_id: selectedKp.value.id,
+      prompt,
+      answer,
+      hint,
+      lifecycle_status: 'published',
+      origin: 'generated',
+    });
+
+    convertSuccess.value = true;
+    setTimeout(() => {
+      isConvertModalOpen.value = false;
+      convertSuccess.value = false;
+    }, 1500);
+  } catch (error) {
+    convertError.value = error instanceof Error ? error.message : '转入回忆卡失败，请重试。';
+  } finally {
+    isConverting.value = false;
+  }
+};
 
 const selectedKp = computed(() =>
   knowledgePoints.value.find(k => k.id === selectedKpId.value)

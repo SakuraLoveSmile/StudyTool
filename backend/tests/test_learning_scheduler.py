@@ -173,3 +173,34 @@ def test_transition_review_rejects_invalid_rating_and_index():
         transition_review("unknown", 0, FIXED_STUDY_DATE)
     with pytest.raises(ValueError):
         transition_review("mastered", len(INTERVAL_DAYS), FIXED_STUDY_DATE)
+
+
+def test_transition_state_fuzzy_schedules_next_day():
+    from app.services.learning_scheduler import transition_state
+    review_state = {
+        "status": STATUS_REVIEW,
+        "interval_index": 2,
+        "interval_days": 7,
+        "new_round": 3,
+        "due_date": FIXED_STUDY_DATE,
+    }
+    result = transition_state(review_state, "fuzzy", review_date=FIXED_STUDY_DATE)
+    assert result["status"] == STATUS_REVIEW
+    assert result["interval_index"] == 2
+    assert result["next_review_date"] == date(2026, 9, 11)
+
+
+def test_transition_state_new_card_repetitions_do_not_bypass_rounds():
+    from app.services.learning_scheduler import transition_state
+    state_after_failures = {
+        "status": STATUS_LEARNING,
+        "interval_index": -1,
+        "new_round": 0,
+        "repetitions": 5,
+        "due_date": FIXED_STUDY_DATE,
+    }
+    result = transition_state(state_after_failures, "mastered", review_date=FIXED_STUDY_DATE)
+    assert result["status"] == STATUS_LEARNING
+    assert result["new_round"] == 1
+    assert result["next_review_date"] == FIXED_STUDY_DATE
+

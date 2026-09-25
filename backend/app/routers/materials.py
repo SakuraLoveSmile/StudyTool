@@ -201,17 +201,12 @@ def _ensure_learning_lifecycle_triggers(conn: sqlite3.Connection) -> None:
         assignments = []
         if "source_status" in cols:
             assignments.append('"source_status" = \'invalid\'')
-        if "status" in cols:
-            # extraction candidate status already admits source-invalid states
-            # in current schema; use it only after source_status when present.
-            assignments.append('"status" = \'invalid\'')
+        if "version" in cols:
+            assignments.append('"version" = version + CASE WHEN source_status IS NULL OR source_status = \'valid\' THEN 1 ELSE 0 END')
         if assignments:
             candidate_set = assignments
 
     def _create(trigger_name: str, timing: str, operation: str, condition: str) -> None:
-        existing = conn.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?", (trigger_name,)).fetchone()
-        if existing:
-            return
         statements = [
             f"DROP TRIGGER IF EXISTS \"{trigger_name}\"",
             f"CREATE TRIGGER IF NOT EXISTS \"{trigger_name}\" {timing} {operation} ON document_chunks WHEN {condition} BEGIN",
@@ -541,10 +536,19 @@ def _mark_recall_sources_invalid(
         ) and row.get("id") is not None:
             candidate_ids.add(str(row["id"]))
     for candidate_id in candidate_ids:
-        _set_learning_status(
-            conn, "extraction_candidates", candidate_id,
-            source_status=source_state, status="invalid",
-        )
+        columns = _learning_columns(conn, "extraction_candidates")
+        assignments = []
+        params = []
+        if "source_status" in columns:
+            assignments.append("source_status = ?")
+            params.append(source_state)
+        if "version" in columns:
+            assignments.append("version = version + CASE WHEN source_status IS NULL OR source_status = 'valid' THEN 1 ELSE 0 END")
+        if assignments:
+            conn.execute(
+                f"UPDATE extraction_candidates SET {', '.join(assignments)} WHERE id = ?",
+                params + [candidate_id],
+            )
 
     # A batch may only mention source chunks in its candidates; invalidate it
     # when any impacted candidate belongs to it, even if its own doc_ids_json
@@ -563,10 +567,19 @@ def _mark_recall_sources_invalid(
         ):
             if batch_id is not None:
                 batch_ids.add(str(batch_id))
-            _set_learning_status(
-                conn, "extraction_batches", batch_id,
-                source_status=source_state, status="invalid",
-            )
+            batch_columns = _learning_columns(conn, "extraction_batches")
+            batch_assignments = []
+            batch_params = []
+            if "source_status" in batch_columns:
+                batch_assignments.append("source_status = ?")
+                batch_params.append(source_state)
+            if "updated_at" in batch_columns:
+                batch_assignments.append("updated_at = CURRENT_TIMESTAMP")
+            if batch_assignments:
+                conn.execute(
+                    f"UPDATE extraction_batches SET {', '.join(batch_assignments)} WHERE id = ?",
+                    batch_params + [batch_id],
+                )
 
     return card_ids
 
@@ -1134,6 +1147,9 @@ def restore_cleared_tasks(req: TaskRestoreRequest):
 @router.post("/tasks/{task_id}/retry", response_model=TaskResponse)
 def retry_task(task_id: str):
     with db_session() as conn:
+        # Serialize retry clicks.  This transaction is intentionally kept
+        # small: one failed task can produce at most one active successor.
+        conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
@@ -1141,16 +1157,54 @@ def retry_task(task_id: str):
             raise HTTPException(status_code=404, detail="任务不存在")
         if row["status"] not in ("failed", "partial"):
             raise HTTPException(status_code=400, detail="只有失败或部分失败的任务可以重试")
-        new_id = str(uuid.uuid4())
+
+        # A second click while the first retry is queued/running returns the
+        # same task.  For extraction batches, task_id is the generation guard
+        # that also prevents a late old worker from changing batch state.
+        active = cursor.execute(
+            "SELECT * FROM tasks WHERE task_type = ? AND target_id = ? "
+            "AND status IN ('pending', 'processing', 'cancel_requested') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (row["task_type"], row["target_id"]),
+        ).fetchone()
+        if active:
+            return _task_row_to_response(active)
+
         if row["task_type"] == "parse_document":
             cursor.execute(
                 "UPDATE documents SET status = 'pending', error_msg = NULL WHERE id = ?",
                 (row["target_id"],),
             )
-        cursor.execute("""
-            INSERT INTO tasks (id, task_type, target_id, status, progress, message, retry_of)
-            VALUES (?, ?, ?, 'pending', 0, ?, ?)
-        """, (new_id, row["task_type"], row["target_id"], f"重试任务: {row['task_type']}", task_id))
+        # Use the worker's canonical initial progress payload and the same
+        # connection so task creation and batch rebinding commit together.
+        TaskWorker.create_task(
+            row["task_type"], row["target_id"],
+            f"重试任务: {row['task_type']}", conn=conn,
+        )
+        # create_task generates the id itself; use the inserted row as the
+        # authoritative successor id rather than duplicating worker internals.
+        new_id = cursor.execute(
+            "SELECT id FROM tasks WHERE task_type = ? AND target_id = ? "
+            "AND status = 'pending' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (row["task_type"], row["target_id"]),
+        ).fetchone()["id"]
+        cursor.execute("UPDATE tasks SET retry_of = ? WHERE id = ?", (task_id, new_id))
+
+        batch_columns = {r[1] for r in cursor.execute("PRAGMA table_info(extraction_batches)").fetchall()}
+        if row["task_type"] == "extract_knowledge_points" and "task_id" in batch_columns:
+            batch = cursor.execute(
+                "SELECT id FROM extraction_batches WHERE id = ? AND task_id = ?",
+                (row["target_id"], task_id),
+            ).fetchone()
+            if batch:
+                assignments = ["task_id = ?", "status = 'processing'", "updated_at = CURRENT_TIMESTAMP"]
+                params: list[Any] = [new_id]
+                if "error_msg" in batch_columns:
+                    assignments.append("error_msg = NULL")
+                cursor.execute(
+                    f"UPDATE extraction_batches SET {', '.join(assignments)} WHERE id = ? AND task_id = ?",
+                    params + [row["target_id"], task_id],
+                )
         cursor.execute("SELECT * FROM tasks WHERE id = ?", (new_id,))
         return _task_row_to_response(cursor.fetchone())
 

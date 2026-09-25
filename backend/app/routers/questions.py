@@ -1,5 +1,6 @@
 import uuid
 import logging
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from app.database import db_session
@@ -134,6 +135,8 @@ def get_question(question_id: str):
 def create_question(req: QuestionCreate):
     if req.is_confirmed and req.year is None:
         raise HTTPException(status_code=400, detail="确认题目前必须补充年份")
+    if req.year is not None and (req.year < 1980 or req.year > datetime.now().year + 2):
+        raise HTTPException(status_code=400, detail=f"年份必须在 1980 至 {datetime.now().year + 2} 年之间")
     qid = str(uuid.uuid4())
     with db_session() as conn:
         cursor = conn.cursor()
@@ -174,6 +177,8 @@ def update_question(question_id: str, req: QuestionUpdate):
         effective_year = req.year if "year" in changed_fields else row["year"]
         if req.is_confirmed == 1 and effective_year is None:
             raise HTTPException(status_code=400, detail="确认题目前必须补充年份")
+        if req.year is not None and (req.year < 1980 or req.year > datetime.now().year + 2):
+            raise HTTPException(status_code=400, detail=f"年份必须在 1980 至 {datetime.now().year + 2} 年之间")
         if req.score is not None and req.score < 0:
             raise HTTPException(status_code=400, detail="分值不能为负数")
 
