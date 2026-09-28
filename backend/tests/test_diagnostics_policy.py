@@ -133,6 +133,14 @@ def test_whitelist_drops_unvetted_fields_but_keeps_stack_frames(temp_log_dir):
         prompt="用户的完整提示词",
         content="资料原文",
         answer="模型回答",
+        spawn_elapsed_ms=41000,
+        probe_elapsed_ms=5000,
+        total_elapsed_ms=46000,
+        remaining_budget_ms=85000,
+        failure_reason="ready_timeout",
+        termination_confirmed=True,
+        termination_failed=False,
+        unvetted_process_field="must be dropped",
         exception_info={
             "exception_type": "ConnectError",
             "message": "连接失败",
@@ -144,6 +152,14 @@ def test_whitelist_drops_unvetted_fields_but_keeps_stack_frames(temp_log_dir):
     entry = _read_entries(temp_log_dir)[-1]
     for dropped in ("prompt", "content", "answer"):
         assert dropped not in entry, f"{dropped} must never be persisted"
+    assert entry["spawn_elapsed_ms"] == 41000
+    assert entry["probe_elapsed_ms"] == 5000
+    assert entry["total_elapsed_ms"] == 46000
+    assert entry["remaining_budget_ms"] == 85000
+    assert entry["failure_reason"] == "ready_timeout"
+    assert entry["termination_confirmed"] is True
+    assert entry["termination_failed"] is False
+    assert "unvetted_process_field" not in entry
     # Regression: inner frame keys must survive the recursive whitelist or the stack is lost.
     frames = entry["exception_info"]["frames"]
     assert frames[0]["file"] == "client.py"

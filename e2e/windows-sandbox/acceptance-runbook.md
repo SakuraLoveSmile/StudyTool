@@ -155,7 +155,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
   4. 打开 Windows 开始菜单，在所有应用中找到「学习助手」，点击启动应用。
 - **预期结果**：
   - 桌面与开始菜单快捷方式图标正常显示；
-  - 两种方式均能正常秒级唤起主程序，前端页面与 backend 进程正常运转。
+  - 两种方式均能在候选包声明的启动预算内打开主窗口，首页与 backend 通讯正常。
 - **证据文件**：`ev-W11-3-desktop-start.png`、`ev-W11-3-startmenu-start.png`。
 
 #### 用例 W11-4 · 进程彻底退出与冷重启验证
@@ -167,6 +167,16 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
   - 应用关闭后，主进程 `学习助手.exe` 与后端子进程 `backend.exe` 在 2 秒内干净退出，无后台僵尸进程残留；
   - 二次冷重启正常，各功能就绪。
 - **证据文件**：`ev-W11-4-clean-exit.png`、`ev-W11-4-cold-restart.png`。
+
+#### 用例 W11-6 · Windows 后端启动延迟修复候选包验证
+- **适用版本**：只测试包含本次启动修复的候选安装包。安装包文件名、版本与 SHA-256 必须填写在本手册环境表；本手册开头记录的 `1.0.8-beta.1` 哈希属于历史候选包，不能作为修复包验收结果。
+- **隔离要求**：在 Windows Sandbox、一次性虚拟机或独立测试账号操作。准备合成资料；如需复现旧故障的数据规模，只能使用保存在隔离环境内的受控副本。禁止删除或降级主账号的 `%LOCALAPPDATA%\StudyTool`。
+- **操作步骤**：
+  1. 记录 Windows 版本/build、候选安装包 SHA-256、安装路径及当前应用版本；安装后从桌面快捷方式启动「学习助手」，用秒表记录到首页可操作的时间。
+  2. 在 `%LOCALAPPDATA%\StudyTool\logs\desktop.jsonl` 与 `backend.jsonl` 中，以本次 `session_id` 关联桌面和后端事件，记录 spawn、探针起点、后端 ready、窗口加载、启动完成事件及其时间。若失败，导出诊断包，并记录 `failed_stage`、异常类型和后端退出信息。
+  3. 通过应用正常退出，确认「学习助手.exe」和 `backend.exe` 均已退出；再次冷启动并重复日志核对。
+- **预期结果**：后端在启动预算 90 秒内通过带实例令牌的状态接口；随后出现窗口、首页加载及 `startup.completed`。冷启动与二次启动都成功，期间无 `startup.backend.ready_timeout`，退出后无残留进程。失败时应有明确的后端阶段/异常记录，不能把主动终止后的退出码误记为原发崩溃。
+- **证据文件**：`ev-W11-6-startup-first.png`、`ev-W11-6-startup-second.png`、`desktop.jsonl`、`backend.jsonl`，失败时另附诊断包。
 
 #### 用例 W11-5 · Windows 事件查看器深度审查
 - **操作步骤**：
@@ -328,6 +338,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 | **W11-3** | 原故障机：桌面与开始菜单快捷方式启动 |  | `ev-W11-3-desktop-start.png` | 两种途径均正常拉起 |
 | **W11-4** | 原故障机：进程彻底退出与冷重启 |  | `ev-W11-4-clean-exit.png` | 无僵尸进程残留 |
 | **W11-5** | 原故障机：事件查看器 Application 日志 |  | `ev-W11-5-eventvwr-clean.png` | 无 0xc0000005 崩溃条目 |
+| **W11-6** | 启动修复候选：后端就绪、窗口加载及再次冷启动 |  | `ev-W11-6-startup-first.png`、`ev-W11-6-startup-second.png` | 填入新候选包 SHA-256；核对同一 session 的 desktop/backend 日志 |
 | **W10-1** | Win10 兼容性：默认路径安装 |  | `ev-W10-1-default-path.png` | 运行正常 |
 | **W10-2** | Win10 兼容性：含中文路径安装 |  | `ev-W10-2-chinese-path.png` | 路径无乱码，backend 正常 |
 | **W10-3** | Win10 兼容性：含空格路径安装 |  | `ev-W10-3-space-path.png` | 快捷方式与参数正确包裹 |

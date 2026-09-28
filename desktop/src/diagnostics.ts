@@ -70,7 +70,9 @@ export const FIELD_WHITELIST: ReadonlySet<string> = new Set([
   'task_id', 'task_type', 'unit_id', 'unit_index', 'scope', 'call_id', 'attempt',
   // external calls
   'service', 'model', 'endpoint', 'method', 'status_code', 'provider_request_id',
-  'duration_ms', 'timeout_config', 'retry_reason', 'retry_wait_seconds',
+  'duration_ms', 'spawn_elapsed_ms', 'probe_elapsed_ms', 'total_elapsed_ms',
+  'remaining_budget_ms', 'timeout_config', 'failure_reason',
+  'termination_confirmed', 'termination_failed', 'retry_reason', 'retry_wait_seconds',
   'input_chars', 'input_bytes', 'result_count',
   // process lifecycle
   'exit_code', 'signal', 'code', 'killed', 'code_name',

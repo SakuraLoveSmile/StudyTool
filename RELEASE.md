@@ -543,6 +543,25 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
 
 ---
 
+## Windows 后端启动等待修复与 1.0.8-beta.2 发布记录
+
+### 1. 修复内容
+- Windows 打包版后端就绪预算为 90 秒，开发态仍为 15 秒；预算从 spawn 前以单调时钟计时。
+- 探针请求有独立超时并销毁；区分后端提前退出、就绪超时、bootstrap 写入失败及终止确认结果。
+- 后端数据库、HTTP client、TaskWorker 启动步骤写入诊断事件；启动异常记录失败阶段和脱敏异常摘要。
+- 更新 Windows 冷启动验收规程；不改变 schema、数据目录或迁移策略。
+
+### 2. 本地验证
+- 桌面：`npm run build` 通过；`npm test` **155 passed**。
+- 后端：在 `backend/` 目录运行 `python -m pytest tests/test_diagnostics_startup.py tests/test_diagnostics_policy.py`，**27 passed**，5 条 PyMuPDF SWIG deprecation warnings。
+- Windows 冻结构建、安装冒烟与发布状态：待本次 Actions 工作流完成后回填。
+
+### 3. Windows 实机验收边界
+- Windows Server 2022 构建和静默安装冒烟不等于原故障 Windows 11 实机启动。候选包 SHA-256、Windows 冷启动、窗口加载和进程退出按 `e2e/windows-sandbox/acceptance-runbook.md` 的 W11-6 记录。
+- 当前未在 Windows 原故障机验证；整体状态保持“实现中”，不得写成“已验收”。
+
+---
+
 # 历史执行记录（公网多租户部署模式 - 归档）
 
 目标：统一 HTTPS 网站，最多 10 人人工开户，独立资料及学习记录，空库上线。

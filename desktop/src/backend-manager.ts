@@ -7,6 +7,10 @@ import { dataDir, logDir } from './app-paths';
 
 export type ManagerLogLevel = 'INFO' | 'WARN' | 'ERROR';
 
+const PACKAGED_STARTUP_BUDGET_MS = 90_000;
+const DEVELOPMENT_STARTUP_BUDGET_MS = 15_000;
+const READINESS_PROBE_TIMEOUT_MS = 1_000;
+
 /**
  * Optional diagnostics hook. Kept optional so existing construction sites (and tests)
  * keep working unchanged.
@@ -59,6 +63,10 @@ export class BackendManager {
     }
   }
 
+  private getStartupBudgetMs(): number {
+    return this.isPackaged ? PACKAGED_STARTUP_BUDGET_MS : DEVELOPMENT_STARTUP_BUDGET_MS;
+  }
+
   private getBackendExecutable(): { command: string; args: string[]; cwd: string } {
     const isPackaged = this.isPackaged;
     if (isPackaged) {
@@ -93,7 +101,52 @@ export class BackendManager {
         this.childProcess = null;
       } else {
         console.warn('[BackendManager] Backend process already tracked; verifying readiness');
-        return this.waitForReady(15000);
+        const startedAt = performance.now();
+        const timeoutMs = this.getStartupBudgetMs();
+        this.emit('startup.backend.probe', 'INFO', '开始检查后台服务就绪状态', {
+          spawn_elapsed_ms: 0,
+          timeout_config: `${timeoutMs}ms`,
+          remaining_budget_ms: timeoutMs,
+        });
+        const ready = await this.waitForReady(timeoutMs);
+        const probeElapsedMs = Math.round(performance.now() - startedAt);
+        if (ready && this.childProcess && this.childProcess.exitCode === null) {
+          this.emit('startup.backend.ready', 'INFO', '后台服务已就绪', {
+            duration_ms: probeElapsedMs,
+            spawn_elapsed_ms: 0,
+            probe_elapsed_ms: probeElapsedMs,
+            total_elapsed_ms: probeElapsedMs,
+            timeout_config: `${timeoutMs}ms`,
+          });
+          return true;
+        }
+        if (!this.childProcess || this.childProcess.exitCode !== null) {
+          this.emit('startup.backend.exited_before_ready', 'ERROR', '后台进程在就绪前退出', {
+            duration_ms: probeElapsedMs,
+            spawn_elapsed_ms: 0,
+            probe_elapsed_ms: probeElapsedMs,
+            total_elapsed_ms: probeElapsedMs,
+            timeout_config: `${timeoutMs}ms`,
+            failure_reason: 'process_exit',
+            termination_confirmed: true,
+            termination_failed: false,
+            detail: this.startupOutput.trim().slice(-2000),
+          });
+        } else if (probeElapsedMs >= timeoutMs) {
+          const terminationConfirmed = await this.forceKill();
+          this.emit('startup.backend.ready_timeout', 'ERROR', '后台服务未在超时时间内就绪', {
+            duration_ms: probeElapsedMs,
+            spawn_elapsed_ms: 0,
+            probe_elapsed_ms: probeElapsedMs,
+            total_elapsed_ms: probeElapsedMs,
+            timeout_config: `${timeoutMs}ms`,
+            failure_reason: 'ready_timeout',
+            termination_confirmed: terminationConfirmed,
+            termination_failed: !terminationConfirmed,
+            detail: this.startupOutput.trim().slice(-2000),
+          });
+        }
+        return false;
       }
     }
 
@@ -137,15 +190,79 @@ export class BackendManager {
       STUDYTOOL_APP_VERSION: process.env.STUDYTOOL_APP_VERSION || '',
     };
 
+    const startedAt = performance.now();
+    const timeoutMs = this.getStartupBudgetMs();
+    const startupDeadline = startedAt + timeoutMs;
     console.log(`[BackendManager] Spawning backend: ${command} ${spawnArgs.join(' ')}`);
-    const startedAt = Date.now();
     this.emit('startup.backend.spawn', 'INFO', '正在启动本地后台服务', {
       service: 'backend',
       target: command,
+      timeout_config: `${timeoutMs}ms`,
     });
 
     return new Promise((resolve) => {
-      let startupFailed = false;
+      let settled = false;
+      let startupError = false;
+      let exitedBeforeReady = false;
+      let terminationRequested = false;
+      let spawnElapsedMs = 0;
+      let probeStartedAt = startedAt;
+      let spawnErrorInfo: { error_type?: string; error_message?: string } = {};
+      let bootstrapStdin: NodeJS.WritableStream | null = null;
+      let onBootstrapStdinError: ((error: Error) => void) | undefined;
+
+      const finish = async (ready: boolean, failureReason?: string) => {
+        if (settled) return;
+        settled = true;
+        if (bootstrapStdin && onBootstrapStdinError) {
+          bootstrapStdin.removeListener('error', onBootstrapStdinError);
+        }
+        const totalElapsedMs = Math.round(Math.max(0, performance.now() - startedAt));
+        const probeElapsedMs = Math.round(Math.max(0, performance.now() - probeStartedAt));
+        if (ready) {
+          this.emit('startup.backend.ready', 'INFO', '后台服务已就绪', {
+            duration_ms: totalElapsedMs,
+            spawn_elapsed_ms: spawnElapsedMs,
+            probe_elapsed_ms: probeElapsedMs,
+            total_elapsed_ms: totalElapsedMs,
+            timeout_config: `${timeoutMs}ms`,
+          });
+          resolve(true);
+          return;
+        }
+
+        let terminationConfirmed = true;
+        if (this.childProcess) {
+          terminationRequested = true;
+          terminationConfirmed = await this.forceKill();
+        }
+        const event = failureReason === 'ready_timeout'
+          ? 'startup.backend.ready_timeout'
+          : failureReason === 'process_exit'
+            ? 'startup.backend.exited_before_ready'
+            : failureReason === 'stdin_error'
+              ? 'startup.backend.bootstrap_failed'
+            : 'startup.backend.spawn_failed';
+        this.emit(event, 'ERROR', failureReason === 'ready_timeout'
+          ? '后台服务未在超时时间内就绪'
+          : failureReason === 'process_exit'
+            ? '后台进程在就绪前退出'
+            : failureReason === 'stdin_error'
+              ? '后台进程 bootstrap 写入失败'
+            : '后台进程无法启动', {
+          duration_ms: totalElapsedMs,
+          spawn_elapsed_ms: spawnElapsedMs,
+          probe_elapsed_ms: probeElapsedMs,
+          total_elapsed_ms: totalElapsedMs,
+          timeout_config: `${timeoutMs}ms`,
+          failure_reason: failureReason,
+          termination_confirmed: terminationConfirmed,
+          termination_failed: !terminationConfirmed,
+          detail: this.startupOutput.trim().slice(-2000),
+          ...spawnErrorInfo,
+        });
+        resolve(false);
+      };
 
       this.childProcess = spawn(command, spawnArgs, {
         cwd,
@@ -153,18 +270,15 @@ export class BackendManager {
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: false,
       });
+      spawnElapsedMs = Math.round(performance.now() - startedAt);
 
       this.childProcess.on('error', (err) => {
         console.error('[BackendManager] Failed to spawn backend process:', err);
         this.recordStartupOutput('spawn error', err.message);
-        this.emit('startup.backend.spawn_failed', 'ERROR', '后台进程无法启动', {
-          error_type: err.name,
-          error_message: err.message,
-          duration_ms: Date.now() - startedAt,
-        });
-        startupFailed = true;
+        spawnErrorInfo = { error_type: err.name, error_message: err.message };
+        startupError = true;
         this.childProcess = null;
-        resolve(false);
+        void finish(false, 'spawn_error');
       });
 
       this.childProcess.on('exit', (code, signal) => {
@@ -174,11 +288,15 @@ export class BackendManager {
         }
         this.emit(
           'backend.process.exit',
-          code === 0 || code === null ? 'INFO' : 'ERROR',
+          terminationRequested || code === 0 || code === null ? 'INFO' : 'ERROR',
           '后台进程已退出',
           { exit_code: code === null ? undefined : code, signal: signal || undefined }
         );
         this.childProcess = null;
+        if (!settled) {
+          exitedBeforeReady = true;
+          void finish(false, 'process_exit');
+        }
       });
 
       this.childProcess.stdout?.on('data', (data) => {
@@ -194,33 +312,48 @@ export class BackendManager {
         console.error(`[Backend stderr]: ${text.trim()}`);
       });
 
-      // Write bootstrap payload to stdin
-      try {
-        this.childProcess.stdin?.write(JSON.stringify(bootstrapPayload) + '\n');
-      } catch (writeErr) {
+      bootstrapStdin = this.childProcess.stdin;
+      onBootstrapStdinError = (writeErr) => {
+        if (settled) return;
         console.error('[BackendManager] Failed writing bootstrap payload to stdin:', writeErr);
-        resolve(false);
+        this.recordStartupOutput('stdin error', writeErr.message);
+        spawnErrorInfo = { error_type: writeErr.name, error_message: writeErr.message };
+        startupError = true;
+        void finish(false, 'stdin_error');
+      };
+      bootstrapStdin?.once('error', onBootstrapStdinError);
+
+      try {
+        if (!bootstrapStdin) {
+          throw new Error('Backend stdin pipe is unavailable');
+        }
+        bootstrapStdin.write(JSON.stringify(bootstrapPayload) + '\n');
+      } catch (writeErr) {
+        onBootstrapStdinError(writeErr instanceof Error ? writeErr : new Error(String(writeErr)));
         return;
       }
 
       // Probe authenticated status endpoint
-      this.waitForReady(15000).then(async (ready) => {
-        if (startupFailed || !ready) {
+      const remainingMs = Math.max(0, startupDeadline - performance.now());
+      probeStartedAt = performance.now();
+      this.emit('startup.backend.probe', 'INFO', '开始检查后台服务就绪状态', {
+        spawn_elapsed_ms: spawnElapsedMs,
+        timeout_config: `${timeoutMs}ms`,
+        remaining_budget_ms: remainingMs,
+      });
+      this.waitForReady(remainingMs).then((ready) => {
+        if (settled) return;
+        if (startupError || exitedBeforeReady) return;
+        const processAlive = this.childProcess && this.childProcess.exitCode === null;
+        if (ready && processAlive) {
+          void finish(true);
+        } else if (ready || exitedBeforeReady || !processAlive) {
+          void finish(false, 'process_exit');
+        } else if (performance.now() >= startupDeadline) {
           console.error('[BackendManager] Backend process failed to become ready within timeout; ensuring termination');
-          this.emit('startup.backend.ready_timeout', 'ERROR', '后台服务未在超时时间内就绪', {
-            duration_ms: Date.now() - startedAt,
-            timeout_config: '15000ms',
-            detail: this.startupOutput.trim().slice(-2000),
-          });
-          if (this.childProcess) {
-            await this.forceKill();
-          }
-          resolve(false);
+          void finish(false, 'ready_timeout');
         } else {
-          this.emit('startup.backend.ready', 'INFO', '后台服务已就绪', {
-            duration_ms: Date.now() - startedAt,
-          });
-          resolve(true);
+          void finish(false, 'process_exit');
         }
       });
     });
@@ -242,14 +375,31 @@ export class BackendManager {
    * Probe backend readiness by checking /api/desktop/status with instance token.
    */
   public waitForReady(timeoutMs: number): Promise<boolean> {
-    const startTime = Date.now();
+    const deadline = performance.now() + Math.max(0, timeoutMs);
     return new Promise((resolve) => {
+      let settled = false;
+      let retryTimer: ReturnType<typeof setTimeout> | undefined;
+      let activeRequest: http.ClientRequest | undefined;
+      const settle = (result: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (retryTimer) clearTimeout(retryTimer);
+        if (activeRequest && !activeRequest.destroyed) activeRequest.destroy();
+        resolve(result);
+      };
       const check = () => {
         if (!this.childProcess) {
-          resolve(false);
+          settle(false);
           return;
         }
 
+        const remainingMs = deadline - performance.now();
+        if (remainingMs <= 0) {
+          settle(false);
+          return;
+        }
+
+        let retryScheduled = false;
         const req = http.request(
           `http://${this.host}:${this.port}/api/desktop/status`,
           {
@@ -258,26 +408,39 @@ export class BackendManager {
               'X-StudyTool-Instance-Token': this.instanceToken,
               Host: `${this.host}:${this.port}`,
             },
-            timeout: 1000,
+            timeout: Math.min(READINESS_PROBE_TIMEOUT_MS, remainingMs),
           },
           (res) => {
+            if (activeRequest === req) activeRequest = undefined;
             if (res.statusCode === 200) {
-              resolve(true);
+              res.resume();
+              settle(true);
             } else {
+              res.resume();
               retry();
             }
           }
         );
+        activeRequest = req;
 
         req.on('error', () => {
           retry();
         });
 
+        req.on('timeout', () => {
+          // destroy() emits error asynchronously; scheduleRetry's guard keeps
+          // that follow-up from queueing a second probe.
+          req.destroy();
+          retry();
+        });
+
         const retry = () => {
-          if (Date.now() - startTime >= timeoutMs) {
-            resolve(false);
+          if (settled || retryScheduled) return;
+          retryScheduled = true;
+          if (performance.now() >= deadline) {
+            settle(false);
           } else {
-            setTimeout(check, 350);
+            retryTimer = setTimeout(check, Math.min(350, Math.max(0, deadline - performance.now())));
           }
         };
 

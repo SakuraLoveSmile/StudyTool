@@ -16,6 +16,7 @@ mocked, so `settings.log_path` (including its mkdir-on-access) executes for real
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -265,3 +266,101 @@ def test_log_record_id_is_whitelisted_mirror_of_desktop():
     entry = json.loads(StructuredJsonFormatter().format(record))
     assert entry["log_record_id"] == "sess-deadbeef:desktop:00000042"
     assert entry["event"] == "log.persistence.recovered"
+
+
+# --------------------------------------------------------------------------------------
+# Lifespan startup phases: every stage is observable and failures remain sanitized
+# --------------------------------------------------------------------------------------
+
+def _run_lifespan(monkeypatch, init_db, http_start, worker_start):
+    from app import main as main_module
+
+    monkeypatch.setattr(main_module, "init_db", init_db)
+    monkeypatch.setattr(main_module.HttpClientProvider, "start", http_start)
+    monkeypatch.setattr(main_module.TaskWorker, "start", worker_start)
+
+    async def run():
+        async with main_module.lifespan(main_module.app):
+            pass
+
+    return asyncio.run(run())
+
+
+def test_lifespan_logs_completed_startup_phases_after_each_step(
+    tmp_path, monkeypatch, diagnostics_state
+):
+    monkeypatch.setattr(settings, "LOG_DIR", str(tmp_path / "logs"))
+    setup_diagnostics()
+    calls = []
+
+    def fake_init_db():
+        calls.append("database.returned")
+
+    async def fake_http_start():
+        calls.append("http_client.returned")
+
+    def fake_worker_start():
+        calls.append("task_worker.returned")
+
+    _run_lifespan(monkeypatch, fake_init_db, fake_http_start, fake_worker_start)
+    entries = _read_entries(tmp_path / "logs")
+    events = [entry["event"] for entry in entries]
+
+    lifecycle_events = [
+        event for event in events if event.startswith("startup.") or event.startswith("shutdown.")
+    ]
+    startup_index = lifecycle_events.index("startup.lifespan.begin")
+    assert lifecycle_events[startup_index:] == [
+        "startup.lifespan.begin",
+        "startup.database.begin",
+        "startup.database.ready",
+        "startup.http_client.begin",
+        "startup.http_client.ready",
+        "startup.task_worker.begin",
+        "startup.task_worker.ready",
+        "startup.ready",
+        "shutdown.begin",
+        "shutdown.ready",
+    ]
+    assert calls == ["database.returned", "http_client.returned", "task_worker.returned"]
+    assert "startup.database.ready" in events
+
+
+@pytest.mark.parametrize(
+    ("stage", "failure_kind"),
+    [("database", "db"), ("http_client", "http"), ("task_worker", "worker")],
+)
+def test_lifespan_failure_logs_stage_and_never_ready(
+    tmp_path, monkeypatch, diagnostics_state, stage, failure_kind
+):
+    monkeypatch.setattr(settings, "LOG_DIR", str(tmp_path / "logs"))
+    setup_diagnostics()
+    secret = "sk-live-1234567890"
+    user_path = r"C:\Users\Alice\StudyTool\private.pdf"
+
+    def failing_init_db():
+        if failure_kind == "db":
+            raise RuntimeError(f"database commit failed token={secret} path={user_path}")
+
+    async def failing_http_start():
+        if failure_kind == "http":
+            raise ConnectionError(f"HTTP client failed token={secret} path={user_path}")
+
+    def failing_worker_start():
+        if failure_kind == "worker":
+            raise ValueError(f"worker failed token={secret} path={user_path}")
+
+    with pytest.raises(Exception):
+        _run_lifespan(monkeypatch, failing_init_db, failing_http_start, failing_worker_start)
+
+    entries = _read_entries(tmp_path / "logs")
+    failed = [entry for entry in entries if entry["event"] == "startup.failed"]
+    assert len(failed) == 1
+    failure = failed[0]
+    assert failure["failed_stage"] == stage
+    assert failure["error_type"] in {"RuntimeError", "ConnectionError", "ValueError"}
+    assert failure["exception_info"]["failed_stage"] == stage
+    serialized = json.dumps(failure, ensure_ascii=False)
+    assert secret not in serialized
+    assert "Alice" not in serialized
+    assert not any(entry["event"] == "startup.ready" for entry in entries)

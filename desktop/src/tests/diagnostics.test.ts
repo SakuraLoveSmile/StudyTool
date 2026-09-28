@@ -94,6 +94,30 @@ test('whitelist drops unknown fields so business payload can never be persisted'
   assert.ok(!raw.includes('资料原文'));
 });
 
+test('whitelist preserves bounded backend startup timing and cleanup fields', () => {
+  const scrubbed = scrubRecord({
+    event: 'startup.backend.ready_timeout',
+    spawn_elapsed_ms: 12,
+    probe_elapsed_ms: 44026,
+    total_elapsed_ms: 44038,
+    remaining_budget_ms: 0,
+    timeout_config: '90000ms',
+    failure_reason: 'ready_timeout',
+    termination_confirmed: true,
+    termination_failed: false,
+    backend_payload: 'must be dropped',
+  });
+  assert.equal(scrubbed.spawn_elapsed_ms, 12);
+  assert.equal(scrubbed.probe_elapsed_ms, 44026);
+  assert.equal(scrubbed.total_elapsed_ms, 44038);
+  assert.equal(scrubbed.remaining_budget_ms, 0);
+  assert.equal(scrubbed.timeout_config, '90000ms');
+  assert.equal(scrubbed.failure_reason, 'ready_timeout');
+  assert.equal(scrubbed.termination_confirmed, true);
+  assert.equal(scrubbed.termination_failed, false);
+  assert.equal(scrubbed.backend_payload, undefined);
+});
+
 test('redaction: secrets, URL query strings, user paths and file names', () => {
   // Real keys are masked.
   assert.match(scrubString('key sk-1234567890abcdef12345678'), /sk-1234\*\*\*/);

@@ -160,7 +160,7 @@ LOG_FIELD_WHITELIST = frozenset({
     # errors / failures
     "error_type", "error_name", "error_message", "stack", "stack_frames", "frames",
     "cause_chain", "exception_type", "failed_stage", "stage", "reason", "detail",
-    "component", "info", "reason_code",
+    "component", "info", "reason_code", "failure_reason",
     # stack frame shape (exception_info.frames[])
     "file", "line", "func",
     # correlation
@@ -168,9 +168,10 @@ LOG_FIELD_WHITELIST = frozenset({
     # external calls / provider observability
     "service", "model", "endpoint", "method", "input_chars", "input_bytes",
     "timeout_config", "status_code", "provider_request_id", "duration_ms",
+    "spawn_elapsed_ms", "probe_elapsed_ms", "total_elapsed_ms", "remaining_budget_ms",
     "retry_reason", "retry_wait_seconds", "result_count", "exception_info",
     # process lifecycle
-    "exit_code", "signal", "code", "killed",
+    "exit_code", "signal", "code", "killed", "termination_confirmed", "termination_failed",
     # limiting / aggregation
     "occurrences", "first_seen", "last_seen", "dropped", "limit", "window_ms",
     # generic counters used by call sites
