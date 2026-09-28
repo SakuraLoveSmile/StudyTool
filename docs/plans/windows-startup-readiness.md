@@ -1,6 +1,6 @@
 # Windows 1.0.8-beta.1 启动失败调查与修复施工计划
 
-状态：整体实现中。T1、T2 的源码与本地测试已完成；T3 手册已补充，Windows 候选包与原故障环境尚未实测。未执行外部发布或用户数据迁移。
+状态：整体实现中。T1、T2 的源码与本地测试已完成；beta.2 已通过 Windows Server 2022 构建/安装冒烟并发布为 prerelease。交互式 Windows 10/11 与原故障机启动仍未实测；未执行用户数据迁移。
 
 ## 目标与本次证据
 
@@ -46,7 +46,7 @@
 ## T3：Windows 候选包与原故障环境闭环
 
 目标：证明实际安装的 Electron 程序打开主窗口，而非仅证明 backend.exe 能独立启动。
-状态：实现中；当前环境没有可用 Windows 安装会话，Windows 候选包与原故障机验收未执行。
+状态：实现中；Windows Server 2022 构建与静默安装冒烟通过，交互式 Windows 10/11 和原故障机验收未执行。
 
 - 主 agent 独占集成核对、`e2e/windows-sandbox/acceptance-runbook.md` 中本次候选包与启动用例的必要更新，以及最终结果记录；不得与 A/B 同时写各自文件。依赖 T1/T2 合并、桌面定向测试和后端诊断测试通过。现有发布脚本由主 agent 运行，不因旧手册中混用 beta.6/1.0.7 示例而拿错候选包。
 - 先在隔离 Windows x64 环境，以当前 `1.0.8-beta.1` 和受控数据副本重现原始症状，记录 `backend.exe` 路径/哈希、spawn→首条后端日志→数据库完成→认证 200/失败的时间。此取证只在隔离副本上进行，不要求在用户主账号上反复触发迁移。若已经无法取得旧候选包，标注对照缺失，继续新包验证。
@@ -56,6 +56,6 @@
 
 ## 执行与授权边界
 
-- 本轮已获实施授权。开始时工作区仅有此前保存的计划目录未跟踪；A/B 分别实施桌面与后端改动，主 agent 完成共享字段集成和 Windows 验收手册更新。代码内局部组织沿现有惯例，不扩大成数据库、升级器或 UI 重构。
-- 本轮本地验证已运行桌面 `npm run build`、`npm test`（155 passed），以及在 `backend/` 下运行 `python -m pytest tests/test_diagnostics_startup.py tests/test_diagnostics_policy.py`（27 passed）。测试使用隔离夹具。后续 Windows `build-release.py` 与实机验收尚未运行；发布或让用户安装更新包属于后续明确授权范围，本计划不触发外部发布、真实用户数据迁移或费用。
+- 本轮已获实现与发布授权：A/B 分别完成桌面与后端改动，主 agent 完成共享字段集成、beta.2 prerelease 发布和 Windows 验收手册更新。代码内局部组织沿现有惯例，没有扩大成数据库、升级器或 UI 重构。
+- 本轮本地验证已运行桌面 `npm run build`、`npm test`（155 passed），以及在 `backend/` 下运行 `python -m pytest tests/test_diagnostics_startup.py tests/test_diagnostics_policy.py`（27 passed）。Windows Actions `36374467449` 的冻结后端验证和安装器静默冒烟通过，发布资产已核对。测试机安装后的 Electron 实际启动与原故障机验收仍未执行；后续在原故障机覆盖安装前先备份 `%LOCALAPPDATA%\StudyTool`，不卸载清数据。
 - 同一阻塞两次不同依据尝试仍未解决时记录预期、实际、日志、尝试与所需决定；不把单独 backend 冒烟或历史 `RELEASE.md` 记录写成这次的实机验收。

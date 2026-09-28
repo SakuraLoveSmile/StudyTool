@@ -1,12 +1,13 @@
-# 1.0.8-beta.1 Windows 沙盒与安装兼容性验收执行手册
+# 1.0.8-beta.2 Windows 沙盒与安装兼容性验收执行手册
 
-适用候选包：`studytool-setup-1.0.8-beta.1.exe`（CI `workflow_dispatch` 构建产物）  
-候选包 SHA256：`92a805649997810c49a6da9e7af61a05b0087fb6b4698c5fb954338b35a99732`（CI run `35524997850`；该运行已通过发布前的安装冒烟门禁，冒烟结论 `SUCCESS`、无 `System.dll`/`0xc0000005` 事件）  
-核心背景：彻底防范发布未经安装验证的安装包。此前 beta.4 在 Windows 11 最新构建（如 build 26200）上曾出现过 NSIS 启动时 `System.dll` 崩溃（异常代码 `0xc0000005`）的问题。本次 beta.6 针对 NSIS 打包插件与安装向导进行了专项加固，特制定本手册用于全方位验收安装稳定性与系统兼容性。  
+适用候选包：`studytool-setup-1.0.8-beta.2.exe`（GitHub prerelease `desktop-v1.0.8-beta.2`）
+候选包 SHA256：`689e7d645c5693c76e06380e57da9ef9d0c58b0e1bb9718df17f83d13e5c623f`（CI run `36374467449`；Windows 冻结后端验证和安装冒烟均通过。安装器冒烟未启动已安装的 Electron 主程序，详见 W11-6）
+
+核心背景：此前 beta.4 在 Windows 11 最新构建（如 build 26200）上曾出现 NSIS 启动时 `System.dll` 崩溃（异常代码 `0xc0000005`）。本手册用于持续验收安装稳定性和桌面后端启动。
 执行环境要求：
 1. **原故障电脑专项验收**：Windows 11 x64（推荐 build 26200 或更新的 Canary/Dev/Release 预览分支）；
 2. **多场景兼容性验收**：Windows 10 x64（标准企业版/专业版，版本 21H2/22H2）；
-3. **隔离执行方式**：在一次性测试机、Windows Sandbox、虚拟机，或使用配套 `sandbox-setup.ps1` 创建的临时隔离账号（如 `st-beta6-sandbox`）中操作。
+3. **隔离执行方式**：在一次性测试机、Windows Sandbox、虚拟机，或使用配套 `sandbox-setup.ps1` 创建的临时隔离账号（如 `st-beta2-sandbox`）中操作。
 
 配套脚本：
 - `desktop/scripts/smoke-windows-installer.ps1`（自动化安装冒烟与崩溃取证脚本）
@@ -36,11 +37,11 @@
 
 ### 1.1 候选包完整性校验（主账号或任意会话）
 
-- 取得 CI 构建产物 `studytool-setup-1.0.7-beta.1.exe` 与对应的 `SHA256SUMS.txt`。
+- 取得 CI 构建产物 `studytool-setup-1.0.8-beta.2.exe` 与对应的 `SHA256SUMS.txt`。
 - 在 PowerShell 中执行哈希计算：
 
   ```powershell
-  certutil -hashfile .\studytool-setup-1.0.7-beta.1.exe SHA256
+  certutil -hashfile .\studytool-setup-1.0.8-beta.2.exe SHA256
   Get-Content .\SHA256SUMS.txt
   ```
 
@@ -54,12 +55,12 @@
 ```powershell
 # 以管理员身份打开 PowerShell
 cd <项目根目录>\e2e\windows-sandbox
-powershell -ExecutionPolicy Bypass -File .\sandbox-setup.ps1 -UserName st-beta6-sandbox
+powershell -ExecutionPolicy Bypass -File .\sandbox-setup.ps1 -UserName st-beta2-sandbox
 ```
 
 - 记录脚本生成的临时密码；
-- 按照指引生成用户 Profile（`runas /user:st-beta6-sandbox "cmd /c whoami"`）；
-- 锁屏切换至 `st-beta6-sandbox` 用户登录。
+- 按照指引生成用户 Profile（`runas /user:st-beta2-sandbox "cmd /c whoami"`）；
+- 锁屏切换至 `st-beta2-sandbox` 用户登录。
 - **证据**：`ev-PRE-02-setup.png`。
 
 ### 1.3 隔离基线验证（安装前检查）
@@ -96,11 +97,11 @@ Get-Process | Where-Object { $_.Name -match '学习助手|backend' } # 预期: �
 
 ```powershell
 # 准备输出目录
-$EvidenceDir = "C:\TestEvidence\beta6-smoke"
+$EvidenceDir = "C:\TestEvidence\beta2-smoke"
 
 # 执行自动化冒烟脚本
 powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-installer.ps1 `
-  -InstallerPath ".\release\studytool-setup-1.0.7-beta.1.exe" `
+  -InstallerPath ".\release\studytool-setup-1.0.8-beta.2.exe" `
   -EvidenceDir $EvidenceDir `
   -TimeoutSeconds 180
 ```
@@ -127,7 +128,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 W11-1 · 连续 3 次打开安装向导并取消（防崩溃核心验证）
 - **背景**：beta.4 在向导解压初始化及取消退出时，由于 NSIS 模板内插件调用时序问题，曾触发 0xc0000005 访问违规。
 - **操作步骤**：
-  1. 双击 `studytool-setup-1.0.7-beta.1.exe` 启动安装向导；
+  1. 双击 `studytool-setup-1.0.8-beta.2.exe` 启动安装向导；
   2. 出现向导欢迎界面后，不点击下一步，直接点击窗口上的「取消」按钮，并在确认弹窗中选择「是」退出向导；
   3. **重复执行上述步骤 1~2 连续 3 次**。
 - **预期结果**：
@@ -169,7 +170,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 - **证据文件**：`ev-W11-4-clean-exit.png`、`ev-W11-4-cold-restart.png`。
 
 #### 用例 W11-6 · Windows 后端启动延迟修复候选包验证
-- **适用版本**：只测试包含本次启动修复的候选安装包。安装包文件名、版本与 SHA-256 必须填写在本手册环境表；本手册开头记录的 `1.0.8-beta.1` 哈希属于历史候选包，不能作为修复包验收结果。
+- **适用版本**：只测试本手册开头 SHA-256 对应的 `1.0.8-beta.2` 候选安装包。
 - **隔离要求**：在 Windows Sandbox、一次性虚拟机或独立测试账号操作。准备合成资料；如需复现旧故障的数据规模，只能使用保存在隔离环境内的受控副本。禁止删除或降级主账号的 `%LOCALAPPDATA%\StudyTool`。
 - **操作步骤**：
   1. 记录 Windows 版本/build、候选安装包 SHA-256、安装路径及当前应用版本；安装后从桌面快捷方式启动「学习助手」，用秒表记录到首页可操作的时间。
@@ -232,7 +233,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
   2. 启动旧版本，生成合成的 mock 备考材料和学习配置（生成测试科目、导入一段 mock 文本）；
   3. 查看数据目录 `%LOCALAPPDATA%\RAGStudyAssistant\data` 与 `logs`，记录文件快照：
      `Get-ChildItem -Recurse "$env:LOCALAPPDATA\RAGStudyAssistant" | Select-Object FullName`
-  4. 不卸载旧版本，直接双击运行 `studytool-setup-1.0.7-beta.1.exe` 执行安装（与旧版并存）；
+  4. 不卸载旧版本，直接双击运行 `studytool-setup-1.0.8-beta.2.exe` 执行安装（与旧版并存）；
   5. 安装完成后启动新版本应用。
 - **预期结果**：
   - 新版本独立安装成功，与旧版互不覆盖、各自可启动；
@@ -247,7 +248,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
   2. 找到「学习助手」，点击「卸载」，按向导完成卸载；
   3. 检查程序目录：`Test-Path "$env:LOCALAPPDATA\Programs\studytool"`（必须是 electron-builder 实际使用的目录名；`productName` 含中文，安装目录回退为 `package.json` 的 `name`，写作 `学习助手` 时该检查恒为 False，会掩盖卸载不干净的问题）；
   4. 检查用户数据目录：`Test-Path "$env:LOCALAPPDATA\StudyTool"`；
-  5. 再次运行 1.0.7-beta.1 安装包完成全新安装并启动。
+  5. 再次运行 `studytool-setup-1.0.8-beta.2.exe` 完成全新安装并启动。
 - **预期结果**：
   - 卸载后，程序文件目录被完全清理（输出 False）；
   - **用户数据目录 `%LOCALAPPDATA%\StudyTool` 完整保留（输出 True）**，契约 `deleteAppDataOnUninstall: false` 严格生效；
@@ -270,7 +271,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 #### 用例 REG-2 · 附件预览元数据核对与移除
 - **操作步骤**：点击任一附件「预览」，核对首行 metadata；关闭预览，点击另一附件「移除」。
 - **预期**：
-  - 首行 metadata 包含 `"kind":"feedback-log-collection"`、`"app_version":"1.0.7-beta.1"`、`"from"/"to"` 等字段；
+  - 首行 metadata 包含 `"kind":"feedback-log-collection"`、`"app_version":"1.0.8-beta.2"`、`"from"/"to"` 等字段；
   - 移除后卡片消失，计数相应减少。
 - **证据文件**：`ev-REG-2-preview.png`。
 
@@ -299,7 +300,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 3. 打开管理员 PowerShell，执行 teardown 脚本：
    ```powershell
    cd <项目根目录>\e2e\windows-sandbox
-   powershell -ExecutionPolicy Bypass -File .\sandbox-teardown.ps1 -UserName st-beta6-sandbox -UninstallApp
+   powershell -ExecutionPolicy Bypass -File .\sandbox-teardown.ps1 -UserName st-beta2-sandbox -UninstallApp
    ```
 4. 核对 teardown 输出，末尾三项核对必须全部为 `PASS`：
    - `CHECK 账号不存在: PASS`
@@ -318,7 +319,7 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 | **操作系统版本** | 例: Windows 11 Pro 24H2 (OS Build 26200.5000) / Win 10 22H2 |
 | **测试硬件/架构** | x86_64 / 物理机 / Windows Sandbox / 虚拟机 |
 | **源码 Commit ID** | 例: `f27aa23` (或对应的 Git SHA) |
-| **安装包文件名** | `studytool-setup-1.0.8-beta.1.exe` |
+| **安装包文件名** | `studytool-setup-1.0.8-beta.2.exe` |
 | **安装包 SHA256** |  |
 | **测试执行人** |  |
 | **执行日期** | YYYY-MM-DD |
@@ -353,4 +354,4 @@ powershell -ExecutionPolicy Bypass -File .\desktop\scripts\smoke-windows-install
 
 ### 5.3 归档打包规范
 所有测试截图与生成的证据日志（`smoke-summary.json`、`installer-crash-events.txt`）请统一存放在一个证据文件夹中，并压缩为：  
-`beta6-acceptance-evidence-<操作系统分支>-<日期>.zip` （例如 `beta6-acceptance-evidence-win11-26200-20250228.zip`），与本回填手册一同提交归档。
+`beta2-acceptance-evidence-<操作系统分支>-<日期>.zip` （例如 `beta2-acceptance-evidence-win11-26200-20260928.zip`），与本回填手册一同提交归档。

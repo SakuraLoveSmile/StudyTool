@@ -554,11 +554,17 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
 ### 2. 本地验证
 - 桌面：`npm run build` 通过；`npm test` **155 passed**。
 - 后端：在 `backend/` 目录运行 `python -m pytest tests/test_diagnostics_startup.py tests/test_diagnostics_policy.py`，**27 passed**，5 条 PyMuPDF SWIG deprecation warnings。
-- Windows 冻结构建、安装冒烟与发布状态：待本次 Actions 工作流完成后回填。
 
-### 3. Windows 实机验收边界
+### 3. Windows 构建与发布结果
+- GitHub Actions `36374467449` 在 Windows Server 2022 全绿（5 分 15 秒），源码提交 `e99a2323cbbfa838df83c42d0d8f8c66fe3d361e`；冻结后端 readiness、首页、排空/退出验证通过。
+- 安装器静默冒烟 `SUCCESS`：隔离预检通过，退出码 0，耗时 24.83 秒，安装文件与卸载注册项均存在；`critical_system_dll_crash=false`。扫描到的 2 条系统事件属于 Edge Update 服务和 runner 的 RdAgent，与安装器无关。
+- 已发布 GitHub prerelease [`desktop-v1.0.8-beta.2`](https://github.com/SakuraLoveSmile/StudyTool-Releases/releases/tag/desktop-v1.0.8-beta.2)，`isPrerelease=true`；稳定 `latest` 仍为 `desktop-v1.0.8-beta.1`。
+- 安装包 `studytool-setup-1.0.8-beta.2.exe` 大小 143,147,321 bytes，SHA-256 `689e7d645c5693c76e06380e57da9ef9d0c58b0e1bb9718df17f83d13e5c623f`。该值同时出现在 `RELEASE_MANIFEST.json`、`SHA256SUMS.txt` 与 GitHub asset digest。
+- 同次发布还上传 `latest.yml`、`.blockmap`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS.txt`；CI 冒烟证据见 workflow artifact `studytool-smoke-evidence-1.0.8-beta.2`。
+
+### 4. Windows 实机验收边界
 - Windows Server 2022 构建和静默安装冒烟不等于原故障 Windows 11 实机启动。候选包 SHA-256、Windows 冷启动、窗口加载和进程退出按 `e2e/windows-sandbox/acceptance-runbook.md` 的 W11-6 记录。
-- 当前未在 Windows 原故障机验证；整体状态保持“实现中”，不得写成“已验收”。
+- 尚未在交互式 Windows 10/11 或原故障机启动安装后的 Electron 程序；整体状态保持“实现中”，不得写成“已验收”。
 
 ---
 
