@@ -29,9 +29,53 @@ $summary = [ordered]@{
   install_exit = $null; installed_exe = $exe; installed_exe_exists = $false
   settings_title = ''; startup_pid = $null; startup_exit = $null; graceful_exit = $false
   uninstall_exit = $null; uninstalled_exe_absent = $false; uninstall_registry_absent = $false
-  error = ''; failures = @(); stages = @(); process_snapshots = @(); remaining_processes = @()
+  error = ''; failures = @(); stages = @(); process_snapshots = @(); window_snapshots = @(); remaining_processes = @()
 }
 
+function Initialize-WindowProbe {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace StudyToolSmoke {
+  public class WindowInfo {
+    public long Handle; public int Pid; public bool Visible; public string ClassName; public string Text;
+    public List<WindowInfo> Children = new List<WindowInfo>();
+  }
+  public static class WindowProbe {
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr param);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc callback, IntPtr param);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc callback, IntPtr param);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder name, int count);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, UIntPtr count, StringBuilder text, uint flags, uint timeout, out UIntPtr result);
+    private static WindowInfo Read(IntPtr hwnd) {
+      uint pid; GetWindowThreadProcessId(hwnd, out pid);
+      var name = new StringBuilder(256); GetClassName(hwnd, name, name.Capacity);
+      var text = new StringBuilder(4096); UIntPtr result;
+      SendMessageTimeout(hwnd, 0x000D, new UIntPtr((uint)text.Capacity), text, 2, 200, out result);
+      return new WindowInfo { Handle = hwnd.ToInt64(), Pid = (int)pid, Visible = IsWindowVisible(hwnd), ClassName = name.ToString(), Text = text.ToString() };
+    }
+    public static List<WindowInfo> Capture(int[] pids) {
+      var owned = new HashSet<int>(pids); var windows = new List<WindowInfo>();
+      EnumWindows(delegate(IntPtr hwnd, IntPtr unused) {
+        uint pid; GetWindowThreadProcessId(hwnd, out pid);
+        if (!owned.Contains((int)pid)) return true;
+        var window = Read(hwnd);
+        EnumChildWindows(hwnd, delegate(IntPtr child, IntPtr ignored) {
+          if (window.Children.Count >= 40) return false;
+          window.Children.Add(Read(child)); return true;
+        }, IntPtr.Zero);
+        windows.Add(window); return windows.Count < 40;
+      }, IntPtr.Zero);
+      return windows;
+    }
+  }
+}
+'@
+}
 function Write-SmokeSummary {
   $summary | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath $report -Encoding UTF8
 }
@@ -98,6 +142,14 @@ function Save-ProcessSnapshot([string]$Label) {
   $processes = @(Get-OwnedProcesses)
   ConvertTo-Json -InputObject $processes -Depth 5 | Set-Content -LiteralPath (Join-Path $evidence $file) -Encoding UTF8
   $summary.process_snapshots += $file
+  if ($Label -eq 'first-window-result' -or $Label -eq 'before-cleanup' -or $Label -like '*timeout') {
+    if ('StudyToolSmoke.WindowProbe' -as [type]) {
+      $windowFile = "windows-$($script:snapshotNumber)-$Label.json"
+      $windows = @([StudyToolSmoke.WindowProbe]::Capture([int[]]@($processes | ForEach-Object { $_.pid })))
+      ConvertTo-Json -InputObject $windows -Depth 7 | Set-Content -LiteralPath (Join-Path $evidence $windowFile) -Encoding UTF8
+      $summary.window_snapshots += $windowFile
+    }
+  }
   Write-SmokeSummary
   return $processes
 }
@@ -140,13 +192,22 @@ function Stop-OwnedProcesses {
       "PID $($item.pid) taskkill exit=$($killer.ExitCode)" | Out-File -LiteralPath (Join-Path $evidence 'cleanup-taskkill.log') -Append -Encoding UTF8
     }
   }
+  # taskkill can return before Win32_Process drops the terminated entry. Wait for
+  # actual tree disappearance, bounded independently from the normal-exit gate.
+  $exitClock = [Diagnostics.Stopwatch]::StartNew()
   $remaining = @(Get-OwnedProcesses)
+  while ($remaining.Count -and $exitClock.Elapsed.TotalSeconds -lt 10) {
+    Start-Sleep -Milliseconds 100
+    $remaining = @(Get-OwnedProcesses)
+  }
   if ($remaining.Count) { throw "Owned processes still running: $($remaining.pid -join ', ')" }
 }
 
 try {
   Start-SmokeStage 'preflight'
   if ($env:CI -ne 'true' -and $env:GITHUB_ACTIONS -ne 'true') { throw 'Installer smoke is restricted to a disposable CI environment.' }
+  Initialize-WindowProbe
+  $summary.runtime_context = @{ powershell = $PSVersionTable.PSVersion.ToString(); session_id = (Get-Process -Id $PID).SessionId; interactive = [Environment]::UserInteractive }
   $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
   $summary.installer_path = $installer
   if (@(Get-ConnectedRegistrations).Count) { throw 'An existing Connected installation was found. Refusing to install or uninstall it.' }
@@ -170,6 +231,7 @@ try {
   Finish-SmokeStage
 
   Start-SmokeStage 'first-window'
+  $summary.profile_existed_before_launch = Test-Path -LiteralPath $profileDir
   $electronLog = Join-Path $evidence 'electron.log'
   $script:client = Start-SmokeProcess $exe "--smoke-test-profile=`"$profileDir`" --enable-logging --log-file=`"$electronLog`"" 'client'
   $summary.startup_pid = $script:client.Id
@@ -240,6 +302,13 @@ try {
       Add-SmokeFailure 'temporary-files' $_.Exception.Message
       Finish-SmokeStage 'FAILED' $_.Exception.Message
     } finally {
+      try {
+        $startupTrace = "$profileDir.startup.jsonl"
+        if (Test-Path -LiteralPath $startupTrace) {
+          Copy-Item -LiteralPath $startupTrace -Destination (Join-Path $evidence 'startup-trace.jsonl')
+          Remove-Item -LiteralPath $startupTrace -Force
+        }
+      } catch { Add-SmokeFailure 'startup-trace-copy' $_.Exception.Message }
       try { $summary.remaining_processes = @(Save-ProcessSnapshot 'final') } catch { Add-SmokeFailure 'final-process-snapshot' $_.Exception.Message }
       $summary.finished_at = (Get-Date).ToString('o')
       if (-not $summary.failures.Count -and $summary.graceful_exit -and $summary.uninstalled_exe_absent -and $summary.uninstall_registry_absent) { $summary.verdict = 'SUCCESS' }

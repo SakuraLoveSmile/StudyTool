@@ -1,4 +1,7 @@
 const { app, BrowserWindow, ipcMain, Menu, session, shell } = require('electron');
+const { createStartupTrace } = require('./startup-trace');
+const startupTrace = createStartupTrace(app);
+startupTrace('main-entered', { electron: process.versions.electron, platform: process.platform, packaged: app.isPackaged });
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -8,7 +11,10 @@ const { resolveProfile } = require('./profile');
 const { SERVICE_PARTITION, normalizeOrigin, guardedSettingsHandler, remoteWindowOptions, protectRemoteContents, clearServiceSession } = require('./security');
 
 app.setName('StudyTool Connected');
-app.setPath('userData', resolveProfile(app));
+const profilePath = resolveProfile(app);
+startupTrace('profile-resolved', { profilePath });
+app.setPath('userData', profilePath);
+startupTrace('user-data-set');
 app.setAppUserModelId('com.studytool.connected.windows');
 const settingsURL = pathToFileURL(path.join(__dirname, 'settings.html')).href;
 let settingsWindow = null;
@@ -38,6 +44,11 @@ function showSettings(error = '') {
     },
   });
   settingsWindow = win;
+  startupTrace('settings-window-created', { windowId: win.id });
+  win.webContents.on('did-finish-load', () => startupTrace('settings-loaded'));
+  win.webContents.on('did-fail-load', (_event, code, description) => startupTrace('settings-load-failed', { code, description }));
+  win.webContents.on('preload-error', (_event, _path, error) => startupTrace('settings-preload-failed', { message: error.message, stack: error.stack }));
+  win.webContents.on('render-process-gone', (_event, details) => startupTrace('settings-renderer-gone', details));
   denyPermissions(win.webContents.session);
   win.webContents.on('will-navigate', event => event.preventDefault());
   win.webContents.on('will-redirect', event => event.preventDefault());
@@ -77,8 +88,12 @@ function registerSettingsHandler(channel, handler) {
 }
 
 // Lock this userData profile before creating windows, reading config or opening a session.
-if (claimSingleInstance(app, () => [settingsWindow, remoteWindow])) app.whenReady().then(async () => {
+const ownsInstance = claimSingleInstance(app, () => [settingsWindow, remoteWindow]);
+startupTrace('single-instance-lock', { acquired: ownsInstance });
+if (ownsInstance) app.whenReady().then(async () => {
+  startupTrace('app-ready');
   await fs.mkdir(app.getPath('userData'), { recursive: true });
+  startupTrace('user-data-created');
   configPath = path.join(app.getPath('userData'), 'service.json');
   serviceSession = session.fromPartition(SERVICE_PARTITION);
   denyPermissions(serviceSession);
@@ -88,6 +103,7 @@ if (claimSingleInstance(app, () => [settingsWindow, remoteWindow])) app.whenRead
     } catch { event.preventDefault(); }
   });
   const saved = await readOrigin(configPath);
+  startupTrace('config-read', { configured: !!saved.origin });
   origin = saved.origin;
   displayError = saved.error;
 
@@ -133,6 +149,9 @@ if (claimSingleInstance(app, () => [settingsWindow, remoteWindow])) app.whenRead
     { label: '视图', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
   ]));
   if (origin) await openService(); else showSettings(displayError);
+}).catch(error => {
+  startupTrace('startup-rejected', { message: error.message, stack: error.stack });
+  throw error;
 });
 
 app.on('window-all-closed', () => app.quit());

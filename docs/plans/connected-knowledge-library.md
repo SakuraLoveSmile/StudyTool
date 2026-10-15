@@ -1,6 +1,6 @@
 # 联网知识库实施与验收
 
-状态：实现中。已授权本地开发、连接测试，以及 APK + Windows 联网安装包和 Docker 部署镜像交付；尚未授权远程发布或生产部署。用户暂无服务器/域名，客户端支持填写 HTTPS 服务地址。
+状态：实现中。已授权本地开发、连接测试、APK + Windows 联网安装包和 Docker 部署镜像交付，以及推送当前分支、运行并修复 Actions；未授权正式 Release、镜像注册表发布或生产部署。用户暂无服务器/域名，客户端支持填写 HTTPS 服务地址。
 
 ## 用户效果与任务
 
@@ -85,3 +85,11 @@
 阻塞只影响相应范围：暂无HTTPS服务器/域名；无安卓或Windows设备流程验收；OCR故障按用户要求暂停；管理学教材与独立管理学试卷缺失。真实模型内容质量、全书生成及全卷OCR仍未验证，不标已验收。
 
 最终本地交付：`artifacts/connected-delivery/` 中提供调试APK、Windows x64 NSIS安装器（114198654字节，未签名）和Linux amd64服务端tar包，附SHA256、说明、Docker检查及Windows打包记录。Windows实际pack退出0，ASAR内9个源码文件与当前src逐字节一致；本地18项测试通过。Windows安装/启动PowerShell冒烟已接Actions，但当前macOS没有执行条件，仍记未运行。新安装器不包含本机后端、教材或密钥。
+
+## 本次 Actions 执行记录
+
+用户允许推送和运行 Actions 后，提交 `dad5632` 已推送到 `codex/connected-knowledge-library`。首轮 `38758843874`：server 通过，Android 在 SDK 安装阶段因 setup-android 默认请求已下架的 `tools` 包失败；Windows 测试和安装包构建通过，但冒烟脚本的清理异常遮住原始错误。
+
+修正 SDK 包清单并补齐 Windows 阶段日志后，提交 `df857bb` 的第二轮 `38760798954`：Android 和 server 均通过。下载 APK 的 SHA-256 与 CI 一致且 APK v2 签名验证成功；服务端包全部校验和通过，BUILD.json 记录该提交、干净工作区与 linux/amd64。SMOKE.json 确认隔离 HTTPS 账号/CSRF/上传/章节/租户及重启持久化检查通过；模型仍使用明确的本地协议替身。
+
+Windows 第二轮安装退出 0、文件和卸载登记存在，但首窗检查 120 秒超时；进程仍存在且普通启动日志为空。当前没有 Windows 首窗通过证据，不能称双端验收完成。后续仅针对该新证据补充诊断和修复，保留安装/正常退出/卸载门禁。
