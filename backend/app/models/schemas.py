@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
 # --- Document Schemas ---
 class DocumentResponse(BaseModel):
@@ -92,8 +92,8 @@ class QuestionCreate(BaseModel):
     @model_validator(mode="after")
     def validate_question(self):
         value = self
-        if value.year is not None and not 1950 <= value.year <= 2050:
-            raise ValueError("年份必须为空或在 1950-2050 之间")
+        if value.year is not None and not 1980 <= value.year <= 2030:
+            raise ValueError("年份必须为空或在 1980-2030 之间")
         if not value.stem.strip():
             raise ValueError("题干不能为空")
         if value.score is not None and value.score < 0:
@@ -122,8 +122,8 @@ class QuestionUpdate(BaseModel):
     @model_validator(mode="after")
     def validate_update(self):
         value = self
-        if value.year is not None and not 1950 <= value.year <= 2050:
-            raise ValueError("年份必须为空或在 1950-2050 之间")
+        if value.year is not None and not 1980 <= value.year <= 2030:
+            raise ValueError("年份必须为空或在 1980-2030 之间")
         if value.stem is not None and not value.stem.strip():
             raise ValueError("题干不能为空")
         if value.score is not None and value.score < 0:
@@ -407,6 +407,14 @@ class ExtractionBatchResponse(BaseModel):
     coverage_info: Optional[Dict[str, Any]] = None
     error_msg: Optional[str] = None
     candidates_count: int = 0
+    pending_candidates: int = 0
+    task_status: Optional[str] = None
+    accepted_candidates: int = 0
+    merged_candidates: int = 0
+    ignored_candidates: int = 0
+    invalid_candidates: int = 0
+    can_retry: bool = False
+    recovery_reason: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -417,6 +425,8 @@ class CandidateCitation(BaseModel):
     page_number: Optional[int] = None
     paragraph_ref: Optional[str] = None
     quote: str
+    source_hash: Optional[str] = None
+    content: Optional[str] = None
 
 class CandidateResponse(BaseModel):
     id: str
@@ -430,11 +440,15 @@ class CandidateResponse(BaseModel):
     matched_kp_id: Optional[str] = None
     matched_kp_name: Optional[str] = None
     target_kp_id: Optional[str] = None
+    source_status: str = "valid"
+    requires_source_review: bool = False
+    version: int = 1
     created_at: str
 
 class CandidateDecisionItem(BaseModel):
     candidate_id: str
-    action: str # 'accept', 'ignore', 'merge'
+    action: Literal['accept', 'ignore', 'merge']
+    version: int = Field(default=1, ge=1)
     target_kp_id: Optional[str] = None
     custom_name: Optional[str] = None
     custom_chapter: Optional[str] = None
@@ -446,6 +460,30 @@ class ApplyCandidatesResponse(BaseModel):
     applied_count: int
     ignored_count: int
     merged_count: int
+    replayed_count: int = 0
+    results: List[Dict[str, Any]] = Field(default_factory=list)
+
+class CandidateSourceReviewRequest(BaseModel):
+    version: int = Field(ge=1)
+    name: str = Field(min_length=1)
+    chapter: Optional[str] = None
+    citations: List[CandidateCitation] = Field(min_length=1)
+
+class CandidateSourceCitation(CandidateCitation):
+    content: str
+
+class CandidateSourceReview(BaseModel):
+    candidate_id: str
+    version: int
+    name: str
+    chapter: Optional[str] = None
+    citations: List[CandidateSourceCitation]
+    can_confirm: bool
+    reason: Optional[str] = None
+
+class ExtractionBatchListResponse(BaseModel):
+    items: List[ExtractionBatchResponse]
+    total: int
 
 class QuestionLinkItem(BaseModel):
     question_id: str
@@ -473,3 +511,4 @@ class QuestionLinkApplyRequest(BaseModel):
 
 class QuestionLinkApplyResponse(BaseModel):
     applied_count: int
+    already_linked_count: int = 0

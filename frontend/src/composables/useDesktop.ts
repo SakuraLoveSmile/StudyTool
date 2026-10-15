@@ -1,6 +1,27 @@
 import { ref, computed, onBeforeUnmount } from 'vue';
 import axios from 'axios';
 
+/** PP-OCRv6 异步 jobs 识别接口地址：新配置（未保存过任何地址）时的默认值。 */
+export const PP_OCR_V6_JOBS_URL = 'https://paddleocr.aistudio-app.com/api/v2/ocr/jobs';
+
+/**
+ * 是否为 PP-OCRv6 jobs 地址。忽略首尾空白、末尾斜杠与查询串，避免同一地址因写法差异
+ * 被判成旧地址。
+ */
+export function isOcrJobsUrl(url: string | null | undefined): boolean {
+  const normalized = String(url ?? '').trim();
+  if (!normalized) return false;
+  const withoutQuery = normalized.split(/[?#]/)[0].replace(/\/+$/, '');
+  return withoutQuery.endsWith('/api/v2/ocr/jobs');
+}
+
+/**
+ * 已保存的旧版（同步预测接口）地址：需要提示用户更新，但绝不静默改写已保存值。
+ */
+export function isLegacyOcrApiUrl(url: string | null | undefined): boolean {
+  return Boolean(String(url ?? '').trim()) && !isOcrJobsUrl(url);
+}
+
 export interface DesktopCredentialsStatus {
   llm: {
     base_url: string;
@@ -116,8 +137,47 @@ export interface DesktopDiagnosticExportResult {
   path?: string;
   entries?: number;
   truncated?: boolean;
+  /** 诊断包内容不完整或部分来自内存（读取错误/截断/待写丢弃等，详情见 MANIFEST.json）。 */
+  incomplete?: boolean;
   code?: string;
   elapsedMs?: number;
+  message?: string;
+}
+
+/** 反馈附件自动采集：与 desktop/src/feedback-logs.ts 的冻结契约逐字一致。 */
+export type FeedbackLogSource = 'desktop' | 'backend' | 'frontend';
+export type FeedbackLogFilename =
+  | 'studytool-desktop.jsonl'
+  | 'studytool-backend.jsonl'
+  | 'studytool-frontend.jsonl';
+export type FeedbackLogsResult =
+  | {
+      ok: true;
+      files: Array<{ filename: FeedbackLogFilename; text: string }>;
+      truncated: boolean;
+      unavailable: FeedbackLogSource[];
+      skippedLines: number;
+    }
+  | {
+      ok: false;
+      code:
+        | 'LOG_FEEDBACK_BUSY'
+        | 'LOG_FEEDBACK_TIMEOUT'
+        | 'LOG_FEEDBACK_CANCELED'
+        | 'LOG_FEEDBACK_UNAVAILABLE'
+        | 'LOG_FEEDBACK_FAILED';
+      message: string;
+    };
+
+/** 外观偏好：与主进程独立偏好文件同源（useTheme.ts 共用该类型）。 */
+export type ThemePreference = 'system' | 'light' | 'dark';
+export type EffectiveTheme = 'light' | 'dark';
+export interface DesktopThemePayload {
+  preference: ThemePreference;
+  effective: EffectiveTheme;
+}
+export interface DesktopThemeSetResult extends DesktopThemePayload {
+  ok: boolean;
   message?: string;
 }
 
@@ -142,7 +202,7 @@ declare global {
       createBackup(destinationDir?: string): Promise<any>;
       restoreBackup(archivePath: string): Promise<any>;
       openExternal(url: string): void;
-      openLogDirectory(): void;
+      openLogDirectory(): Promise<{ ok: boolean; message?: string }>;
       /** Diagnostics (test build). Read-only: there is no delete/clear channel. */
       getLogMeta?(): Promise<DesktopLogMeta>;
       queryLogs?(params: DesktopLogQuery): Promise<DesktopLogQueryResult>;
@@ -150,6 +210,13 @@ declare global {
       cancelLogQuery?(requestId: string): Promise<{ ok: boolean; canceled: boolean }>;
       reportLog?(entries: unknown[]): Promise<{ ok: boolean; accepted: number; dropped: number }>;
       exportDiagnostics?(params: { from: number; to: number }): Promise<DesktopDiagnosticExportResult>;
+      /** 反馈附件自动采集：无参数受限 IPC；旧版桌面端可能未暴露（可选链调用）。 */
+      getFeedbackLogs?(): Promise<FeedbackLogsResult>;
+      /** 外观偏好：preload 在首屏前同步注入的初始值；读写均走受限 IPC。 */
+      initialTheme?: DesktopThemePayload;
+      getThemePreference?(): Promise<DesktopThemePayload>;
+      setThemePreference?(preference: ThemePreference): Promise<DesktopThemeSetResult>;
+      onThemeChanged?(callback: (payload: DesktopThemePayload) => void): () => void;
     };
   }
 }
@@ -312,9 +379,20 @@ export function useDesktop() {
     }
   };
 
-  const openLogDirectory = () => {
-    if (isDesktop.value && window.desktopAPI) {
-      window.desktopAPI.openLogDirectory();
+  const openLogDirectory = async () => {
+    if (!isDesktop.value || !window.desktopAPI) {
+      return { ok: false, message: '当前环境不支持打开日志目录' };
+    }
+    try {
+      const res = await window.desktopAPI.openLogDirectory();
+      if (res && res.ok === false) {
+        errorMessage.value = res.message || '无法打开日志目录';
+      }
+      return res ?? { ok: true };
+    } catch (err: any) {
+      const message = err?.message || '无法打开日志目录';
+      errorMessage.value = message;
+      return { ok: false, message };
     }
   };
 

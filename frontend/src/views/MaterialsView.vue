@@ -3,26 +3,26 @@
     <!-- Page Header -->
     <header class="flex flex-wrap items-end justify-between gap-3 px-1">
       <div>
-        <h1 class="font-display text-xl sm:text-2xl font-bold tracking-tight text-stone-900">资料与真题</h1>
-        <p class="mt-1 text-sm text-stone-500">导入教材与历年真题，核对识别结果后进入统计与背诵流程。</p>
+        <h1 class="font-display text-xl sm:text-2xl font-bold tracking-tight text-ink">资料与真题</h1>
+        <p class="mt-1 text-sm text-sub">导入教材与历年真题，核对识别结果后进入统计与背诵流程。</p>
       </div>
     </header>
 
     <!-- Top Active Tasks Banner -->
     <div
       v-if="activeCount > 0"
-      class="bg-brand-50 border border-brand-200 rounded-xl p-4 flex items-center justify-between gap-4 shadow-xs"
+      class="bg-accent/10 border border-accent/30 rounded-xl p-4 flex items-center justify-between gap-4 shadow-xs"
     >
       <div class="flex items-center gap-3">
         <span class="relative flex h-3 w-3">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75" />
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75" />
           <span class="relative inline-flex rounded-full h-3 w-3 bg-brand-600" />
         </span>
         <div>
-          <h4 class="text-sm font-semibold text-brand-900">
+          <h4 class="text-sm font-semibold text-accent">
             有 {{ activeCount }} 个后台任务正在运行
           </h4>
-          <p class="text-xs text-brand-700 mt-0.5">
+          <p class="text-xs text-accent mt-0.5">
             资料解析与考点梳理在后台持续执行，您可以继续进行其他操作或随时在右侧抽屉查看进度。
           </p>
         </div>
@@ -39,7 +39,7 @@
     <!-- Error Alert if any -->
     <div
       v-if="pageError"
-      class="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-sm text-rose-700 flex items-center justify-between"
+      class="bg-err/10 border border-err/30 rounded-xl px-4 py-3 text-sm text-err flex items-center justify-between"
     >
       <span>{{ pageError }}</span>
       <button @click="reloadPage" class="font-medium hover:underline text-xs">重试</button>
@@ -47,14 +47,14 @@
 
     <!-- Upload Card -->
     <div class="surface p-5 space-y-4">
-      <div class="flex items-center justify-between pb-3 border-b border-stone-100">
+      <div class="flex items-center justify-between pb-3 border-b border-line">
         <div class="flex items-center gap-2">
-          <UploadCloud class="w-5 h-5 text-brand-600" />
-          <h3 class="font-display text-base font-semibold text-stone-800">导入新教材与真题资料</h3>
+          <UploadCloud class="w-5 h-5 text-accent" />
+          <h3 class="font-display text-base font-semibold text-ink">导入新教材与真题资料</h3>
         </div>
         <button
           type="button"
-          class="text-xs text-stone-500 hover:text-stone-800"
+          class="text-xs text-sub hover:text-ink"
           @click="showUploadForm = !showUploadForm"
         >
           {{ showUploadForm ? '收起上传面板' : '展开上传面板' }}
@@ -71,9 +71,9 @@
               ref="fileInput"
               accept=".pdf,.docx,.jpg,.jpeg,.png"
               required
-              class="field text-xs file:mr-2 file:py-1 file:px-2.5 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100 cursor-pointer"
+              class="field text-xs file:mr-2 file:py-1 file:px-2.5 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-accent/10 file:text-accent hover:file:bg-accent/15 cursor-pointer"
             />
-            <p class="text-xs text-stone-400 mt-1">支持 PDF、Word (.docx)、扫描图片</p>
+            <p class="text-xs text-faint mt-1">支持 PDF、Word (.docx)、扫描图片</p>
           </div>
 
           <!-- File Type -->
@@ -218,28 +218,31 @@
           <div
             v-for="doc in documents"
             :key="doc.id"
-            class="surface p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-stone-300 transition-colors"
+            class="surface p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-line-strong transition-colors"
           >
             <div class="flex items-start gap-3.5 min-w-0">
-              <div class="w-10 h-10 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center shrink-0 mt-0.5">
+              <div class="w-10 h-10 rounded-xl bg-accent/10 text-accent flex items-center justify-center shrink-0 mt-0.5">
                 <FileText class="w-5 h-5" />
               </div>
               <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
-                  <span class="text-sm sm:text-base font-semibold text-stone-800 truncate">
+                  <span class="text-sm sm:text-base font-semibold text-ink truncate">
                     {{ doc.filename }}
                   </span>
                   <span class="px-2 py-0.5 rounded text-xs font-medium" :class="fileTypeBadge(doc.file_type)">
                     {{ formatFileType(doc.file_type) }}
                   </span>
-                  <span v-if="doc.year" class="text-xs text-stone-500">
+                  <span v-if="doc.year" class="text-xs text-sub">
                     ({{ doc.year }}年 {{ doc.session_name || '' }})
                   </span>
                 </div>
-                <div class="text-xs text-stone-400 mt-1 flex items-center gap-4 flex-wrap">
-                  <span>状态: <strong :class="doc.status === 'completed' ? 'text-emerald-600' : 'text-amber-600'">{{ doc.status === 'completed' ? '解析完成' : doc.status }}</strong></span>
+                <div class="text-xs text-faint mt-1 flex items-center gap-4 flex-wrap">
+                  <span>状态: <strong :class="statusClass(doc.status)">{{ statusText(doc.status) }}</strong></span>
                   <span>总页数/片段: {{ doc.page_count }}</span>
                   <span>上传时间: {{ formatDate(doc.created_at) }}</span>
+                </div>
+                <div v-if="doc.status === 'failed' && doc.error_msg" class="text-xs text-err mt-1 break-all">
+                  失败原因: {{ doc.error_msg }}
                 </div>
               </div>
             </div>
@@ -254,7 +257,7 @@
               </button>
               <button
                 type="button"
-                class="p-2 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                class="p-2 text-faint hover:text-err hover:bg-err/10 rounded-lg transition-colors"
                 title="删除资料"
                 @click="deleteDoc(doc.id)"
               >
@@ -270,21 +273,21 @@
         <!-- Filter bar -->
         <div class="surface p-3 flex items-center justify-between text-xs sm:text-sm">
           <div class="flex items-center gap-4">
-            <span class="text-stone-500 font-medium">题目状态:</span>
+            <span class="text-sub font-medium">题目状态:</span>
             <label class="flex items-center gap-1.5 cursor-pointer">
               <input type="radio" v-model="confirmedFilter" :value="null" @change="fetchQuestions" />
               <span>全部</span>
             </label>
-            <label class="flex items-center gap-1.5 cursor-pointer text-amber-700 font-medium">
+            <label class="flex items-center gap-1.5 cursor-pointer text-warn font-medium">
               <input type="radio" v-model="confirmedFilter" :value="0" @change="fetchQuestions" />
               <span>待核对 ({{ unconfirmedCount }})</span>
             </label>
-            <label class="flex items-center gap-1.5 cursor-pointer text-emerald-700 font-medium">
+            <label class="flex items-center gap-1.5 cursor-pointer text-ok font-medium">
               <input type="radio" v-model="confirmedFilter" :value="1" @change="fetchQuestions" />
               <span>已正式入库</span>
             </label>
           </div>
-          <span class="text-xs text-stone-400">当前列表 {{ questions.length }} 道</span>
+          <span class="text-xs text-faint">当前列表 {{ questions.length }} 道</span>
         </div>
 
         <div v-if="questions.length === 0">
@@ -295,22 +298,22 @@
             v-for="q in questions"
             :key="q.id"
             class="surface p-4 sm:p-5 transition-all space-y-3"
-            :class="q.is_confirmed ? 'border-stone-200' : 'border-amber-300 ring-1 ring-amber-200 bg-amber-50/10'"
+            :class="q.is_confirmed ? 'border-line' : 'border-warn/40 ring-1 ring-warn/30 bg-warn/10'"
           >
             <!-- Card Header -->
-            <div class="flex items-center justify-between pb-2.5 border-b border-stone-100 text-xs sm:text-sm flex-wrap gap-2">
+            <div class="flex items-center justify-between pb-2.5 border-b border-line text-xs sm:text-sm flex-wrap gap-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <span
                   class="px-2 py-0.5 rounded text-xs font-semibold"
-                  :class="q.is_confirmed ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
+                  :class="q.is_confirmed ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'"
                 >
                   {{ q.is_confirmed ? '已确认入库' : '待人工核对' }}
                 </span>
-                <span class="font-semibold text-stone-800">{{ q.year ? `${q.year} 年` : '年份待补充' }}</span>
-                <span v-if="q.session_name" class="text-stone-500">({{ q.session_name }})</span>
-                <span class="text-stone-300">·</span>
-                <span class="font-medium text-brand-700">{{ q.question_num || '试题' }}</span>
-                <span v-if="q.score" class="text-stone-500">[{{ q.score }} 分]</span>
+                <span class="font-semibold text-ink">{{ q.year ? `${q.year} 年` : '年份待补充' }}</span>
+                <span v-if="q.session_name" class="text-sub">({{ q.session_name }})</span>
+                <span class="text-faint">·</span>
+                <span class="font-medium text-accent">{{ q.question_num || '试题' }}</span>
+                <span v-if="q.score" class="text-sub">[{{ q.score }} 分]</span>
               </div>
 
               <div class="flex items-center gap-2">
@@ -334,14 +337,14 @@
                 <button
                   v-if="q.is_confirmed"
                   type="button"
-                  class="btn btn-sm btn-secondary text-amber-700"
+                  class="btn btn-sm btn-secondary text-warn"
                   @click="retractQuestion(q.id)"
                 >
                   撤回核对
                 </button>
                 <button
                   type="button"
-                  class="p-1.5 text-stone-400 hover:text-rose-600 rounded"
+                  class="p-1.5 text-faint hover:text-err rounded"
                   title="删除该题"
                   @click="deleteQuestion(q.id)"
                 >
@@ -351,42 +354,42 @@
             </div>
 
             <!-- Stem -->
-            <p class="reading-content font-medium text-stone-900">
+            <p class="reading-content font-medium text-ink">
               {{ q.stem }}
             </p>
 
             <!-- Standard Answer -->
-            <div class="bg-stone-50 rounded-xl p-3.5 border border-stone-100 space-y-1.5 text-xs sm:text-sm">
-              <div class="flex items-center justify-between text-stone-500 font-medium">
+            <div class="bg-raised rounded-xl p-3.5 border border-line space-y-1.5 text-xs sm:text-sm">
+              <div class="flex items-center justify-between text-sub font-medium">
                 <span class="flex items-center gap-1">
-                  <CheckCircle2 class="w-4 h-4 text-emerald-600" />
+                  <CheckCircle2 class="w-4 h-4 text-ok" />
                   参考答案：
                 </span>
-                <span v-if="!q.standard_answer" class="text-amber-600 font-normal text-xs">
+                <span v-if="!q.standard_answer" class="text-warn font-normal text-xs">
                   [暂未配对答案，如实保留不虚构]
                 </span>
               </div>
-              <div v-if="q.standard_answer" class="text-stone-700 whitespace-pre-wrap leading-relaxed">
+              <div v-if="q.standard_answer" class="text-ink whitespace-pre-wrap leading-relaxed">
                 {{ q.standard_answer }}
               </div>
             </div>
 
             <!-- Footer Meta & Links -->
-            <div class="flex items-center justify-between text-xs text-stone-500 pt-2 border-t border-stone-100 flex-wrap gap-2">
+            <div class="flex items-center justify-between text-xs text-sub pt-2 border-t border-line flex-wrap gap-2">
               <div class="flex items-center gap-1.5 flex-wrap">
-                <Tag class="w-3.5 h-3.5 text-stone-400" />
+                <Tag class="w-3.5 h-3.5 text-faint" />
                 <span>关联考点:</span>
                 <span v-if="q.knowledge_point_names && q.knowledge_point_names.length > 0" class="flex gap-1 flex-wrap">
                   <span
                     v-for="(name, idx) in q.knowledge_point_names"
                     :key="idx"
-                    class="px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-medium"
+                    class="px-2 py-0.5 rounded bg-accent/10 text-accent font-medium"
                   >
                     {{ name }}
                   </span>
                 </span>
-                <span v-else class="text-stone-400 italic">暂无关联</span>
-                <button type="button" @click="openLinkModal(q)" class="text-brand-600 hover:underline ml-1">
+                <span v-else class="text-faint italic">暂无关联</span>
+                <button type="button" @click="openLinkModal(q)" class="text-accent hover:underline ml-1">
                   修改关联
                 </button>
               </div>
@@ -396,7 +399,7 @@
                   v-if="q.source_location"
                   type="button"
                   @click="openQuestionSource(q, 'question')"
-                  class="text-brand-600 hover:underline"
+                  class="text-accent hover:underline"
                 >
                   题干来源: {{ q.source_location }}
                 </button>
@@ -404,7 +407,7 @@
                   v-if="q.answer_source_chunk_id"
                   type="button"
                   @click="openQuestionSource(q, 'answer')"
-                  class="text-emerald-600 hover:underline"
+                  class="text-ok hover:underline"
                 >
                   查看答案原文出处
                 </button>
@@ -425,11 +428,11 @@
             :key="candidate.id"
             class="surface p-4 space-y-2.5"
           >
-            <div class="flex items-center justify-between text-xs font-semibold text-stone-700">
+            <div class="flex items-center justify-between text-xs font-semibold text-ink">
               <span>{{ candidate.year || '年份待补充' }} · {{ candidate.question_num || '题号待补充' }}</span>
-              <span class="text-stone-400">候选 ID: {{ candidate.id.slice(0, 8) }}</span>
+              <span class="text-faint">候选 ID: {{ candidate.id.slice(0, 8) }}</span>
             </div>
-            <p class="text-sm text-stone-700 whitespace-pre-wrap line-clamp-4 bg-stone-50 p-3 rounded-lg border border-stone-100 leading-relaxed">
+            <p class="text-sm text-ink whitespace-pre-wrap line-clamp-4 bg-raised p-3 rounded-lg border border-line leading-relaxed">
               {{ candidate.answer_text }}
             </p>
             <div class="flex items-center gap-2 pt-1">
@@ -458,26 +461,32 @@
       :show="selectedDocForChunks !== null"
       title="文档原文切片"
       max-width="4xl"
-      @close="selectedDocForChunks = null"
+      @close="closeChunksModal"
     >
       <div class="space-y-3">
-        <div v-if="docChunks.length === 0" class="text-center py-8 text-stone-400 text-sm">
+        <div v-if="isLoadingChunks" class="text-center py-8 text-faint text-sm">
+          正在加载切片...
+        </div>
+        <div v-else-if="chunksError" class="text-center py-8 text-err text-sm">
+          {{ chunksError }}
+        </div>
+        <div v-else-if="docChunks.length === 0" class="text-center py-8 text-faint text-sm">
           该文档尚未生成切片或正在解析中。
         </div>
-        <div v-for="c in docChunks" :key="c.id" class="p-3.5 rounded-xl border border-stone-200 bg-stone-50/50 space-y-2 text-sm">
-          <div class="flex items-center justify-between text-xs text-stone-500 font-medium">
-            <span class="px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-semibold">
+        <div v-for="c in docChunks" :key="c.id" class="p-3.5 rounded-xl border border-line bg-raised/50 space-y-2 text-sm">
+          <div class="flex items-center justify-between text-xs text-sub font-medium">
+            <span class="px-2 py-0.5 rounded bg-accent/10 text-accent font-semibold">
               {{ c.page_number ? `第 ${c.page_number} 页` : (c.paragraph_ref || '段落') }}
             </span>
-            <span class="text-stone-400">{{ c.heading || '正文' }}</span>
-            <button type="button" @click="openProofreadModal(c)" class="text-brand-600 hover:underline">
+            <span class="text-faint">{{ c.heading || '正文' }}</span>
+            <button type="button" @click="openProofreadModal(c)" class="text-accent hover:underline">
               校对修改原文
             </button>
           </div>
-          <p v-if="c.parse_error" class="text-rose-600 leading-relaxed font-mono text-xs">
+          <p v-if="c.parse_error" class="text-err leading-relaxed font-mono text-xs">
             解析错误: {{ c.parse_error }}
           </p>
-          <p v-else class="text-stone-700 whitespace-pre-wrap leading-relaxed">
+          <p v-else class="text-ink whitespace-pre-wrap leading-relaxed">
             {{ c.content }}
           </p>
         </div>
@@ -535,22 +544,22 @@
       @close="editingQuestion = null"
     >
       <div v-if="editingQuestion" class="space-y-3">
-        <p class="text-xs text-stone-500 truncate">{{ editingQuestion.stem }}</p>
-        <div class="max-h-60 overflow-y-auto space-y-1.5 border border-stone-200 p-2.5 rounded-xl text-sm">
+        <p class="text-xs text-sub truncate">{{ editingQuestion.stem }}</p>
+        <div class="max-h-60 overflow-y-auto space-y-1.5 border border-line p-2.5 rounded-xl text-sm">
           <label
             v-for="kp in allKnowledgePoints"
             :key="kp.id"
-            class="flex items-center gap-2.5 p-2 hover:bg-stone-50 rounded-lg cursor-pointer transition-colors"
+            class="flex items-center gap-2.5 p-2 hover:bg-raised rounded-lg cursor-pointer transition-colors"
           >
             <input
               type="checkbox"
               :value="kp.id"
               v-model="selectedKpIds"
-              class="rounded text-brand-600 focus:ring-brand-500 w-4 h-4"
+              class="rounded text-accent focus:ring-accent w-4 h-4"
             />
             <div class="min-w-0 flex-1">
-              <span class="font-medium text-stone-800">{{ kp.name }}</span>
-              <span v-if="kp.chapter" class="text-xs text-stone-400 ml-1.5">({{ kp.chapter }})</span>
+              <span class="font-medium text-ink">{{ kp.name }}</span>
+              <span v-if="kp.chapter" class="text-xs text-faint ml-1.5">({{ kp.chapter }})</span>
             </div>
           </label>
         </div>
@@ -613,6 +622,11 @@ const uploadForm = ref({
 // Chunks Drawer & Proofreading
 const selectedDocForChunks = ref<DocumentItem | null>(null);
 const docChunks = ref<DocumentChunk[]>([]);
+const isLoadingChunks = ref(false);
+const chunksError = ref('');
+// 切片弹窗请求身份：每次打开/关闭弹窗递增一次；同一文档关闭重开时 doc.id 相同，
+// 只能靠序号区分新旧请求，旧响应一律丢弃（沿用 LogsView 的 seq 模式）。
+let chunksRequestSeq = 0;
 const isProofreadOpen = ref(false);
 const proofreadChunk = ref<DocumentChunk | null>(null);
 const sourceReadOnly = ref(false);
@@ -795,12 +809,33 @@ const deleteDoc = async (id: string) => {
 };
 
 const viewDocChunks = async (doc: DocumentItem) => {
+  const mySeq = ++chunksRequestSeq;
   selectedDocForChunks.value = doc;
+  docChunks.value = [];
+  chunksError.value = '';
+  isLoadingChunks.value = true;
   try {
-    docChunks.value = await apiClient.getChunks(doc.id);
+    const chunks = await apiClient.getChunks(doc.id);
+    if (mySeq !== chunksRequestSeq || selectedDocForChunks.value?.id !== doc.id) return;
+    docChunks.value = chunks;
   } catch (e) {
     console.error(e);
+    if (mySeq !== chunksRequestSeq || selectedDocForChunks.value?.id !== doc.id) return;
+    chunksError.value = '切片加载失败，请稍后重试';
+  } finally {
+    if (mySeq === chunksRequestSeq && selectedDocForChunks.value?.id === doc.id) {
+      isLoadingChunks.value = false;
+    }
   }
+};
+
+const closeChunksModal = () => {
+  // 关闭即作废在途请求：旧响应回来时序号已不匹配，不会写回已关闭或重开后的弹窗。
+  chunksRequestSeq += 1;
+  selectedDocForChunks.value = null;
+  docChunks.value = [];
+  chunksError.value = '';
+  isLoadingChunks.value = false;
 };
 
 const openProofreadModal = (chunk: DocumentChunk) => {
@@ -829,6 +864,8 @@ const openQuestionSource = async (question: QuestionItem, kind: 'question' | 'an
       : null)
       || (chunks.find(chunk => page !== null && chunk.page_number === page) || chunks[0] || null);
     if (proofreadChunk.value) {
+      // 打开切片弹窗同样消耗一个序号：此前在途的切片请求响应一律视为过期。
+      chunksRequestSeq += 1;
       selectedDocForChunks.value = doc;
       sourceReadOnly.value = true;
       isProofreadOpen.value = true;
@@ -864,6 +901,22 @@ const saveQuestionLinks = async () => {
   }
 };
 
+const statusText = (s: DocumentItem['status']) => {
+  const map: Record<string, string> = {
+    pending: '等待解析',
+    processing: '解析中',
+    completed: '解析完成',
+    failed: '解析失败'
+  };
+  return map[s] || s;
+};
+
+const statusClass = (s: DocumentItem['status']) => {
+  if (s === 'completed') return 'text-ok';
+  if (s === 'failed') return 'text-err';
+  return 'text-warn';
+};
+
 const formatFileType = (t: string) => {
   const map: Record<string, string> = {
     textbook: '教材参考书',
@@ -877,13 +930,13 @@ const formatFileType = (t: string) => {
 
 const fileTypeBadge = (t: string) => {
   const map: Record<string, string> = {
-    textbook: 'bg-brand-50 text-brand-700',
-    exam_and_answer: 'bg-brand-50 text-brand-700 border border-brand-200 font-semibold',
+    textbook: 'bg-accent/10 text-accent',
+    exam_and_answer: 'bg-accent/10 text-accent border border-accent/30 font-semibold',
     exam: 'bg-purple-50 text-purple-700',
-    answer: 'bg-emerald-50 text-emerald-700',
-    supplement: 'bg-stone-100 text-stone-700'
+    answer: 'bg-ok/10 text-ok',
+    supplement: 'bg-raised text-ink'
   };
-  return map[t] || 'bg-stone-100 text-stone-700';
+  return map[t] || 'bg-raised text-ink';
 };
 
 const formatDate = (iso: string) => {

@@ -19,9 +19,15 @@ export interface DiagnosticArchiveOptions {
   to: number;
   sources?: string[];
   memoryFallback?: Record<string, unknown>[];
+  /** Merged `getPendingEntries()` snapshots from both loggers (records carry `source`). */
+  pendingEntries?: Record<string, unknown>[];
+  /** Sum of both loggers' droppedPending counters. */
+  droppedPendingEntries?: number;
   platform?: string;
   arch?: string;
   maxRawBytes?: number;
+  /** Overrides MAX_SCAN_BYTES — a test hook for the truncation path, never set from IPC. */
+  maxScanBytes?: number;
   now?: () => number;
 }
 
@@ -33,6 +39,8 @@ export interface DiagnosticArchive {
   truncated: boolean;
   note: string;
   perSource: Record<string, number>;
+  /** True when the payload is incomplete or memory-sourced — surfaced through IPC. */
+  incomplete: boolean;
 }
 
 function sha256(data: Buffer | string): string {
@@ -48,13 +56,24 @@ export function buildDiagnosticArchive(options: DiagnosticArchiveOptions): Diagn
     to,
     sources = ALL_SOURCES,
     memoryFallback = [],
+    pendingEntries = [],
     platform = process.platform,
     arch = process.arch,
     maxRawBytes = EXPORT_MAX_RAW_BYTES,
   } = options;
   const now = options.now ?? (() => Date.now());
 
-  const selection = collectExportEntries({ dir, sources, from, to, memoryFallback, maxRawBytes });
+  const selection = collectExportEntries({
+    dir,
+    sources,
+    from,
+    to,
+    memoryFallback,
+    pendingEntries,
+    droppedPendingEntries: options.droppedPendingEntries,
+    maxRawBytes,
+    maxScanBytes: options.maxScanBytes,
+  });
 
   const versionText = [
     `app_version: ${appVersion}`,
@@ -66,6 +85,7 @@ export function buildDiagnosticArchive(options: DiagnosticArchiveOptions): Diagn
     `exported_entries: ${selection.totalEntries}`,
     `exported_bytes: ${selection.totalBytes}`,
     `truncated: ${selection.truncated ? 'true' : 'false'}`,
+    `incomplete: ${selection.incomplete ? 'true' : 'false'}`,
     `note: ${selection.note}`,
   ].join('\n');
 
@@ -89,6 +109,16 @@ export function buildDiagnosticArchive(options: DiagnosticArchiveOptions): Diagn
     total_bytes: selection.totalBytes,
     truncated: selection.truncated,
     note: selection.note,
+    // Incompleteness disclosure: every reason the payload may be partial is a
+    // first-class manifest field, not just a sentence in the note.
+    read_errors: selection.read_errors,
+    missing_sources: selection.missing_sources,
+    skipped_lines: selection.skippedLines,
+    read_truncated: selection.read_truncated,
+    memory_sources: selection.memory_sources,
+    buffered_entries: selection.buffered_entries,
+    dropped_pending_entries: selection.dropped_pending_entries,
+    incomplete: selection.incomplete,
     files: fileDigests,
     excludes: ['数据库', '上传资料原文', '模型提示词与回答', '任何凭据/密钥'],
   };
@@ -122,6 +152,7 @@ export function buildDiagnosticArchive(options: DiagnosticArchiveOptions): Diagn
     truncated: selection.truncated,
     note: selection.note,
     perSource: selection.perSource,
+    incomplete: selection.incomplete,
   };
 }
 

@@ -14,7 +14,7 @@
  *  - long lines, oversized fields, corrupt records, rotation and empty sources never
  *    fail a whole query.
  *
- * The soak (memory growth over time) is opt-in: RAG_LOG_SOAK_MS=600000 for the plan's
+ * The soak (memory growth over time) is opt-in: STUDYTOOL_LOG_SOAK_MS=600000 for the plan's
  * ten-minute run. Everything here is macOS/Linux evidence — the packaged Windows build
  * still has to be verified on real hardware.
  */
@@ -28,7 +28,7 @@ import { queryLogs, type LogQueryOptions } from '../log-store';
 import { LogWorkerService } from '../log-workers';
 
 const MIB = 1024 * 1024;
-const SOAK_MS = Number(process.env.RAG_LOG_SOAK_MS || 0);
+const SOAK_MS = Number(process.env.STUDYTOOL_LOG_SOAK_MS || 0);
 const WORK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'rag-log-stress-'));
 const LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
 
@@ -513,7 +513,7 @@ test('timeout and cancellation remain usable under a running stress query', asyn
 
 test('continuous operation does not grow memory without bound', async (t) => {
   if (!SOAK_MS) {
-    t.skip('soak disabled — run with RAG_LOG_SOAK_MS=600000 for the plan\'s ten-minute run');
+    t.skip('soak disabled — run with STUDYTOOL_LOG_SOAK_MS=600000 for the plan\'s ten-minute run');
     return;
   }
   const sampler = new LagSampler(50);

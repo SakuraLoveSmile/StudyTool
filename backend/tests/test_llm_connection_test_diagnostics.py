@@ -41,7 +41,7 @@ SECRET_KEY = "sk-live-LEAKCANARY1234567890"
 MODEL_ANSWER_MARKER = "MODEL_ANSWER_LEAKCANARY"
 
 DESKTOP_TOKEN = "test-secret-token-12345"
-HEADERS = {"X-RAG-Instance-Token": DESKTOP_TOKEN, "Host": "127.0.0.1:18764"}
+HEADERS = {"X-StudyTool-Instance-Token": DESKTOP_TOKEN, "Host": "127.0.0.1:18764"}
 BASE_URL = "https://api.example.com/v1"
 MODEL = "gpt-test-model"
 

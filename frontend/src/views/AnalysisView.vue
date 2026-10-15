@@ -2,10 +2,10 @@
   <div class="page-stack">
     <!-- Top Overall Statistics Banner -->
     <div class="surface p-5 space-y-4">
-      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-stone-100 pb-4">
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-line pb-4">
         <div>
-          <h2 class="font-display text-lg font-bold text-stone-900 tracking-tight">历年考情看板与考点目录</h2>
-          <p class="text-xs text-stone-500 mt-1">
+          <h2 class="font-display text-lg font-bold text-ink tracking-tight">历年考情看板与考点目录</h2>
+          <p class="text-xs text-sub mt-1">
             严守真实性原则：仅已确认真题参与频次统计。支持从上传教材智能梳理考点，低频与未考考点完整保留。
           </p>
         </div>
@@ -17,7 +17,7 @@
             class="btn btn-primary text-xs cursor-pointer"
             @click="isExtractionModalOpen = true"
           >
-            <Sparkles class="w-3.5 h-3.5 mr-1 text-amber-300" />
+            <Sparkles class="w-3.5 h-3.5 mr-1 text-warn" />
             从资料提取考点
           </button>
 
@@ -43,32 +43,32 @@
             </button>
             <div
               v-if="showMoreMenu"
-              class="absolute right-0 mt-1 w-44 bg-white rounded-xl shadow-lg border border-stone-200 py-1.5 z-20 text-xs text-stone-700"
+              class="absolute right-0 mt-1 w-44 bg-surface rounded-xl shadow-lg border border-line py-1.5 z-20 text-xs text-ink"
               @click="showMoreMenu = false"
             >
               <button
                 type="button"
-                class="w-full text-left px-3.5 py-2 hover:bg-stone-50 flex items-center gap-2 cursor-pointer"
+                class="w-full text-left px-3.5 py-2 hover:bg-raised flex items-center gap-2 cursor-pointer"
                 @click="openAddKpModal"
               >
-                <Plus class="w-3.5 h-3.5 text-stone-400" />
+                <Plus class="w-3.5 h-3.5 text-faint" />
                 手动新增考点
               </button>
               <button
                 type="button"
-                class="w-full text-left px-3.5 py-2 hover:bg-stone-50 flex items-center gap-2 cursor-pointer"
+                class="w-full text-left px-3.5 py-2 hover:bg-raised flex items-center gap-2 cursor-pointer"
                 @click="openMergeModal"
               >
-                <Merge class="w-3.5 h-3.5 text-stone-400" />
+                <Merge class="w-3.5 h-3.5 text-faint" />
                 合并同义考点
               </button>
-              <div class="h-px bg-stone-100 my-1" />
+              <div class="h-px bg-raised my-1" />
               <button
                 type="button"
-                class="w-full text-left px-3.5 py-2 hover:bg-stone-50 flex items-center gap-2 text-amber-700 cursor-pointer"
+                class="w-full text-left px-3.5 py-2 hover:bg-raised flex items-center gap-2 text-warn cursor-pointer"
                 @click="openLegacyModal"
               >
-                <HelpCircle class="w-3.5 h-3.5 text-amber-500" />
+                <HelpCircle class="w-3.5 h-3.5 text-warn" />
                 管理旧考点 ({{ legacyCount }})
               </button>
             </div>
@@ -78,53 +78,53 @@
 
       <!-- KPI Summary Cards -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-        <div class="bg-stone-50/70 p-3.5 rounded-xl border border-stone-100">
-          <span class="text-xs text-stone-500">已收录真题年份</span>
-          <div class="text-xl font-bold text-stone-800 mt-1">
-            {{ overallStats.total_recorded_years }} <span class="text-xs font-normal text-stone-500">个年份</span>
+        <div class="bg-raised/70 p-3.5 rounded-xl border border-line">
+          <span class="text-xs text-sub">已收录真题年份</span>
+          <div class="text-xl font-bold text-ink mt-1">
+            {{ overallStats.total_recorded_years }} <span class="text-xs font-normal text-sub">个年份</span>
           </div>
-          <span class="text-xs text-stone-400 mt-0.5 block">
+          <span class="text-xs text-faint mt-0.5 block">
             跨度: {{ overallStats.min_year || '-' }} ~ {{ overallStats.max_year || '-' }}
           </span>
         </div>
 
-        <div class="bg-stone-50/70 p-3.5 rounded-xl border border-stone-100">
-          <span class="text-xs text-stone-500">已确认真题 / 题目总量</span>
-          <div class="text-xl font-bold mt-1" :class="overallStats.confirmed_questions > 0 ? 'text-brand-600' : 'text-stone-700'">
-            {{ overallStats.confirmed_questions }} <span class="text-xs font-normal text-stone-500">/ {{ overallStats.total_questions }}</span>
+        <div class="bg-raised/70 p-3.5 rounded-xl border border-line">
+          <span class="text-xs text-sub">已确认真题 / 题目总量</span>
+          <div class="text-xl font-bold mt-1" :class="overallStats.confirmed_questions > 0 ? 'text-accent' : 'text-ink'">
+            {{ overallStats.confirmed_questions }} <span class="text-xs font-normal text-sub">/ {{ overallStats.total_questions }}</span>
           </div>
-          <span class="text-xs text-stone-500 mt-0.5 block">
+          <span class="text-xs text-sub mt-0.5 block">
             {{ overallStats.confirmed_questions > 0 ? '已确认题目计入考情统计' : '暂无确认真题，未计考频' }}
           </span>
         </div>
 
-        <div class="bg-stone-50/70 p-3.5 rounded-xl border border-stone-100">
-          <span class="text-xs text-stone-500">考点目录总数</span>
-          <div class="text-xl font-bold text-stone-800 mt-1">
-            {{ overallStats.knowledge_points_count }} <span class="text-xs font-normal text-stone-500">个考点</span>
+        <div class="bg-raised/70 p-3.5 rounded-xl border border-line">
+          <span class="text-xs text-sub">考点目录总数</span>
+          <div class="text-xl font-bold text-ink mt-1">
+            {{ overallStats.knowledge_points_count }} <span class="text-xs font-normal text-sub">个考点</span>
           </div>
-          <span class="text-xs text-stone-400 mt-0.5 block">
+          <span class="text-xs text-faint mt-0.5 block">
             包含已提取与录入考点
           </span>
         </div>
 
-        <div class="bg-stone-50/70 p-3.5 rounded-xl border border-stone-100">
-          <span class="text-xs text-stone-500">近五年统计基准窗</span>
-          <div class="text-xl font-bold text-amber-600 mt-1">
-            {{ overallStats.recent_5yr_window.length }} <span class="text-xs font-normal text-stone-500">/ 5 年已收录</span>
+        <div class="bg-raised/70 p-3.5 rounded-xl border border-line">
+          <span class="text-xs text-sub">近五年统计基准窗</span>
+          <div class="text-xl font-bold text-warn mt-1">
+            {{ overallStats.recent_5yr_window.length }} <span class="text-xs font-normal text-sub">/ 5 年已收录</span>
           </div>
-          <span class="text-xs text-stone-400 mt-0.5 block">
+          <span class="text-xs text-faint mt-0.5 block">
             以最新已确认真题为准
           </span>
         </div>
       </div>
 
       <!-- Year Breakdown -->
-      <div class="text-xs bg-stone-50/80 p-3 rounded-xl border border-stone-100 space-y-1.5">
-        <div class="flex items-center gap-2 text-stone-600">
-          <Calendar class="w-3.5 h-3.5 text-brand-600" />
+      <div class="text-xs bg-raised/80 p-3 rounded-xl border border-line space-y-1.5">
+        <div class="flex items-center gap-2 text-sub">
+          <Calendar class="w-3.5 h-3.5 text-accent" />
           <span class="font-medium">年份收录完整性：</span>
-          <span v-if="lastRefreshTime" class="text-stone-400 text-[11px] ml-auto">
+          <span v-if="lastRefreshTime" class="text-faint text-[11px] ml-auto">
             上次更新: {{ lastRefreshTime }}
           </span>
         </div>
@@ -132,18 +132,18 @@
           <span
             v-for="y in overallStats.recorded_years"
             :key="y"
-            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-800 font-medium"
+            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-ok/15 text-ok font-medium"
           >
             <Check class="h-3 w-3" />{{ y }}
           </span>
           <span
             v-for="my in overallStats.missing_years"
             :key="my"
-            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-rose-100 text-rose-700 font-medium"
+            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-err/15 text-err font-medium"
           >
             <X class="h-3 w-3" />缺失 {{ my }}
           </span>
-          <span v-if="overallStats.recorded_years.length === 0" class="text-stone-400">
+          <span v-if="overallStats.recorded_years.length === 0" class="text-faint">
             暂无已确认真题年份。导入真题并确认后将自动计算年份覆盖。
           </span>
         </div>
@@ -164,7 +164,7 @@
             placeholder="搜索考点名称或章节..."
             class="field py-1.5 text-xs sm:text-sm pl-8 min-h-[36px]"
           />
-          <Search class="w-4 h-4 text-stone-400 absolute left-2.5 top-2.5" />
+          <Search class="w-4 h-4 text-faint absolute left-2.5 top-2.5" />
         </div>
 
         <!-- Chapter Filter -->
@@ -180,13 +180,13 @@
       </div>
 
       <!-- Priority Filter Tabs -->
-      <div class="flex items-center gap-1 bg-stone-100 p-1 rounded-lg text-xs font-medium">
+      <div class="flex items-center gap-1 bg-raised p-1 rounded-lg text-xs font-medium">
         <button
           v-for="tab in priorityTabs"
           :key="tab.value"
           type="button"
           class="px-2.5 py-1.5 rounded-md transition-all cursor-pointer"
-          :class="selectedPriority === tab.value ? 'bg-white text-brand-700 shadow-xs font-semibold' : 'text-stone-600 hover:text-stone-900'"
+          :class="selectedPriority === tab.value ? 'bg-surface text-accent shadow-xs font-semibold' : 'text-sub hover:text-ink'"
           @click="selectedPriority = tab.value"
         >
           {{ tab.label }}
@@ -216,7 +216,7 @@
       <div v-else class="overflow-x-auto">
         <table class="w-full text-left border-collapse text-xs sm:text-sm">
           <thead>
-            <tr class="bg-stone-50 border-b border-stone-200 text-stone-600 font-semibold uppercase tracking-wider text-xs">
+            <tr class="bg-raised border-b border-line text-sub font-semibold uppercase tracking-wider text-xs">
               <th class="py-3 px-4">知识点与出处</th>
               <th class="py-3 px-3 text-center">优先级</th>
               <th class="py-3 px-3 text-center">累计考题</th>
@@ -226,17 +226,17 @@
               <th class="py-3 px-4 text-right">操作</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-stone-100">
+          <tbody class="divide-y divide-line">
             <tr
               v-for="item in filteredPointStats"
               :key="item.id"
-              class="hover:bg-stone-50/70 transition-colors"
+              class="hover:bg-raised/70 transition-colors"
             >
               <!-- Name & Chapter & Source Badge -->
               <td class="py-3.5 px-4">
                 <div class="flex items-center gap-2 flex-wrap">
-                  <span v-if="item.code" class="text-brand-600 font-mono text-xs">[{{ item.code }}]</span>
-                  <span class="font-semibold text-stone-800 text-sm sm:text-base">{{ item.name }}</span>
+                  <span v-if="item.code" class="text-accent font-mono text-xs">[{{ item.code }}]</span>
+                  <span class="font-semibold text-ink text-sm sm:text-base">{{ item.name }}</span>
                   <span
                     class="px-1.5 py-0.5 rounded text-[11px] font-medium"
                     :class="getSourceBadgeClass(item.source_type, item.source_status)"
@@ -244,9 +244,9 @@
                     {{ getSourceBadgeLabel(item.source_type, item.source_status) }}
                   </span>
                 </div>
-                <div class="text-xs text-stone-400 mt-1 flex items-center gap-2">
+                <div class="text-xs text-faint mt-1 flex items-center gap-2">
                   <span>{{ item.chapter || '未分类章节' }}</span>
-                  <span v-if="item.source_reference" class="text-stone-400 font-normal">
+                  <span v-if="item.source_reference" class="text-faint font-normal">
                     · {{ item.source_reference }}
                   </span>
                 </div>
@@ -267,13 +267,13 @@
               </td>
 
               <!-- Total Questions -->
-              <td class="py-3 px-3 text-center font-bold text-stone-800">
+              <td class="py-3 px-3 text-center font-bold text-ink">
                 <span v-if="item.questions_count > 0">{{ item.questions_count }} 道</span>
-                <span v-else class="text-xs text-stone-400 font-normal">暂无考查记录</span>
+                <span v-else class="text-xs text-faint font-normal">暂无考查记录</span>
               </td>
 
               <!-- Years Count -->
-              <td class="py-3 px-3 text-center font-semibold" :class="item.years_count > 0 ? 'text-brand-700' : 'text-stone-400 font-normal'">
+              <td class="py-3 px-3 text-center font-semibold" :class="item.years_count > 0 ? 'text-accent' : 'text-faint font-normal'">
                 {{ item.years_count > 0 ? `${item.years_count} 年` : '-' }}
               </td>
 
@@ -282,17 +282,17 @@
                 <span
                   v-if="overallStats.recent_5yr_window.length > 0"
                   class="px-2 py-0.5 rounded text-xs font-semibold"
-                  :class="item.recent_5yr_count >= 2 ? 'bg-rose-50 text-rose-700' : (item.recent_5yr_count === 1 ? 'bg-amber-50 text-amber-700' : 'bg-stone-100 text-stone-400')"
+                  :class="recentWindowBadgeClass(item)"
                 >
                   {{ item.recent_5yr_count }} / {{ overallStats.recent_5yr_window.length }} 年
                 </span>
-                <span v-else class="text-xs text-stone-400">-</span>
+                <span v-else class="text-xs text-faint">-</span>
               </td>
 
               <!-- Recent Year -->
-              <td class="py-3 px-3 text-center text-stone-600">
-                <span v-if="item.recent_year" class="font-medium text-stone-700">{{ item.recent_year }} 年</span>
-                <span v-else class="text-stone-300 text-xs italic">未曾考查</span>
+              <td class="py-3 px-3 text-center text-sub">
+                <span v-if="item.recent_year" class="font-medium text-ink">{{ item.recent_year }} 年</span>
+                <span v-else class="text-faint text-xs italic">未曾考查</span>
               </td>
 
               <!-- Actions -->
@@ -325,7 +325,7 @@
                 </router-link>
                 <button
                   type="button"
-                  class="p-1.5 text-stone-400 hover:text-rose-600 rounded"
+                  class="p-1.5 text-faint hover:text-err rounded"
                   title="删除考点"
                   @click="handleDeleteKp(item.id, item.name)"
                 >
@@ -388,7 +388,7 @@
       @close="isMergeModalOpen = false"
     >
       <div class="space-y-4 text-sm">
-        <p class="text-xs text-stone-500 leading-relaxed">
+        <p class="text-xs text-sub leading-relaxed">
           选择一个保留的目标知识点，勾选要合并吸纳的同义考点。合并后历史真题关联与模拟练习将平滑转移至目标考点，原考点将被软删除以防断链。
         </p>
         <div>
@@ -403,15 +403,15 @@
 
         <div>
           <label class="field-label">被合并吸收的同义考点 (多选)</label>
-          <div class="max-h-48 overflow-y-auto space-y-1.5 border border-stone-200 p-2.5 rounded-xl bg-stone-50/50">
+          <div class="max-h-48 overflow-y-auto space-y-1.5 border border-line p-2.5 rounded-xl bg-raised/50">
             <label
               v-for="kp in pointStats.filter(p => p.id !== mergeTargetId)"
               :key="kp.id"
-              class="flex items-center gap-2 p-1.5 hover:bg-white rounded cursor-pointer text-xs"
+              class="flex items-center gap-2 p-1.5 hover:bg-surface rounded cursor-pointer text-xs"
             >
-              <input type="checkbox" :value="kp.id" v-model="mergeSourceIds" class="rounded text-brand-600" />
-              <span class="text-stone-800 font-medium">{{ kp.name }}</span>
-              <span class="text-stone-400">({{ kp.questions_count }} 道题)</span>
+              <input type="checkbox" :value="kp.id" v-model="mergeSourceIds" class="rounded text-accent" />
+              <span class="text-ink font-medium">{{ kp.name }}</span>
+              <span class="text-faint">({{ kp.questions_count }} 道题)</span>
             </label>
           </div>
         </div>
@@ -437,21 +437,21 @@
       @close="isLegacyModalOpen = false"
     >
       <div class="space-y-3.5 text-sm">
-        <p class="text-xs text-stone-500 leading-relaxed">
+        <p class="text-xs text-sub leading-relaxed">
           以下为系统初始化保留的历史考点（来源标记为待核实）。您可以在此逐一审核：核对无误可标记为有效，或将其删除。
         </p>
-        <div v-if="legacyKPs.length === 0" class="py-8 text-center text-stone-400 text-xs">
+        <div v-if="legacyKPs.length === 0" class="py-8 text-center text-faint text-xs">
           没有待核实的旧考点记录。
         </div>
         <div v-else class="space-y-2 max-h-60 overflow-y-auto pr-1">
           <div
             v-for="kp in legacyKPs"
             :key="kp.id"
-            class="p-3 rounded-xl border border-stone-200 bg-stone-50/50 flex items-center justify-between gap-3 text-xs"
+            class="p-3 rounded-xl border border-line bg-raised/50 flex items-center justify-between gap-3 text-xs"
           >
             <div>
-              <span class="font-semibold text-stone-800 text-sm">{{ kp.name }}</span>
-              <span v-if="kp.chapter" class="text-stone-500 ml-2">({{ kp.chapter }})</span>
+              <span class="font-semibold text-ink text-sm">{{ kp.name }}</span>
+              <span v-if="kp.chapter" class="text-sub ml-2">({{ kp.chapter }})</span>
             </div>
             <div class="flex items-center gap-2">
               <button
@@ -463,7 +463,7 @@
               </button>
               <button
                 type="button"
-                class="btn btn-sm btn-secondary text-rose-600 hover:bg-rose-50 border-rose-200"
+                class="btn btn-sm btn-secondary text-err hover:bg-err/10 border-err/30"
                 @click="handleDeleteKp(kp.id, kp.name)"
               >
                 删除
@@ -485,7 +485,7 @@
       @close="selectedKpDetail = null"
     >
       <div v-if="selectedKpDetail" class="space-y-3.5 text-sm">
-        <div v-if="selectedKpDetail.questions.length === 0" class="py-8 text-center text-stone-400 text-xs">
+        <div v-if="selectedKpDetail.questions.length === 0" class="py-8 text-center text-faint text-xs">
           该知识点在已确认真题中暂无考查记录。
         </div>
         <div
@@ -493,18 +493,18 @@
           :key="q.id"
           class="surface p-4 space-y-2 text-xs sm:text-sm"
         >
-          <div class="flex items-center justify-between text-xs border-b border-stone-100 pb-2">
-            <span class="font-semibold text-brand-700">
+          <div class="flex items-center justify-between text-xs border-b border-line pb-2">
+            <span class="font-semibold text-accent">
               {{ q.year ? `${q.year}年真题` : '历年真题' }} · {{ q.session_name || '' }} {{ q.question_num || '' }}
             </span>
-            <span v-if="q.score" class="text-stone-400">[{{ q.score }} 分]</span>
+            <span v-if="q.score" class="text-faint">[{{ q.score }} 分]</span>
           </div>
-          <p class="reading-content font-medium text-stone-900">
+          <p class="reading-content font-medium text-ink">
             {{ q.stem }}
           </p>
-          <div class="bg-stone-50 p-3 rounded-lg border border-stone-100 text-xs space-y-1">
-            <span class="font-semibold text-stone-600 block">参考答案：</span>
-            <p class="text-stone-700 whitespace-pre-wrap leading-relaxed">
+          <div class="bg-raised p-3 rounded-lg border border-line text-xs space-y-1">
+            <span class="font-semibold text-sub block">参考答案：</span>
+            <p class="text-ink whitespace-pre-wrap leading-relaxed">
               {{ q.standard_answer || '[暂未收录参考答案]' }}
             </p>
           </div>
@@ -554,6 +554,7 @@ const isExtractionModalOpen = ref(false);
 const isAddModalOpen = ref(false);
 const isMergeModalOpen = ref(false);
 const isLegacyModalOpen = ref(false);
+let fetchGeneration = 0;
 
 const newKpForm = ref({
   name: '',
@@ -602,6 +603,7 @@ const filteredPointStats = computed(() => {
 });
 
 const fetchAll = async () => {
+  const token = ++fetchGeneration;
   try {
     isRefreshing.value = true;
     const [overall, list, legacy] = await Promise.all([
@@ -609,6 +611,7 @@ const fetchAll = async () => {
       apiClient.getKnowledgePointsStats(),
       apiClient.getLegacyKnowledgePoints()
     ]);
+    if (token !== fetchGeneration) return;
     overallStats.value = overall;
     pointStats.value = list;
     legacyKPs.value = legacy;
@@ -617,7 +620,7 @@ const fetchAll = async () => {
   } catch (e) {
     console.error('Failed to load stats:', e);
   } finally {
-    isRefreshing.value = false;
+    if (token === fetchGeneration) isRefreshing.value = false;
   }
 };
 
@@ -639,18 +642,31 @@ const getSourceBadgeLabel = (sourceType?: string, sourceStatus?: string) => {
 };
 
 const getSourceBadgeClass = (sourceType?: string, sourceStatus?: string) => {
-  if (sourceStatus === 'supplement_needed') return 'bg-rose-100 text-rose-800';
+  if (sourceStatus === 'supplement_needed') return 'bg-err/15 text-err';
   switch (sourceType) {
-    case 'extracted': return 'bg-brand-100 text-brand-800';
-    case 'pending_verification': return 'bg-amber-100 text-amber-800';
-    default: return 'bg-stone-100 text-stone-700';
+    case 'extracted': return 'bg-accent/15 text-accent';
+    case 'pending_verification': return 'bg-warn/15 text-warn';
+    default: return 'bg-raised text-ink';
   }
 };
 
 const priorityTagStyle = (tag: string) => {
-  if (tag === 'important') return 'bg-rose-50 text-rose-700 border-rose-200';
-  if (tag === 'deferred') return 'bg-stone-100 text-stone-500 border-stone-200';
-  return 'bg-brand-50 text-brand-700 border-brand-200';
+  if (tag === 'important') return 'bg-err/10 text-err border-err/30';
+  if (tag === 'deferred') return 'bg-raised text-sub border-line';
+  return 'bg-accent/10 text-accent border-accent/30';
+};
+
+const recentWindowBadgeClass = (item: KnowledgePointStats) => {
+  const windowLen = overallStats.value.recent_5yr_window.length;
+  if (windowLen === 0) return 'bg-raised text-faint';
+  const ratio = item.recent_5yr_count / windowLen;
+  if (item.recent_5yr_count >= 2 || ratio >= 0.4) {
+    return 'bg-err/10 text-err font-bold';
+  }
+  if (item.recent_5yr_count >= 1) {
+    return 'bg-warn/10 text-warn';
+  }
+  return 'bg-raised text-faint';
 };
 
 const updatePriorityTag = async (item: KnowledgePointStats) => {

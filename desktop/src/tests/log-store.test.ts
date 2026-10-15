@@ -161,6 +161,7 @@ test('export caps raw bytes, keeps the newest records and flags truncation', () 
   });
 
   assert.strictEqual(selection.truncated, true);
+  assert.strictEqual(selection.incomplete, true, 'capacity truncation marks the export incomplete');
   assert.ok(selection.totalBytes <= 4096, `stayed within the cap (${selection.totalBytes})`);
   assert.ok(selection.totalEntries > 0 && selection.totalEntries < 200);
   assert.match(selection.note, /超过 4 MiB|超过 0 MiB|已仅保留最新记录/);
@@ -334,6 +335,128 @@ test('corrupt lines, CRLF endings and a missing source never fail the whole quer
   assert.ok(result.entries.some((e) => e.event === 'legacy.text'), 'the corrupt JSON line degrades to plain text');
 });
 
+test('query surfaces permission and IO failures instead of reporting an unavailable source', () => {
+  const cases: Array<{ stage: 'stat' | 'open' | 'read'; code: string }> = [
+    { stage: 'stat', code: 'EACCES' },
+    { stage: 'open', code: 'EPERM' },
+    { stage: 'read', code: 'EIO' },
+  ];
+
+  for (const failure of cases) {
+    const dir = tempDir();
+    const active = path.join(dir, 'desktop.jsonl');
+    writeLog(dir, 'desktop', [entry({ event: `failure.${failure.stage}` })]);
+    const originalStat = fs.statSync;
+    const originalOpen = fs.openSync;
+    const originalRead = fs.readSync;
+    const fault = (): never => {
+      const error = new Error(failure.code) as NodeJS.ErrnoException;
+      error.code = failure.code;
+      throw error;
+    };
+    try {
+      if (failure.stage === 'stat') {
+        (fs as any).statSync = ((file: fs.PathLike) => {
+          if (String(file) === active) return fault();
+          return originalStat(file);
+        }) as typeof fs.statSync;
+      } else if (failure.stage === 'open') {
+        (fs as any).openSync = ((file: fs.PathLike, ...args: any[]) => {
+          if (String(file) === active) return fault();
+          return (originalOpen as any)(file, ...args);
+        }) as typeof fs.openSync;
+      } else {
+        (fs as any).readSync = ((..._args: any[]) => fault()) as typeof fs.readSync;
+      }
+
+      assert.throws(
+        () => queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] }),
+        (error: any) => {
+          assert.strictEqual(error.code, failure.code);
+          assert.match(error.message, /日志读取失败：desktop/);
+          if (failure.code === 'EACCES' || failure.code === 'EPERM') {
+            assert.match(error.message, /权限被拒绝/);
+          } else {
+            assert.match(error.message, /读取失败/);
+          }
+          assert.ok(!error.message.includes(dir), 'raw paths must not cross the query boundary');
+          return true;
+        }
+      );
+    } finally {
+      (fs as any).statSync = originalStat;
+      (fs as any).openSync = originalOpen;
+      (fs as any).readSync = originalRead;
+    }
+
+    const recovered = queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] });
+    assert.strictEqual(recovered.total, 1, `${failure.stage} failure must be retryable after recovery`);
+  }
+});
+
+test('a missing active file is unavailable only when no rotated generation exists', () => {
+  const dir = tempDir();
+  const rotated = path.join(dir, 'desktop.jsonl.1');
+  fs.writeFileSync(rotated, `${JSON.stringify(entry({ event: 'rotated.only' }))}\n`);
+  const result = queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] });
+  assert.strictEqual(result.total, 1);
+  assert.deepStrictEqual(result.unavailable, []);
+
+  fs.rmSync(rotated);
+  const missing = queryLogs({ dir, from: 0, to: Date.now() + 1000, sources: ['desktop'] });
+  assert.strictEqual(missing.total, 0);
+  assert.deepStrictEqual(missing.unavailable, ['desktop']);
+});
+
+test('empty files still require read permission, and unscanned sources are not missing', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), '');
+  const open = t.mock.method(fs, 'openSync', () => {
+    throw Object.assign(new Error('private path'), { code: 'EACCES' });
+  });
+  assert.throws(() => queryLogs({ dir, sources: ['desktop'] }), /读取失败.*EACCES/);
+  open.mock.restore();
+  writeLog(dir, 'desktop', [entry()]);
+  writeLog(dir, 'backend', [entry({ source: 'backend' })]);
+  const truncated = queryLogs({ dir, sources: ['desktop', 'backend'], maxScanBytes: 1 });
+  assert.strictEqual(truncated.scanTruncated, true);
+  assert.deepStrictEqual(truncated.unavailable, []);
+});
+
+test('export keeps newest-first partial results when a rotated file cannot be read', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  writeLog(dir, 'desktop', [
+    entry({ timestamp: new Date(1000).toISOString(), event: 'older' }),
+    entry({ timestamp: new Date(2000).toISOString(), event: 'newer' }),
+  ]);
+  fs.mkdirSync(path.join(dir, 'desktop.jsonl.1'));
+  assert.throws(() => queryLogs({ dir, sources: ['desktop'] }), /读取失败/);
+  const exported = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: 3000 });
+  assert.strictEqual(JSON.parse(exported.files[0].content.split('\n')[0]).event, 'newer');
+});
+
+test('export continues through unreadable generations while queries still fail', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const active = path.join(dir, 'desktop.jsonl');
+  fs.writeFileSync(active, '');
+  const originalOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+    if (String(file) === active) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return originalOpen(file, flags, mode);
+  });
+  fs.mkdirSync(path.join(dir, 'desktop.jsonl.2'));
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl.1'), `${JSON.stringify(entry({ event: 'history.one' }))}\n`);
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl.3'), `${JSON.stringify(entry({ event: 'history.three' }))}\n`);
+  assert.throws(() => queryLogs({ dir, sources: ['desktop'] }), /读取失败/);
+  const exported = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: Date.now() + 1000 });
+  assert.strictEqual(exported.totalEntries, 2);
+  assert.match(exported.files[0].content, /history.one/);
+  assert.match(exported.files[0].content, /history.three/);
+});
+
 test('the scan budget keeps the newest records and flags truncation', () => {
   const dir = tempDir();
   const base = Date.now();
@@ -370,3 +493,246 @@ test('the scan budget keeps the newest records and flags truncation', () => {
   );
 });
 
+// --- Export incompleteness disclosure (beta.3 D3) -------------------------------------
+// The export must never silently ship a partial bundle: every read failure, missing
+// source, memory-sourced record and dropped pending entry is a first-class field.
+
+test('export discloses an unreadable active generation while history still ships', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  const active = path.join(dir, 'desktop.jsonl');
+  fs.writeFileSync(active, `${JSON.stringify(entry({ event: 'active.new', timestamp: new Date(now).toISOString() }))}\n`);
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl.1'),
+    `${JSON.stringify(entry({ event: 'rotated.old', timestamp: new Date(now - 10_000).toISOString() }))}\n`
+  );
+  const originalOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+    if (String(file) === active) throw Object.assign(new Error('denied-with-secret-path'), { code: 'EACCES' });
+    return originalOpen(file, flags, mode);
+  });
+
+  const selection = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: now + 1000 });
+  assert.deepStrictEqual(
+    selection.read_errors,
+    [{ source: 'desktop', file: 'desktop.jsonl', stage: 'open', code: 'EACCES' }],
+    'the failed generation is disclosed with source + basename + stage + code'
+  );
+  assert.deepStrictEqual(selection.missing_sources, []);
+  const payload = selection.files.map((f) => f.content).join('\n');
+  assert.match(payload, /rotated\.old/, 'readable rotated history is still exported');
+  assert.ok(!payload.includes('active.new'), 'the unreadable generation contributes nothing');
+  assert.strictEqual(selection.incomplete, true);
+  assert.match(selection.note, /读取失败/);
+  // Disclosure stays sanitized: relative names only, never absolute paths or raw
+  // exception text, and certainly no log-line content.
+  const disclosure = JSON.stringify(selection.read_errors);
+  assert.ok(!disclosure.includes(dir), 'no absolute path in read_errors');
+  assert.ok(!disclosure.includes('denied-with-secret-path'), 'no raw exception text in read_errors');
+});
+
+test('export discloses an unreadable middle generation without losing the rest', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), `${JSON.stringify(entry({ event: 'gen.active' }))}\n`);
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl.1'), `${JSON.stringify(entry({ event: 'gen.one' }))}\n`);
+  // A directory squatting on generation .2 fails stat with EINVAL — a real Windows case.
+  fs.mkdirSync(path.join(dir, 'desktop.jsonl.2'));
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl.3'), `${JSON.stringify(entry({ event: 'gen.three' }))}\n`);
+
+  const selection = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: now + 1000 });
+  assert.deepStrictEqual(selection.read_errors, [
+    { source: 'desktop', file: 'desktop.jsonl.2', stage: 'stat', code: 'EINVAL' },
+  ]);
+  assert.deepStrictEqual(selection.missing_sources, []);
+  const payload = selection.files[0].content;
+  for (const event of ['gen.active', 'gen.one', 'gen.three']) {
+    assert.match(payload, new RegExp(event), `${event} survived the broken generation`);
+  }
+  assert.strictEqual(selection.incomplete, true);
+});
+
+test('a source whose generations are all absent reports missing_sources, not errors', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const selection = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: Date.now() + 1000 });
+  assert.deepStrictEqual(selection.read_errors, []);
+  assert.deepStrictEqual(selection.missing_sources, ['desktop']);
+  assert.strictEqual(selection.files.length, 0, 'nothing to ship for an absent source');
+  assert.strictEqual(selection.incomplete, false, 'absent logs are normal, not incomplete');
+  assert.match(selection.note, /无磁盘日志文件：desktop/);
+});
+
+test('an existing empty file is neither missing nor a read error', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), '');
+  const selection = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: Date.now() + 1000 });
+  assert.deepStrictEqual(selection.read_errors, []);
+  assert.deepStrictEqual(selection.missing_sources, []);
+  assert.strictEqual(selection.incomplete, false);
+});
+
+test('scan-budget exhaustion is disclosed as read_truncated and marks the export incomplete', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const base = Date.now();
+  const filler = Array.from({ length: 400 }, (_, i) =>
+    JSON.stringify(
+      entry({ timestamp: new Date(base + i).toISOString(), event: `bulk.${i}`, message: 'z'.repeat(400) })
+    )
+  ).join('\n');
+  fs.writeFileSync(path.join(dir, 'desktop.jsonl'), `${filler}\n`);
+
+  const selection = collectExportEntries({
+    dir,
+    sources: ['desktop'],
+    from: 0,
+    to: base + 1_000_000,
+    maxScanBytes: 4096,
+  });
+  assert.strictEqual(selection.read_truncated, true, 'the scan hit its byte budget');
+  assert.strictEqual(selection.truncated, false, 'the 20 MiB export cap was not reached');
+  assert.deepStrictEqual(selection.read_errors, [], 'a truncated scan is not a read error');
+  assert.ok(selection.totalEntries > 0, 'the newest records still ship');
+  assert.strictEqual(selection.incomplete, true);
+  assert.match(selection.note, /未完整读取|未读取/);
+});
+
+test('oversized lines surface as skipped_lines and mark the export incomplete', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl'),
+    [
+      JSON.stringify(entry({ event: 'kept', timestamp: new Date(now).toISOString() })),
+      JSON.stringify({ ...entry({ event: 'huge' }), message: 'y'.repeat(300 * 1024) }),
+      '',
+    ].join('\n')
+  );
+
+  const selection = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: now + 1000 });
+  assert.strictEqual(selection.skippedLines, 1);
+  assert.strictEqual(selection.totalEntries, 1);
+  assert.strictEqual(selection.incomplete, true);
+  assert.match(selection.note, /超长记录/);
+});
+
+test('pending records merge per source, dedupe by log_record_id and count as buffered', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  writeLog(dir, 'desktop', [
+    entry({
+      event: 'disk.persisted',
+      timestamp: new Date(now - 5000).toISOString(),
+      log_record_id: 'sess-1:desktop:00000001',
+    }),
+  ]);
+
+  const selection = collectExportEntries({
+    dir,
+    sources: ['desktop', 'backend'],
+    from: now - 60_000,
+    to: now + 1000,
+    pendingEntries: [
+      // Same id as the persisted record: the queued copy must be dropped.
+      entry({ event: 'pending.dup', log_record_id: 'sess-1:desktop:00000001' }),
+      // New queued records are kept; the newest must sort above the disk entry.
+      entry({
+        event: 'pending.fresh',
+        timestamp: new Date(now).toISOString(),
+        log_record_id: 'sess-1:desktop:00000002',
+      }),
+      // No id at all: always kept — better a duplicate than a gap.
+      entry({ event: 'pending.noid', timestamp: new Date(now - 1000).toISOString() }),
+      // Another source merges into its own payload file.
+      entry({
+        source: 'backend',
+        event: 'pending.backend',
+        timestamp: new Date(now).toISOString(),
+        log_record_id: 'sess-1:backend:00000007',
+      }),
+      // Outside the export window: filtered, and not counted as buffered.
+      entry({
+        event: 'pending.expired',
+        timestamp: new Date(now - 3_600_000).toISOString(),
+        log_record_id: 'sess-1:desktop:00000003',
+      }),
+    ],
+  });
+
+  const desktop = selection.files.find((f) => f.name === 'desktop.jsonl')!;
+  const events = desktop.content
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line).event);
+  assert.strictEqual(events[0], 'pending.fresh', 'merged list stays newest-first');
+  assert.deepStrictEqual(
+    [...events].sort(),
+    ['disk.persisted', 'pending.fresh', 'pending.noid'],
+    'deduped id dropped, id-less record kept, expired record filtered'
+  );
+  const backend = selection.files.find((f) => f.name === 'backend.jsonl')!;
+  assert.match(backend.content, /pending\.backend/);
+  assert.strictEqual(selection.buffered_entries, 3, 'only written pending records count');
+  assert.deepStrictEqual(selection.memory_sources.sort(), ['backend', 'desktop']);
+  assert.strictEqual(selection.incomplete, true);
+  assert.match(selection.note, /3 条尚未落盘的内存待写记录/);
+});
+
+test('memory fallback and pending queue dedupe across both buffers', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  const selection = collectExportEntries({
+    dir,
+    sources: ['desktop'],
+    from: 0,
+    to: now + 1000,
+    memoryFallback: [entry({ event: 'memory.ring', log_record_id: 'sess-9:desktop:00000010' })],
+    pendingEntries: [
+      // Same id as the memory-ring record: dropped on merge.
+      entry({ event: 'pending.same', log_record_id: 'sess-9:desktop:00000010' }),
+      entry({ event: 'pending.only', log_record_id: 'sess-9:desktop:00000011' }),
+    ],
+  });
+
+  const events = selection.files[0].content
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line).event)
+    .sort();
+  assert.deepStrictEqual(events, ['memory.ring', 'pending.only']);
+  assert.strictEqual(selection.buffered_entries, 1);
+  assert.deepStrictEqual(selection.memory_sources, ['desktop']);
+  assert.strictEqual(selection.incomplete, true);
+  assert.match(selection.note, /内存缓冲/);
+});
+
+test('dropped_pending_entries passes through and marks the export incomplete', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  writeLog(dir, 'desktop', [entry()]);
+
+  const clean = collectExportEntries({ dir, sources: ['desktop'], from: 0, to: Date.now() + 1000 });
+  assert.strictEqual(clean.incomplete, false);
+  assert.strictEqual(clean.dropped_pending_entries, 0);
+  assert.strictEqual(clean.buffered_entries, 0);
+  assert.deepStrictEqual(clean.read_errors, []);
+  assert.deepStrictEqual(clean.memory_sources, []);
+
+  const dropped = collectExportEntries({
+    dir,
+    sources: ['desktop'],
+    from: 0,
+    to: Date.now() + 1000,
+    droppedPendingEntries: 4,
+  });
+  assert.strictEqual(dropped.dropped_pending_entries, 4);
+  assert.strictEqual(dropped.incomplete, true);
+  assert.match(dropped.note, /4 条待写记录因缓冲超限被丢弃/);
+});

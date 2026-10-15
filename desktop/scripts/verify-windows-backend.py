@@ -26,7 +26,7 @@ def request_json(url: str, token: str, method: str = "GET", body: dict | None = 
     payload = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=payload, method=method)
     request.add_header("Host", url.split("//", 1)[1].split("/", 1)[0])
-    request.add_header("X-RAG-Instance-Token", token)
+    request.add_header("X-StudyTool-Instance-Token", token)
     if payload is not None:
         request.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(request, timeout=3) as response:
@@ -100,8 +100,8 @@ def main() -> int:
         stderr_path = root / "backend.stderr.log"
         env = {
             **os.environ,
-            "RAG_DESKTOP_MODE": "1",
-            "RAG_DESKTOP_DATA_DIR": str(root / "appdata"),
+            "STUDYTOOL_DESKTOP_MODE": "1",
+            "STUDYTOOL_DESKTOP_DATA_DIR": str(root / "appdata"),
             "LOG_DIR": str(logs),
         }
         proc: subprocess.Popen[str] | None = None

@@ -27,7 +27,7 @@ from app.services.parser.pdf_parser import PDFParser
 def desktop_t2_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "desktop_t2_data"
     data_dir.mkdir(parents=True)
-    monkeypatch.setenv("RAG_DESKTOP_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("STUDYTOOL_DESKTOP_DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DATA_DIR", str(data_dir))
     monkeypatch.setattr(settings, "DESKTOP_MODE", True)
     monkeypatch.setattr(settings, "DESKTOP_INSTANCE_TOKEN", "token-t2-xyz")
@@ -161,7 +161,7 @@ async def test_vector_lock_persists_in_database_and_intercepts_retrieval_and_app
     # 5. Document reading must still work
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "token-t2-xyz",
+        "X-StudyTool-Instance-Token": "token-t2-xyz",
         "Host": "127.0.0.1:18764",
     }
     res_chunks = client.get("/api/materials/doc-lock-1/chunks", headers=headers)
@@ -221,7 +221,7 @@ async def test_reindex_flow_staging_replacement_and_unlock(desktop_t2_env, monke
 
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "token-t2-xyz",
+        "X-StudyTool-Instance-Token": "token-t2-xyz",
         "Host": "127.0.0.1:18764",
     }
 
@@ -262,7 +262,7 @@ def test_reindex_requires_exclusive_maintenance_lease(desktop_t2_env):
     """A reindex cannot overlap another maintenance operation."""
     client = TestClient(app)
     headers = {
-        "X-RAG-Instance-Token": "token-t2-xyz",
+        "X-StudyTool-Instance-Token": "token-t2-xyz",
         "Host": "127.0.0.1:18764",
         "Origin": "http://127.0.0.1:18764",
     }

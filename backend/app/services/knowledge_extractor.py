@@ -4,13 +4,14 @@ import logging
 import re
 import time
 import uuid
+import hashlib
 from typing import List, Dict, Any, Optional
 from app.database import db_session
 from app.models.schemas import (
     CandidateDecisionItem, QuestionLinkDecision,
     ExtractionBatchResponse, CandidateResponse, CandidateCitation,
     ApplyCandidatesResponse, QuestionLinkSuggestionResponse, QuestionLinkItem,
-    QuestionLinkApplyResponse
+    QuestionLinkApplyResponse, CandidateSourceReviewRequest, CandidateSourceReview
 )
 from app.services.llm.client import LLMClient
 from app.services.llm.prompts import KNOWLEDGE_POINT_EXTRACT_SYSTEM_PROMPT
@@ -62,17 +63,35 @@ class KnowledgeExtractor:
             """, (batch_id, task_id, json.dumps(doc_ids)))
 
             row = conn.execute("SELECT * FROM extraction_batches WHERE id = ?", (batch_id,)).fetchone()
-            return {
-                "id": row["id"],
-                "task_id": row["task_id"],
-                "status": row["status"],
-                "doc_ids": json.loads(row["doc_ids_json"]),
-                "coverage_info": json.loads(row["coverage_info_json"]) if row["coverage_info_json"] else None,
-                "error_msg": row["error_msg"],
-                "candidates_count": 0,
-                "created_at": str(row["created_at"]),
-                "updated_at": str(row["updated_at"])
-            }
+            return cls._batch_row_to_dict(conn, row)
+
+    @classmethod
+    def _batch_row_to_dict(cls, conn, row) -> Dict[str, Any]:
+        cand_count = conn.execute(
+            "SELECT count(*) as c FROM extraction_candidates WHERE extraction_id = ?",
+            (row["id"],)
+        ).fetchone()["c"]
+        pending_count = conn.execute(
+            "SELECT count(*) as c FROM extraction_candidates WHERE extraction_id = ? AND status = 'pending'",
+            (row["id"],)
+        ).fetchone()["c"]
+        task_status = None
+        if row["task_id"]:
+            t = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["task_id"],)).fetchone()
+            task_status = t["status"] if t else None
+        return {
+            "id": row["id"],
+            "task_id": row["task_id"],
+            "status": row["status"],
+            "doc_ids": json.loads(row["doc_ids_json"]) if row["doc_ids_json"] else [],
+            "coverage_info": json.loads(row["coverage_info_json"]) if row["coverage_info_json"] else None,
+            "error_msg": row["error_msg"],
+            "candidates_count": cand_count,
+            "pending_candidates": pending_count,
+            "task_status": task_status,
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"])
+        }
 
     @classmethod
     def get_extraction_batch(cls, extraction_id: str) -> Optional[Dict[str, Any]]:
@@ -80,21 +99,163 @@ class KnowledgeExtractor:
             row = conn.execute("SELECT * FROM extraction_batches WHERE id = ?", (extraction_id,)).fetchone()
             if not row:
                 return None
-            cand_count = conn.execute(
-                "SELECT count(*) as c FROM extraction_candidates WHERE extraction_id = ?",
-                (extraction_id,)
-            ).fetchone()["c"]
+            return cls._batch_row_to_dict(conn, row)
+
+    @classmethod
+    def get_latest_extraction(cls) -> Optional[Dict[str, Any]]:
+        """Returns the most recent extraction batch so the UI can resume a pending review."""
+        with db_session() as conn:
+            row = conn.execute("""
+                SELECT * FROM extraction_batches
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+            """).fetchone()
+            if not row:
+                return None
+            return cls._batch_row_to_dict(conn, row)
+
+    @classmethod
+    def list_extractions(cls, *, pending_only: bool = False, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+        """List persisted batches without creating or touching a worker task."""
+        where = ("WHERE b.status IN ('completed', 'partial') AND EXISTS "
+                 "(SELECT 1 FROM extraction_candidates c WHERE c.extraction_id = b.id AND c.status = 'pending')") if pending_only else ""
+        with db_session() as conn:
+            total = conn.execute(f"SELECT count(*) AS c FROM extraction_batches b {where}").fetchone()["c"]
+            rows = conn.execute(
+                f"SELECT b.* FROM extraction_batches b {where} ORDER BY b.created_at DESC, b.id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return {"items": [cls._batch_row_to_dict(conn, row) for row in rows], "total": total}
+
+    @staticmethod
+    def _source_hash(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _candidate_dict(cls, conn, row) -> Dict[str, Any]:
+        data = dict(row)
+        raw = json.loads(data.get("citations_json") or "[]")
+        citations = [CandidateCitation(**citation) for citation in raw]
+        return {
+            "id": data["id"], "extraction_id": data["extraction_id"], "name": data["name"],
+            "chapter": data.get("chapter"), "definition": data.get("definition"),
+            "citations": citations, "status": data.get("status", "pending"),
+            "match_type": data.get("match_type", "new"), "matched_kp_id": data.get("matched_kp_id"),
+            "matched_kp_name": data.get("matched_kp_name"), "target_kp_id": data.get("target_kp_id"),
+            "source_status": data.get("source_status") or "valid",
+            "requires_source_review": (data.get("source_status") or "valid") != "valid",
+            "version": int(data.get("version") or 1), "created_at": str(data.get("created_at")),
+        }
+
+    @classmethod
+    def get_candidate_source_review(cls, extraction_id: str, candidate_id: str) -> Optional[Dict[str, Any]]:
+        with db_session() as conn:
+            row = conn.execute(
+                "SELECT c.*, kp.name AS matched_kp_name FROM extraction_candidates c "
+                "LEFT JOIN knowledge_points kp ON c.matched_kp_id = kp.id "
+                "WHERE c.id = ? AND c.extraction_id = ?", (candidate_id, extraction_id)
+            ).fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            citations = []
+            can_confirm = data.get("status") == "pending"
+            reasons = []
+            batch = conn.execute("SELECT status FROM extraction_batches WHERE id = ?", (extraction_id,)).fetchone()
+            if not batch or batch["status"] not in ("completed", "partial"):
+                can_confirm = False
+                reasons.append("提取批次尚未完成")
+            if data.get("status") == "invalid":
+                reasons.append("历史来源失效候选的原审核决定无法确认，请人工核对")
+            stored_citations = json.loads(data.get("citations_json") or "[]")
+            if not stored_citations:
+                can_confirm = False
+                reasons.append("该候选没有可核对的原文引用")
+            for citation in stored_citations:
+                chunk = conn.execute(
+                    "SELECT c.id, c.doc_id, c.content, c.page_number, c.paragraph_ref, d.filename "
+                    "FROM document_chunks c JOIN documents d ON d.id = c.doc_id WHERE c.id = ?",
+                    (citation.get("chunk_id"),)
+                ).fetchone()
+                current = dict(citation)
+                if not chunk:
+                    can_confirm = False
+                    reasons.append("引用的资料切片已不存在")
+                    current.update({"content": "", "source_hash": None})
+                    citations.append(current)
+                    continue
+                content = chunk["content"] or ""
+                current_hash = cls._source_hash(content)
+                current.update({"content": content, "source_hash": current_hash,
+                                "doc_name": chunk["filename"], "page_number": chunk["page_number"],
+                                "paragraph_ref": chunk["paragraph_ref"]})
+                if citation.get("doc_id") != chunk["doc_id"] or not content.strip():
+                    can_confirm = False
+                    reasons.append("引用资料与当前原文不一致")
+                elif not citation.get("quote") or citation["quote"] not in content:
+                    current["quote"] = content.strip()[:120]
+                    reasons.append("原引用已变化，请逐项核对当前原文")
+                citations.append(current)
+            if data.get("source_status") not in (None, "valid"):
+                reasons.append("来源已失效，请重新核对")
             return {
-                "id": row["id"],
-                "task_id": row["task_id"],
-                "status": row["status"],
-                "doc_ids": json.loads(row["doc_ids_json"]) if row["doc_ids_json"] else [],
-                "coverage_info": json.loads(row["coverage_info_json"]) if row["coverage_info_json"] else None,
-                "error_msg": row["error_msg"],
-                "candidates_count": cand_count,
-                "created_at": str(row["created_at"]),
-                "updated_at": str(row["updated_at"])
+                "candidate_id": candidate_id, "version": int(data.get("version") or 1),
+                "name": data["name"], "chapter": data.get("chapter"), "citations": citations,
+                "can_confirm": can_confirm, "reason": "; ".join(dict.fromkeys(reasons)) or None,
             }
+
+    @classmethod
+    def confirm_candidate_source_review(cls, extraction_id: str, candidate_id: str, req: CandidateSourceReviewRequest) -> Dict[str, Any]:
+        with db_session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            batch = conn.execute("SELECT status FROM extraction_batches WHERE id = ?", (extraction_id,)).fetchone()
+            if not batch:
+                raise ValueError("提取批次不存在")
+            if batch["status"] not in ("completed", "partial"):
+                raise RuntimeError("提取批次尚未完成，暂不能核对来源")
+            row = conn.execute(
+                "SELECT * FROM extraction_candidates WHERE id = ? AND extraction_id = ?", (candidate_id, extraction_id)
+            ).fetchone()
+            if not row:
+                raise ValueError("候选考点不存在")
+            if int(row["version"] or 1) != req.version:
+                raise RuntimeError("候选版本已变化，请重新加载来源")
+            if row["status"] != "pending":
+                raise RuntimeError("该候选已审核，不能重复核对")
+            stored_citations = json.loads(row["citations_json"] or "[]")
+            if len(req.citations) != len(stored_citations) or [c.chunk_id for c in req.citations] != [c.get("chunk_id") for c in stored_citations]:
+                raise RuntimeError("引用列表已变化，请重新加载后核对")
+            normalized = []
+            for citation in req.citations:
+                chunk = conn.execute(
+                    "SELECT c.id, c.doc_id, c.content, c.page_number, c.paragraph_ref, d.filename "
+                    "FROM document_chunks c JOIN documents d ON d.id = c.doc_id WHERE c.id = ?",
+                    (citation.chunk_id,)
+                ).fetchone()
+                content = chunk["content"] if chunk else None
+                current_hash = cls._source_hash(content) if content is not None else None
+                if (not chunk or chunk["doc_id"] != citation.doc_id or not content.strip()
+                    or citation.source_hash != current_hash or not citation.quote or citation.quote not in content):
+                    raise RuntimeError("来源已变化或引用不可用，请重新加载后核对")
+                normalized.append({
+                    "chunk_id": chunk["id"], "doc_id": chunk["doc_id"],
+                    "doc_name": chunk["filename"], "page_number": chunk["page_number"],
+                    "paragraph_ref": chunk["paragraph_ref"], "quote": citation.quote,
+                    "source_hash": current_hash,
+                })
+            update_cursor = conn.execute(
+                "UPDATE extraction_candidates SET name = ?, chapter = ?, citations_json = ?, source_status = 'valid', "
+                "match_type = CASE WHEN match_type = 'source_changed' AND matched_kp_id IS NULL THEN 'new' "
+                "WHEN match_type = 'source_changed' THEN 'existing' ELSE match_type END, version = version + 1 "
+                "WHERE id = ? AND extraction_id = ? AND version = ? AND status = 'pending'",
+                (req.name.strip(), req.chapter.strip() if req.chapter else None, json.dumps(normalized, ensure_ascii=False), candidate_id, extraction_id, req.version),
+            )
+            if update_cursor.rowcount != 1:
+                raise RuntimeError("候选版本已变化，请重新加载来源")
+            updated = conn.execute(
+                "SELECT c.*, kp.name AS matched_kp_name FROM extraction_candidates c LEFT JOIN knowledge_points kp ON c.matched_kp_id = kp.id WHERE c.id = ?", (candidate_id,)
+            ).fetchone()
+            return cls._candidate_dict(conn, updated)
 
     @classmethod
     async def execute_extraction_task(cls, task_id: str, batch_id: str):
@@ -350,8 +511,7 @@ class KnowledgeExtractor:
                             if raw_quote and raw_quote in ch_info["content"]:
                                 quote = raw_quote
                             else:
-                                content_clean = re.sub(r"\s+", " ", ch_info["content"]).strip()
-                                quote = raw_quote if raw_quote else content_clean[:60]
+                                quote = ch_info["content"].strip()[:120]
 
                             citations.append({
                                 "chunk_id": sid,
@@ -359,7 +519,8 @@ class KnowledgeExtractor:
                                 "doc_name": ch_info["filename"],
                                 "page_number": ch_info["page_number"],
                                 "paragraph_ref": ch_info["paragraph_ref"],
-                                "quote": quote
+                                "quote": quote,
+                                "source_hash": cls._source_hash(ch_info["content"] or ""),
                             })
 
                         batch_cands.append({
@@ -554,47 +715,66 @@ class KnowledgeExtractor:
                 ORDER BY c.created_at ASC
             """, (extraction_id,)).fetchall()
 
-            result = []
-            for r in rows:
-                c_dict = dict(r)
-                citations_raw = json.loads(c_dict["citations_json"]) if c_dict.get("citations_json") else []
-                citations = [CandidateCitation(**c) for c in citations_raw]
-                result.append({
-                    "id": c_dict["id"],
-                    "extraction_id": c_dict["extraction_id"],
-                    "name": c_dict["name"],
-                    "chapter": c_dict["chapter"],
-                    "definition": c_dict["definition"],
-                    "citations": citations,
-                    "status": c_dict["status"],
-                    "match_type": c_dict["match_type"],
-                    "matched_kp_id": c_dict["matched_kp_id"],
-                    "matched_kp_name": c_dict["matched_kp_name"],
-                    "target_kp_id": c_dict["target_kp_id"],
-                    "created_at": str(c_dict["created_at"])
-                })
-            return result
+            return [cls._candidate_dict(conn, row) for row in rows]
 
     @classmethod
-    def apply_candidates(cls, extraction_id: str, decisions: List[CandidateDecisionItem]) -> Dict[str, int]:
-        applied_count = 0
-        ignored_count = 0
-        merged_count = 0
-
+    def apply_candidates(cls, extraction_id: str, decisions: List[CandidateDecisionItem]) -> Dict[str, Any]:
         with db_session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if len({item.candidate_id for item in decisions}) != len(decisions):
+                raise RuntimeError("同一候选不能在一次审核中重复提交")
+            batch = conn.execute("SELECT * FROM extraction_batches WHERE id = ?", (extraction_id,)).fetchone()
+            if not batch:
+                raise ValueError("提取批次不存在")
+            if batch["status"] not in ("completed", "partial"):
+                raise RuntimeError("提取批次尚未完成，暂不能审核")
+
+            plans = []
+            replayed = []
             for item in decisions:
                 cand = conn.execute(
-                    "SELECT * FROM extraction_candidates WHERE id = ? AND extraction_id = ?",
-                    (item.candidate_id, extraction_id)
+                    "SELECT * FROM extraction_candidates WHERE id = ? AND extraction_id = ?", (item.candidate_id, extraction_id)
                 ).fetchone()
                 if not cand:
-                    continue
+                    raise ValueError("候选考点不存在或不属于该批次")
+                action = item.action
+                final_name = item.custom_name.strip() if item.custom_name and item.custom_name.strip() else cand["name"]
+                final_chapter = item.custom_chapter.strip() if item.custom_chapter and item.custom_chapter.strip() else cand["chapter"]
+                decision_json = json.dumps({"action": action, "target_kp_id": item.target_kp_id, "custom_name": final_name, "custom_chapter": final_chapter}, ensure_ascii=False, sort_keys=True)
+                if cand["status"] != "pending":
+                    if cand["decision_json"] == decision_json:
+                        replayed.append({"candidate_id": item.candidate_id, "status": cand["status"], "target_kp_id": cand["target_kp_id"], "replayed": True})
+                        continue
+                    raise RuntimeError("候选已被其他审核决定处理，请刷新后重试")
+                if int(cand["version"] or 1) != item.version:
+                    raise RuntimeError("候选版本已变化，请重新加载后重试")
+                if (cand["source_status"] or "valid") != "valid":
+                    raise RuntimeError("候选来源已失效，请先完成来源核对")
+                citations = json.loads(cand["citations_json"] or "[]")
+                if not citations:
+                    raise RuntimeError("候选缺少可核对的原文引用")
+                for citation in citations:
+                    chunk = conn.execute(
+                        "SELECT doc_id, content FROM document_chunks WHERE id = ?", (citation.get("chunk_id"),)
+                    ).fetchone()
+                    if (not chunk or chunk["doc_id"] != citation.get("doc_id")
+                        or not citation.get("source_hash")
+                        or cls._source_hash(chunk["content"] or "") != citation["source_hash"]
+                        or not citation.get("quote") or citation["quote"] not in (chunk["content"] or "")):
+                        raise RuntimeError("候选来源已变化，请重新核对后再审核")
+                if action == "merge" and not item.target_kp_id:
+                    raise ValueError("合并操作必须指定目标考点")
+                if action == "merge" and not conn.execute(
+                    "SELECT 1 FROM knowledge_points WHERE id = ? AND is_deleted = 0", (item.target_kp_id,)
+                ).fetchone():
+                    raise ValueError("目标考点不存在或已删除")
+                plans.append((item, cand, decision_json, final_name, final_chapter))
 
+            applied_count = ignored_count = merged_count = 0
+            results = list(replayed)
+            for item, cand, decision_json, final_name, final_chapter in plans:
                 action = item.action
                 if action == "accept":
-                    final_name = item.custom_name.strip() if item.custom_name and item.custom_name.strip() else cand["name"]
-                    final_chapter = item.custom_chapter.strip() if item.custom_chapter and item.custom_chapter.strip() else cand["chapter"]
-
                     # Extract citation summary for source_reference
                     cits = json.loads(cand["citations_json"]) if cand["citations_json"] else []
                     ref_snippets = []
@@ -619,37 +799,41 @@ class KnowledgeExtractor:
                             INSERT INTO knowledge_points (
                                 id, name, chapter, priority_tag,
                                 source_type, source_status, source_reference, is_deleted
-                            ) VALUES (?, ?, ?, 'medium', 'extracted', 'valid', ?, 0)
+                            ) VALUES (?, ?, ?, 'normal', 'extracted', 'valid', ?, 0)
                         """, (target_kp_id, final_name, final_chapter, source_ref))
 
                     conn.execute("""
                         UPDATE extraction_candidates
-                        SET status = 'accepted', target_kp_id = ?
-                        WHERE id = ?
-                    """, (target_kp_id, item.candidate_id))
+                        SET status = 'accepted', target_kp_id = ?, decision_json = ?, version = version + 1
+                        WHERE id = ? AND extraction_id = ? AND status = 'pending' AND version = ?
+                    """, (target_kp_id, decision_json, item.candidate_id, extraction_id, item.version))
                     applied_count += 1
+                    results.append({"candidate_id": item.candidate_id, "status": "accepted", "target_kp_id": target_kp_id, "replayed": False})
 
                 elif action == "ignore":
                     conn.execute("""
                         UPDATE extraction_candidates
-                        SET status = 'ignored'
-                        WHERE id = ?
-                    """, (item.candidate_id,))
+                        SET status = 'ignored', decision_json = ?, version = version + 1
+                        WHERE id = ? AND extraction_id = ? AND status = 'pending' AND version = ?
+                    """, (decision_json, item.candidate_id, extraction_id, item.version))
                     ignored_count += 1
+                    results.append({"candidate_id": item.candidate_id, "status": "ignored", "target_kp_id": None, "replayed": False})
 
                 elif action == "merge":
-                    if item.target_kp_id:
-                        conn.execute("""
-                            UPDATE extraction_candidates
-                            SET status = 'merged', target_kp_id = ?
-                            WHERE id = ?
-                        """, (item.target_kp_id, item.candidate_id))
-                        merged_count += 1
+                    conn.execute("""
+                        UPDATE extraction_candidates
+                        SET status = 'merged', target_kp_id = ?, decision_json = ?, version = version + 1
+                        WHERE id = ? AND extraction_id = ? AND status = 'pending' AND version = ?
+                    """, (item.target_kp_id, decision_json, item.candidate_id, extraction_id, item.version))
+                    merged_count += 1
+                    results.append({"candidate_id": item.candidate_id, "status": "merged", "target_kp_id": item.target_kp_id, "replayed": False})
 
         return {
             "applied_count": applied_count,
             "ignored_count": ignored_count,
-            "merged_count": merged_count
+            "merged_count": merged_count,
+            "replayed_count": len(replayed),
+            "results": results,
         }
 
     @classmethod

@@ -1,6 +1,8 @@
 import json
 import logging
 import uuid
+import asyncio
+import re
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Header
 from app.database import db_session
@@ -212,9 +214,21 @@ async def _submit(session_id: str, req: PracticeSubmitRequest):
     stored_q_map = {q["question_id"]: q for q in stored_questions}
     user_answers_map = {a.question_id: a.answer_text for a in req.answers}
 
-    evaluations: List[QuestionEvaluationResult] = []
+    def _parse_score(score_raw: Any) -> Optional[float]:
+        if score_raw is None:
+            return None
+        if isinstance(score_raw, (int, float)):
+            return float(score_raw)
+        if isinstance(score_raw, str):
+            match = re.search(r"[-+]?\d*\.?\d+", score_raw)
+            if match:
+                try:
+                    return float(match.group(0))
+                except ValueError:
+                    return None
+        return None
 
-    for q in stored_questions:
+    async def _evaluate_single(q: dict) -> QuestionEvaluationResult:
         qid = q["question_id"]
         u_ans = user_answers_map.get(qid, "").strip()
 
@@ -246,17 +260,20 @@ async def _submit(session_id: str, req: PracticeSubmitRequest):
                 basis=it.get("basis", "教材理论")
             ))
 
-        eval_res = QuestionEvaluationResult(
+        return QuestionEvaluationResult(
             question_id=qid,
-            score_estimate=res.get("score_estimate"),
-            max_score=res.get("max_score"),
+            score_estimate=_parse_score(res.get("score_estimate")),
+            max_score=_parse_score(res.get("max_score")),
             score_basis=res.get("score_basis"),
             keypoints_coverage=cov_items,
             conceptual_errors=res.get("conceptual_errors", []),
             ungrounded_claims=res.get("ungrounded_claims", []),
             expression_rewrite=res.get("expression_rewrite", "答题时应紧扣概念要点，分条列出。")
         )
-        evaluations.append(eval_res)
+
+    evaluations: List[QuestionEvaluationResult] = list(
+        await asyncio.gather(*[_evaluate_single(q) for q in stored_questions])
+    )
 
     # Save to database
     user_answers_list = [{"question_id": a.question_id, "answer_text": a.answer_text} for a in req.answers]

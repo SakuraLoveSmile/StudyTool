@@ -9,7 +9,9 @@
  *    and every surviving string value is scrubbed (secrets, URL query strings, user
  *    paths, document file names).
  * 3. Logging must never break the product: every write is fail-safe, rate limited and
- *    duplicate-aggregated. A broken log directory degrades to an in-memory ring buffer.
+ *    duplicate-aggregated. A broken log directory degrades to an in-memory ring
+ *    buffer plus a bounded pending-write queue that is replayed once writes
+ *    succeed again.
  */
 
 import fs from 'fs';
@@ -41,6 +43,14 @@ export const OMITTED_STRING_MARKER = '…<omitted: oversized string>';
 const MAX_ARRAY_ITEMS = 20;
 const MAX_DEPTH = 4;
 const MEMORY_RING_SIZE = 500;
+/**
+ * Pending-write queue bounds (beta.3 D2): whichever limit is reached first applies.
+ * Bytes are counted per JSONL line in UTF-8 (`JSON.stringify(record) + '\n'`).
+ * Overflow evicts the OLDEST pending record and permanently increments
+ * `droppedPending` — it is never reset.
+ */
+export const PENDING_MAX_ENTRIES = 500;
+export const PENDING_MAX_BYTES = 1024 * 1024;
 
 /**
  * Only these field names may be persisted. Anything else is dropped before writing,
@@ -49,7 +59,7 @@ const MEMORY_RING_SIZE = 500;
 export const FIELD_WHITELIST: ReadonlySet<string> = new Set([
   // core envelope
   'timestamp', 'level', 'source', 'event', 'message', 'session_id', 'instance_id',
-  'app_version', 'platform', 'arch', 'logger', 'phase', 'pid',
+  'app_version', 'platform', 'arch', 'logger', 'phase', 'pid', 'log_record_id',
   // errors / failures
   'error_type', 'error_name', 'error_message', 'stack', 'stack_frames', 'frames',
   'cause_chain', 'exception_type', 'failed_stage', 'stage', 'reason', 'detail',
@@ -60,7 +70,9 @@ export const FIELD_WHITELIST: ReadonlySet<string> = new Set([
   'task_id', 'task_type', 'unit_id', 'unit_index', 'scope', 'call_id', 'attempt',
   // external calls
   'service', 'model', 'endpoint', 'method', 'status_code', 'provider_request_id',
-  'duration_ms', 'timeout_config', 'retry_reason', 'retry_wait_seconds',
+  'duration_ms', 'spawn_elapsed_ms', 'probe_elapsed_ms', 'total_elapsed_ms',
+  'remaining_budget_ms', 'timeout_config', 'failure_reason',
+  'termination_confirmed', 'termination_failed', 'retry_reason', 'retry_wait_seconds',
   'input_chars', 'input_bytes', 'result_count',
   // process lifecycle
   'exit_code', 'signal', 'code', 'killed', 'code_name',
@@ -70,6 +82,9 @@ export const FIELD_WHITELIST: ReadonlySet<string> = new Set([
   'count', 'total', 'ok', 'name', 'id', 'version', 'bytes', 'entries', 'truncated',
   'note', 'action', 'operation', 'route', 'target', 'kind', 'tags', 'has_more',
   'page', 'page_size', 'sources', 'levels',
+  // log-navigation diagnostics (T2a): correlation id + phase details — dropping
+  // these silently would sever the click→guard→mount→query evidence chain.
+  'nav_id', 'trigger', 'to_name', 'elapsed_ms',
 ]);
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
@@ -202,6 +217,11 @@ export interface DiagnosticsOptions {
   aggregationWindowMs?: number;
   maxTrackedKeys?: number;
   now?: () => number;
+  /**
+   * Internal/testing only: cadence of recovery attempts while degraded
+   * (default 3000 ms). Not exposed over IPC.
+   */
+  recoveryIntervalMs?: number;
 }
 
 export interface LogRecordInput {
@@ -239,10 +259,16 @@ export class DiagnosticsLogger {
   private readonly aggregationWindowMs: number;
   private readonly maxTrackedKeys: number;
   private readonly now: () => number;
+  /** Internal/testing only: recovery-attempt cadence while degraded. */
+  private readonly recoveryIntervalMs: number;
 
   private currentSize = 0;
   private degraded = false;
   private closed = false;
+  /** True once initialize() (or the equivalent recovery probe) has succeeded. */
+  private initialized = false;
+  /** Monotonic per-instance counter backing `log_record_id`. */
+  private recordSeq = 0;
 
   private tokenBucket: number;
   private lastRefill: number;
@@ -255,6 +281,16 @@ export class DiagnosticsLogger {
   >();
   private readonly memory: Record<string, unknown>[] = [];
   private extraSources: LogSource[] = [];
+
+  /**
+   * Records accepted while degraded but not yet persisted. Entries carry their
+   * already-minted `log_record_id`; they are removed only after a successful
+   * replay (or when evicted as the oldest under the queue bounds).
+   */
+  private readonly pendingWrites: Array<{ record: Record<string, unknown>; bytes: number }> = [];
+  private pendingBytes = 0;
+  private droppedPending = 0;
+  private recoveryTimer: NodeJS.Timeout | null = null;
 
   constructor(options: DiagnosticsOptions) {
     this.dir = options.dir;
@@ -269,9 +305,13 @@ export class DiagnosticsLogger {
     this.aggregationWindowMs = options.aggregationWindowMs ?? 5000;
     this.maxTrackedKeys = options.maxTrackedKeys ?? 200;
     this.now = options.now ?? (() => Date.now());
+    this.recoveryIntervalMs = options.recoveryIntervalMs ?? 3000;
     this.tokenBucket = this.maxRecordsPerSecond;
     this.lastRefill = this.now();
     this.initialize();
+    // If initialize() already failed we are degraded from birth: start the
+    // recovery cadence immediately so queued records can still reach disk later.
+    this.ensureRecoveryTimer();
   }
 
   private initialize(): void {
@@ -279,6 +319,7 @@ export class DiagnosticsLogger {
       fs.mkdirSync(this.dir, { recursive: true });
       this.currentSize = fs.existsSync(this.file) ? fs.statSync(this.file).size : 0;
       this.cleanupOldFiles();
+      this.initialized = true;
     } catch (err: any) {
       this.degraded = true;
       notifyOnce(`cannot initialize log file (${err?.message || err}); continuing with in-memory buffer only`);
@@ -318,6 +359,24 @@ export class DiagnosticsLogger {
   /** In-memory ring buffer, used as an export fallback when disk writes fail. */
   public getMemoryEntries(): Record<string, unknown>[] {
     return [...this.memory];
+  }
+
+  /**
+   * Snapshot of queued-but-not-yet-persisted records, in original order. Returns
+   * a shallow copy per record — mutating the result never affects the queue.
+   * Only queued records are included (never disk or ring-only records).
+   */
+  public getPendingEntries(): Record<string, unknown>[] {
+    return this.pendingWrites.map((item) => ({ ...item.record }));
+  }
+
+  /** Persistence health — exactly these three fields, nothing else. */
+  public getPersistenceState(): { degraded: boolean; pendingCount: number; droppedPending: number } {
+    return {
+      degraded: this.degraded,
+      pendingCount: this.pendingWrites.length,
+      droppedPending: this.droppedPending,
+    };
   }
 
   public setExtraSources(sources: LogSource[]): void {
@@ -370,10 +429,23 @@ export class DiagnosticsLogger {
     }
   }
 
+  /**
+   * Single funnel for every record that reaches the persistence path (first
+   * writes, aggregate summaries, rate-limit notices, recovery summary). Mints a
+   * fresh `log_record_id` for each one — the id travels with the record into the
+   * memory ring and, while degraded, into the pending-write queue.
+   */
   private writeEntry(entry: Record<string, unknown>): void {
+    this.recordSeq += 1;
+    entry.log_record_id = `${this.sessionId}:${this.source}:${String(this.recordSeq).padStart(8, '0')}`;
     this.memory.push(entry);
     if (this.memory.length > MEMORY_RING_SIZE) this.memory.shift();
-    if (this.degraded || this.closed) return;
+    if (this.closed) return;
+    // Already degraded (including never-initialized): queue for later replay.
+    if (this.degraded) {
+      this.enqueuePending(entry);
+      return;
+    }
 
     let line: string;
     try {
@@ -388,7 +460,123 @@ export class DiagnosticsLogger {
       this.currentSize += bytes;
     } catch (err: any) {
       this.degraded = true;
+      // The record that failed to append is queued as well — nothing is lost.
+      this.enqueuePending(entry);
       notifyOnce(`log write failed (${err?.message || err}); switching to in-memory buffer`);
+      this.ensureRecoveryTimer();
+    }
+  }
+
+  /**
+   * Appends a record to the pending-write queue, then evicts the OLDEST entries
+   * while either bound is exceeded (entry count first-hit or byte budget — both
+   * are enforced every enqueue). `droppedPending` only ever grows.
+   */
+  private enqueuePending(entry: Record<string, unknown>): void {
+    let line: string;
+    try {
+      line = `${JSON.stringify(entry)}\n`;
+    } catch {
+      return; // not serializable — it could never be persisted anyway
+    }
+    const bytes = Buffer.byteLength(line, 'utf8');
+    this.pendingWrites.push({ record: entry, bytes });
+    this.pendingBytes += bytes;
+    while (this.pendingWrites.length > PENDING_MAX_ENTRIES || this.pendingBytes > PENDING_MAX_BYTES) {
+      const evicted = this.pendingWrites.shift();
+      if (!evicted) break;
+      this.pendingBytes -= evicted.bytes;
+      this.droppedPending += 1;
+    }
+  }
+
+  /**
+   * Replays one queued record through the normal rotate+append path WITHOUT
+   * minting a new id or touching the memory ring (the record already lives
+   * there). Returns false on the first write failure so callers can stop.
+   */
+  private replayPending(item: { record: Record<string, unknown>; bytes: number }): boolean {
+    try {
+      const line = `${JSON.stringify(item.record)}\n`;
+      this.rotateIfNeeded(item.bytes);
+      fs.appendFileSync(this.file, line, { encoding: 'utf8' });
+      this.currentSize += item.bytes;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Starts the recovery cadence once degraded. Idempotent; never blocks exit. */
+  private ensureRecoveryTimer(): void {
+    if (this.recoveryTimer || this.closed || !this.degraded) return;
+    this.recoveryTimer = setInterval(() => this.attemptRecovery(), this.recoveryIntervalMs);
+    if (typeof this.recoveryTimer.unref === 'function') this.recoveryTimer.unref();
+  }
+
+  private stopRecoveryTimer(): void {
+    if (!this.recoveryTimer) return;
+    try {
+      clearInterval(this.recoveryTimer);
+    } catch {
+      /* ignore */
+    }
+    this.recoveryTimer = null;
+  }
+
+  /**
+   * One recovery attempt (timer tick):
+   * 1. if initialize() never succeeded, probe with the equivalent (mkdir +
+   *    active file size read) — writes nothing; probe failure ends the attempt;
+   * 2. if the queue is non-empty, replay it in order through the normal
+   *    rotate+append path, stopping at the first failure;
+   * 3. an empty queue (drained or already empty) clears `degraded` — a completed
+   *    drain is summarised by a `log.persistence.recovered` record written
+   *    through the normal path (fresh `log_record_id`).
+   */
+  private attemptRecovery(): void {
+    try {
+      if (this.closed || !this.degraded) {
+        this.stopRecoveryTimer();
+        return;
+      }
+      if (!this.initialized) {
+        try {
+          fs.mkdirSync(this.dir, { recursive: true });
+          this.currentSize = fs.existsSync(this.file) ? fs.statSync(this.file).size : 0;
+          this.initialized = true;
+        } catch {
+          return; // still broken — try again on the next tick
+        }
+      }
+      let drained = 0;
+      while (this.pendingWrites.length > 0) {
+        const item = this.pendingWrites[0];
+        if (!this.replayPending(item)) break;
+        this.pendingWrites.shift();
+        this.pendingBytes -= item.bytes;
+        drained += 1;
+      }
+      if (this.pendingWrites.length > 0) return; // still degraded, keep retrying
+      this.degraded = false;
+      this.stopRecoveryTimer();
+      if (drained > 0) {
+        this.writeEntry(
+          scrubRecord({
+            timestamp: new Date(this.now()).toISOString(),
+            level: 'INFO',
+            source: this.source,
+            event: 'log.persistence.recovered',
+            message: '日志持久化已恢复，待写记录补写完成',
+            session_id: this.sessionId,
+            app_version: this.appVersion,
+            entries: drained,
+            dropped: this.droppedPending,
+          })
+        );
+      }
+    } catch {
+      /* recovery must never throw */
     }
   }
 
@@ -518,6 +706,19 @@ export class DiagnosticsLogger {
   public close(): void {
     try {
       this.flushAggregated();
+    } catch {
+      /* ignore */
+    }
+    this.stopRecoveryTimer();
+    // One synchronous best-effort pass over whatever is still queued: ordered,
+    // stops at the first failure, never blocks and never throws.
+    try {
+      while (this.pendingWrites.length > 0) {
+        const item = this.pendingWrites[0];
+        if (!this.replayPending(item)) break;
+        this.pendingWrites.shift();
+        this.pendingBytes -= item.bytes;
+      }
     } catch {
       /* ignore */
     }

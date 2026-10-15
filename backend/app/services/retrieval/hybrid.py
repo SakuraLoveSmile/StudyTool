@@ -22,9 +22,15 @@ class HybridSearchService:
         # 1. FTS5 Search
         fts_results = FTSSearchService.search(query, limit=top_k * 2)
         
-        # 2. Vector Search
-        query_vec = await EmbeddingService.get_embedding(query)
-        vec_results = cls._vector_search(query_vec, limit=top_k * 2, doc_type_filter=doc_type_filter)
+        # 2. Vector Search (with graceful fallback to pure FTS5 on failure or lock)
+        is_degraded = False
+        try:
+            query_vec = await EmbeddingService.get_embedding(query)
+            vec_results = cls._vector_search(query_vec, limit=top_k * 2, doc_type_filter=doc_type_filter)
+        except Exception as exc:
+            logger.warning("Vector search unavailable, falling back to pure FTS5: %s", exc)
+            vec_results = []
+            is_degraded = True
 
         # 3. Reciprocal Rank Fusion (RRF)
         k = 60
@@ -49,6 +55,8 @@ class HybridSearchService:
         for cid in sorted_ids[:top_k]:
             item = chunk_map[cid]
             item["rrf_score"] = rrf_scores[cid]
+            if is_degraded:
+                item["degraded"] = True
             final_results.append(item)
 
         return final_results

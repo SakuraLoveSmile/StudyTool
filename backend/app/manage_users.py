@@ -7,7 +7,7 @@ from app.auth import disable_user, enabled_user_ids, init_auth_db, provision_use
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Manage RAG users")
+    parser = argparse.ArgumentParser(description="Manage StudyTool users")
     sub = parser.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create"); create.add_argument("username")
     disable = sub.add_parser("disable"); disable.add_argument("username")

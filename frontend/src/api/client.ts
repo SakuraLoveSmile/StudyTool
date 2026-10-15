@@ -2,7 +2,8 @@ import axios, { AxiosError } from 'axios';
 import type {
   DocumentItem, DocumentChunk, QuestionItem, KnowledgePoint,
   KnowledgePointStats, OverallStats, StudyCard, PracticeSession, TaskStatus, AnswerCandidate,
-  TaskEventsResponse
+  TaskEventsResponse, ExtractionBatch, CandidateSourceReview, CandidateSourceReviewPayload, ExtractionCandidate,
+  CandidateDecisionItem, ApplyCandidatesResponse
 } from '../types';
 import type {
   CardRevision,
@@ -262,6 +263,18 @@ export const apiClient = {
   },
 
   // Extraction
+  listExtractions: async (params?: { pending_only?: boolean; limit?: number; offset?: number }): Promise<{ items: ExtractionBatch[]; total: number }> => {
+    const res = await api.get('/analysis/extractions', { params });
+    return res.data;
+  },
+  getCandidateSourceReview: async (batchId: string, candidateId: string): Promise<CandidateSourceReview> => {
+    const res = await api.get(`/analysis/extractions/${encodeURIComponent(batchId)}/candidates/${encodeURIComponent(candidateId)}/source-review`);
+    return res.data;
+  },
+  confirmCandidateSourceReview: async (batchId: string, candidateId: string, payload: CandidateSourceReviewPayload): Promise<ExtractionCandidate> => {
+    const res = await api.post(`/analysis/extractions/${encodeURIComponent(batchId)}/candidates/${encodeURIComponent(candidateId)}/source-review`, payload);
+    return res.data;
+  },
   createExtraction: async (doc_ids: string[]) => {
     const res = await api.post('/analysis/extractions', { doc_ids });
     return res.data;
@@ -270,11 +283,20 @@ export const apiClient = {
     const res = await api.get(`/analysis/extractions/${extractionId}`);
     return res.data;
   },
+  getLatestExtraction: async (): Promise<ExtractionBatch | null> => {
+    try {
+      const res = await api.get('/analysis/extractions/latest');
+      return res.data;
+    } catch (err: any) {
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
+  },
   getExtractionCandidates: async (extractionId: string) => {
     const res = await api.get(`/analysis/extractions/${extractionId}/candidates`);
     return res.data;
   },
-  applyCandidates: async (extractionId: string, decisions: any[]) => {
+  applyCandidates: async (extractionId: string, decisions: CandidateDecisionItem[]): Promise<ApplyCandidatesResponse> => {
     const res = await api.post(`/analysis/extractions/${extractionId}/apply`, { decisions });
     return res.data;
   },

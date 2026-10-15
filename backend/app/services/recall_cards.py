@@ -644,7 +644,7 @@ class RecallCardsService:
                     """
                     UPDATE learning_progress
                     SET content_revision_no = ?, state = 'new', status = 'new',
-                        interval_index = 0, repetitions = 0, interval_days = 0,
+                        interval_index = 0, new_round = 0, repetitions = 0, interval_days = 0,
                         ease_factor = 2.5, due_date = NULL, due_at = NULL,
                         first_study_date = NULL, last_studied_at = NULL,
                         last_reviewed_at = NULL, review_count = 0, reset_at = ?,

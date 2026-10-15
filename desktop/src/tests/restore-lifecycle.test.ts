@@ -26,7 +26,7 @@ test('BackendManager: executeRestoreWithRollback rejects invalid JSON CLI output
   fs.mkdirSync(snapshotDir, { recursive: true });
   fs.writeFileSync(path.join(snapshotDir, 'original_file.txt'), 'original content');
 
-  process.env.RAG_DESKTOP_DATA_DIR = rootDir;
+  process.env.STUDYTOOL_DESKTOP_DATA_DIR = rootDir;
 
   const store = new CredentialsStore(rootDir, dummyStorage);
   const manager = new BackendManager(18764, '127.0.0.1', 'token-test', store, false);
@@ -56,7 +56,7 @@ test('BackendManager: executeRestoreWithRollback rejects CLI output missing requ
   const rootDir = createTempDir('rag-test-restore-missing-fields-');
   const dataDir = path.join(rootDir, 'data');
   fs.mkdirSync(dataDir, { recursive: true });
-  process.env.RAG_DESKTOP_DATA_DIR = rootDir;
+  process.env.STUDYTOOL_DESKTOP_DATA_DIR = rootDir;
 
   const store = new CredentialsStore(rootDir, dummyStorage);
   const manager = new BackendManager(18764, '127.0.0.1', 'token-test', store, false);
@@ -87,7 +87,7 @@ test('BackendManager: executeRestoreWithRollback preserves failure scene and rol
   fs.mkdirSync(snapshotDir, { recursive: true });
   fs.writeFileSync(path.join(snapshotDir, 'healthy_old_file.txt'), 'healthy data');
 
-  process.env.RAG_DESKTOP_DATA_DIR = rootDir;
+  process.env.STUDYTOOL_DESKTOP_DATA_DIR = rootDir;
 
   const store = new CredentialsStore(rootDir, dummyStorage);
   const manager = new BackendManager(18764, '127.0.0.1', 'token-test', store, false);
@@ -147,7 +147,7 @@ test('BackendManager: executeRestoreWithRollback returns ok and vector_locked fl
   const snapshotDir = path.join(rootDir, 'data-pre-restore-11111-2222');
   fs.mkdirSync(snapshotDir, { recursive: true });
 
-  process.env.RAG_DESKTOP_DATA_DIR = rootDir;
+  process.env.STUDYTOOL_DESKTOP_DATA_DIR = rootDir;
 
   const store = new CredentialsStore(rootDir, dummyStorage);
   const manager = new BackendManager(18764, '127.0.0.1', 'token-test', store, false);

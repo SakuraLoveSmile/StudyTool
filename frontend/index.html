@@ -4,7 +4,30 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>考研专业课备考助手</title>
+    <title>学习助手</title>
+    <script>
+      // 首屏绘制前确定主题，避免浅色闪烁。
+      // 真源顺序：桌面 preload 注入的 initialTheme（主进程偏好）> localStorage > 跟随系统。
+      (function () {
+        try {
+          var desktop = window.desktopAPI && window.desktopAPI.initialTheme;
+          var effective = desktop && (desktop.effective === 'dark' || desktop.effective === 'light')
+            ? desktop.effective
+            : null;
+          if (!effective) {
+            var raw = null;
+            try { raw = window.localStorage.getItem('studytool:theme'); } catch (e) { /* 存储不可用按跟随系统处理 */ }
+            var pref = (raw === 'light' || raw === 'dark' || raw === 'system') ? raw : 'system';
+            effective = pref === 'system'
+              ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+              : pref;
+          }
+          var root = document.documentElement;
+          root.dataset.theme = effective;
+          root.style.colorScheme = effective;
+        } catch (e) { /* 初始化失败保持默认浅色，运行时仍可切换 */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

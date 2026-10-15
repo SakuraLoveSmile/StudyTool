@@ -294,7 +294,6 @@ def _round_from_state(state: Mapping[str, Any]) -> int:
         "new_rounds_completed",
         "round",
         "rounds_completed",
-        "repetitions",
     )
     if raw is None:
         return 0
@@ -577,15 +576,17 @@ def transition_state(
 
     if normalized_rating == "fuzzy":
         next_index = current_index
+        next_days = 1
     else:  # mastered
         next_index = min(current_index + 1, len(INTERVAL_DAYS) - 1)
+        next_days = INTERVAL_DAYS[next_index]
 
     return _result_state(
         current,
         status=STATUS_REVIEW,
         interval_index=next_index,
         new_round=NEW_CARD_ROUNDS,
-        next_date=current_date + timedelta(days=INTERVAL_DAYS[next_index]),
+        next_date=current_date + timedelta(days=next_days),
         review_date=current_date,
         rating=normalized_rating,
         carryover=carried,

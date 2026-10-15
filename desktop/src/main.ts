@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, session } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -6,6 +6,7 @@ import http from 'http';
 import { autoUpdater } from 'electron-updater';
 import { CancellationToken } from 'electron-updater/out/types';
 import { isPortAvailable } from './port-checker';
+import { ensureAppDataMigration } from './app-paths';
 import { CredentialsStore, CredentialsUpdateRequest } from './credentials-store';
 import { BackendManager } from './backend-manager';
 import {
@@ -18,14 +19,26 @@ import {
   DiagnosticsLogger,
   getDiagnostics,
   initDiagnostics,
+  scrubString,
   type LogLevel,
 } from './diagnostics';
 import { writeArchiveAtomically } from './diagnostic-export';
 import { LogWorkerService, type LogJobError } from './log-workers';
 import {
   classifyConnectionTestTransportFailure,
+  DEFAULT_BACKEND_REQUEST_TIMEOUT_MS,
   normalizeConnectionTestResult,
+  resolveConnectionTestTimeoutMs,
+  terminateRequestOnTimeout,
 } from './connection-test';
+import {
+  ThemePreferenceStore,
+  normalizeThemePreference,
+  resolveEffectiveTheme,
+  windowBackgroundFor,
+  type ThemePayload,
+  type ThemePreference,
+} from './theme-prefs';
 
 const PORT = 18764;
 const HOST = '127.0.0.1';
@@ -199,7 +212,13 @@ if (!gotTheLock) {
 
 // 2. Generate random 32-byte instance token for this launch
 const instanceToken = crypto.randomBytes(32).toString('hex');
+// 更名 StudyTool / 学习助手 后的一次性数据根目录迁移：必须在任何存储组件
+// （凭据 / 外观偏好 / 日志）解析路径之前执行，失败只回退旧目录。
+ensureAppDataMigration();
 const credentialsStore = new CredentialsStore();
+/** 外观偏好独立成文件，不与模型密钥/学习数据混存（T3）。 */
+const themeStore = new ThemePreferenceStore();
+let themePreference: ThemePreference = 'system';
 backendManager = new BackendManager(PORT, HOST, instanceToken, credentialsStore, app.isPackaged, {
   onEvent: (event, level, message, fields) => {
     // Resolved lazily: the logger is initialized immediately after this and the hook is
@@ -212,9 +231,9 @@ backendManager = new BackendManager(PORT, HOST, instanceToken, credentialsStore,
 // spawned — so a startup failure still leaves evidence on disk. One session id is minted
 // per launch and shared by the desktop / backend / frontend log streams.
 const SESSION_ID =
-  (process.env.RAG_SESSION_ID || '').trim() || `sess-${crypto.randomBytes(4).toString('hex')}`;
-process.env.RAG_SESSION_ID = SESSION_ID;
-process.env.RAG_APP_VERSION = app.getVersion();
+  (process.env.STUDYTOOL_SESSION_ID || '').trim() || `sess-${crypto.randomBytes(4).toString('hex')}`;
+process.env.STUDYTOOL_SESSION_ID = SESSION_ID;
+process.env.STUDYTOOL_APP_VERSION = app.getVersion();
 
 const LOG_DIR = backendManager.getLogDir();
 const desktopLogger: DiagnosticsLogger = initDiagnostics({
@@ -271,6 +290,48 @@ function diagError(event: string, message: string, fields: Record<string, unknow
 
 function currentLogDir(): string {
   return getDiagnostics()?.getLogDir() || backendManager!.getLogDir();
+}
+
+/**
+ * Ensures the log directory exists and opens it in the OS file manager.
+ * `shell.openPath` resolves with an error string instead of rejecting, so both the
+ * mkdir and the open result must be checked — swallowing either is what used to make
+ * "打开日志目录" fail silently. Returns a sanitized error detail or null on success.
+ */
+async function openLogDirInShell(): Promise<string | null> {
+  const logDir = currentLogDir();
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+  } catch (err: any) {
+    diagWarn('diagnostics.logdir.create_failed', '日志目录创建失败', { error_message: err?.message });
+    return scrubString(err?.message || String(err));
+  }
+  try {
+    const openError = await shell.openPath(logDir);
+    if (openError) {
+      diagWarn('diagnostics.logdir.open_failed', '打开日志目录失败', { error_message: openError });
+      return scrubString(openError);
+    }
+    return null;
+  } catch (err: any) {
+    diagWarn('diagnostics.logdir.open_failed', '打开日志目录失败', { error_message: err?.message });
+    return scrubString(err?.message || String(err));
+  }
+}
+
+function currentThemePayload(): ThemePayload {
+  return { preference: themePreference, effective: resolveEffectiveTheme(themePreference) };
+}
+
+/**
+ * 主题变更广播：网页只消费主进程结论；窗口背景同步刷新，保证 resize 露出的底色不闪白。
+ * 未挂窗口时静默跳过（preload 首次拉取仍走 theme-sync 通道）。
+ */
+function publishTheme(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(windowBackgroundFor(themePreference));
+    mainWindow.webContents.send('desktop:theme-changed', currentThemePayload());
+  }
 }
 
 /**
@@ -480,6 +541,7 @@ async function exportDiagnostics(range: {
   path?: string;
   entries?: number;
   truncated?: boolean;
+  incomplete?: boolean;
   message?: string;
   code?: string;
   elapsedMs?: number;
@@ -502,6 +564,16 @@ async function exportDiagnostics(range: {
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
 
   const requestId = nextRequestId('e');
+  // Immutable snapshots of not-yet-persisted records: the export must carry them even
+  // when the disk files already hold older entries, and the count of queue-overflow
+  // drops is disclosed in the manifest instead of silently claiming completeness.
+  const pendingEntries = [
+    ...(logger?.getPendingEntries() ?? []),
+    ...frontendLogger.getPendingEntries(),
+  ];
+  const droppedPendingEntries =
+    (logger?.getPersistenceState().droppedPending ?? 0) +
+    frontendLogger.getPersistenceState().droppedPending;
   const outcome = await logWorkers.exportArchive(requestId, {
     dir: currentLogDir(),
     appVersion: app.getVersion(),
@@ -509,6 +581,8 @@ async function exportDiagnostics(range: {
     from: range.from,
     to: range.to,
     memoryFallback: logger?.getMemoryEntries() ?? [],
+    pendingEntries,
+    droppedPendingEntries,
   });
 
   if (!outcome.ok) {
@@ -540,6 +614,7 @@ async function exportDiagnostics(range: {
       path: result.filePath,
       entries: outcome.value.entries,
       truncated: outcome.value.truncated,
+      incomplete: outcome.value.incomplete,
       elapsedMs: outcome.elapsedMs,
     };
   } catch (err: any) {
@@ -583,11 +658,8 @@ async function showStartupFailureDialog(context: {
       : dialog.showMessageBoxSync(options);
 
     if (choice === 0) {
-      try {
-        await shell.openPath(currentLogDir());
-      } catch {
-        /* ignore */
-      }
+      const openError = await openLogDirInShell();
+      extra = openError ? `无法打开日志目录：${openError}` : '';
       continue;
     }
     if (choice === 1) {
@@ -596,7 +668,9 @@ async function showStartupFailureDialog(context: {
         to: Date.now(),
       });
       extra = result.ok
-        ? `诊断包已导出：${result.path}（${result.entries ?? 0} 条记录${result.truncated ? '，已截断' : ''}）`
+        ? `诊断包已导出：${result.path}（${result.entries ?? 0} 条记录${result.truncated ? '，已截断' : ''}${
+            result.incomplete ? '，部分内容不完整或来自内存，详情见 MANIFEST.json' : ''
+          }）`
         : result.canceled
           ? '已取消导出，未生成任何文件。'
           : `导出失败：${result.message ?? '未知错误'}`;
@@ -620,22 +694,24 @@ function validateIpcSender(event: Electron.IpcMainInvokeEvent): void {
 function makeBackendRequest(
   method: string,
   apiPath: string,
-  body?: any
+  body?: any,
+  timeoutMs: number = DEFAULT_BACKEND_REQUEST_TIMEOUT_MS
 ): Promise<{ status: number; data: any }> {
   return new Promise((resolve, reject) => {
     const postData = body ? JSON.stringify(body) : '';
+    const target = `${BASE_URL}${apiPath}`;
     const req = http.request(
-      `${BASE_URL}${apiPath}`,
+      target,
       {
         method,
         headers: {
           'Content-Type': 'application/json',
-          'X-RAG-Instance-Token': instanceToken,
+          'X-StudyTool-Instance-Token': instanceToken,
           Host: `${HOST}:${PORT}`,
           Origin: BASE_URL,
           ...(body ? { 'Content-Length': Buffer.byteLength(postData) } : {}),
         },
-        timeout: 15000,
+        timeout: timeoutMs,
       },
       (res) => {
         let raw = '';
@@ -651,6 +727,9 @@ function makeBackendRequest(
       }
     );
 
+    // `timeout` 选项本身不会终止请求：超时必须 destroy，否则留下悬挂 socket、
+    // 渲染端只能等到自己的超时（OCR 连接测试要等 315 秒，这一点尤其关键）。
+    terminateRequestOnTimeout(req, timeoutMs, target);
     req.on('error', (err) => reject(err));
     if (postData) req.write(postData);
     req.end();
@@ -799,7 +878,9 @@ async function createWindow() {
     height: 860,
     minWidth: 1024,
     minHeight: 700,
-    title: '专业课备考助手',
+    title: '学习助手',
+    // 与实际主题一致的预渲染底色：深色模式下冷启动不闪白。
+    backgroundColor: windowBackgroundFor(themePreference),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       sandbox: true,
@@ -876,6 +957,13 @@ app.whenReady().then(async () => {
     app_version: app.getVersion(),
   });
 
+  // 外观偏好必须在窗口创建前生效：nativeTheme 是原生标题栏/系统对话框与
+  // prefers-color-scheme 的共同真源，窗口底色也按同一结论预设。
+  themePreference = themeStore.load();
+  nativeTheme.themeSource = themePreference;
+  // 系统主题翻转时广播最新结论（偏好为 system 时渲染端据此切换实际主题）。
+  nativeTheme.on('updated', publishTheme);
+
   // Setup session filter: inject instance token ONLY into local backend requests from mainWindow
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     if (mainWindow && details.webContentsId !== mainWindow.webContents.id) {
@@ -890,7 +978,7 @@ app.whenReady().then(async () => {
         (url.hostname === '127.0.0.1' || url.hostname === 'localhost') &&
         String(url.port) === String(PORT)
       ) {
-        details.requestHeaders['X-RAG-Instance-Token'] = instanceToken;
+        details.requestHeaders['X-StudyTool-Instance-Token'] = instanceToken;
       }
     } catch {
       // ignore
@@ -900,6 +988,7 @@ app.whenReady().then(async () => {
 
   // Check port availability
   let portAvailable = await isPortAvailable(PORT, HOST);
+  let portDialogExtra = '';
   while (!portAvailable) {
     diagWarn('startup.port.conflict', '端口已被占用，等待用户处理', { target: `${HOST}:${PORT}` });
     const choice = dialog.showMessageBoxSync({
@@ -909,7 +998,10 @@ app.whenReady().then(async () => {
       detail: [
         `桌面版固定使用 http://${HOST}:${PORT} 保证安全来源与反馈组件正常工作。请关闭冲突程序后重试。`,
         `日志目录：${currentLogDir()}`,
-      ].join('\n'),
+        portDialogExtra,
+      ]
+        .filter(Boolean)
+        .join('\n'),
       buttons: ['重试', '打开日志目录', '导出诊断包', '退出程序'],
       defaultId: 0,
       cancelId: 3,
@@ -917,11 +1009,8 @@ app.whenReady().then(async () => {
     });
 
     if (choice === 1) {
-      try {
-        await shell.openPath(currentLogDir());
-      } catch {
-        /* ignore */
-      }
+      const openError = await openLogDirInShell();
+      portDialogExtra = openError ? `无法打开日志目录：${openError}` : '';
       continue;
     }
     if (choice === 2) {
@@ -1109,15 +1198,23 @@ function setupIpcHandlers() {
   ipcMain.handle('desktop:testConnection', async (event, serviceType, customConfig) => {
     validateIpcSender(event);
     const startedAt = Date.now();
+    // PP-OCRv6 是异步 jobs 识别，一次探针要等任务排队与轮询，因此 OCR 单独放宽到 315 秒；
+    // 其余服务（llm/embedding）保持原有 15 秒等待上限。
+    const timeoutMs = resolveConnectionTestTimeoutMs(serviceType);
     try {
-      const res = await makeBackendRequest('POST', '/api/desktop/test-connection', {
-        service_type: serviceType,
-        base_url: customConfig?.base_url,
-        model: customConfig?.model,
-        api_key: customConfig?.api_key,
-        baidu_ocr_url: customConfig?.baidu_ocr_url,
-        baidu_ocr_token: customConfig?.baidu_ocr_token,
-      });
+      const res = await makeBackendRequest(
+        'POST',
+        '/api/desktop/test-connection',
+        {
+          service_type: serviceType,
+          base_url: customConfig?.base_url,
+          model: customConfig?.model,
+          api_key: customConfig?.api_key,
+          baidu_ocr_url: customConfig?.baidu_ocr_url,
+          baidu_ocr_token: customConfig?.baidu_ocr_token,
+        },
+        timeoutMs
+      );
       const outcome = normalizeConnectionTestResult(
         serviceType,
         res.status,
@@ -1183,7 +1280,7 @@ function setupIpcHandlers() {
     if (!mainWindow) return null;
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择恢复数据备份包',
-      filters: [{ name: 'RAG 归档文件', extensions: ['tar.gz', 'tgz', 'gz'] }],
+      filters: [{ name: '学习助手 归档文件', extensions: ['tar.gz', 'tgz', 'gz'] }],
       properties: ['openFile'],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
@@ -1196,8 +1293,8 @@ function setupIpcHandlers() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '选择备份导出保存位置',
-      defaultPath: `rag-backup-${stamp}.tar.gz`,
-      filters: [{ name: 'RAG 归档文件', extensions: ['tar.gz'] }],
+      defaultPath: `studytool-backup-${stamp}.tar.gz`,
+      filters: [{ name: '学习助手 归档文件', extensions: ['tar.gz'] }],
     });
     if (result.canceled || !result.filePath) return null;
     return result.filePath;
@@ -1351,11 +1448,10 @@ function setupIpcHandlers() {
     }
   });
 
-  ipcMain.handle('desktop:openLogDirectory', (event) => {
+  ipcMain.handle('desktop:openLogDirectory', async (event) => {
     validateIpcSender(event);
-    const logDir = currentLogDir();
-    fs.mkdirSync(logDir, { recursive: true });
-    shell.openPath(logDir);
+    const openError = await openLogDirInShell();
+    return openError ? { ok: false, message: `无法打开日志目录（${openError}）` } : { ok: true };
   });
 
   // --- Test-build diagnostics surface (restricted IPC) --------------------------------
@@ -1394,6 +1490,64 @@ function setupIpcHandlers() {
   ipcMain.handle('desktop:exportDiagnostics', async (event, params: unknown) => {
     validateIpcSender(event);
     return exportDiagnostics(normalizeRange(params));
+  });
+
+  // Feedback attachment collection. The renderer cannot pick paths, ranges or
+  // filenames: the main process supplies the log dir, this launch's session id
+  // and the frozen 30-minute window, and the worker answers with the frozen
+  // FeedbackLogsResult contract verbatim.
+  ipcMain.handle('desktop:getFeedbackLogs', async (event) => {
+    validateIpcSender(event);
+    const outcome = await logWorkers.feedback(nextRequestId('fb'), {
+      dir: currentLogDir(),
+      sessionId: SESSION_ID,
+      appVersion: app.getVersion(),
+      now: Date.now(),
+    });
+    if (!outcome.ok) {
+      if (outcome.error.code !== 'LOG_FEEDBACK_CANCELED') {
+        diagWarn('diagnostics.feedback.failed', '反馈日志采集失败', {
+          code: outcome.error.code,
+          error_message: outcome.error.message,
+          duration_ms: outcome.error.elapsedMs,
+        });
+      }
+      // scrubString collapses absolute/home paths to <path>: a worker crash message
+      // can carry the unpacked module path, which must never reach the renderer.
+      return { ok: false, code: outcome.error.code, message: scrubString(outcome.error.message) };
+    }
+    return outcome.value;
+  });
+
+  // --- Appearance (restricted IPC) -----------------------------------------------------
+  // 偏好唯一存放在主进程文件；网页端不读不写本地存储，避免两处真源互相覆盖。
+  // theme-sync 是同步通道：preload 必须在首帧前拿到结论，sendSync 是唯一不闪白的途径。
+  ipcMain.on('desktop:theme-sync', (event) => {
+    try {
+      validateIpcSender(event as unknown as Electron.IpcMainInvokeEvent);
+      event.returnValue = currentThemePayload();
+    } catch {
+      event.returnValue = { preference: 'system', effective: resolveEffectiveTheme('system') };
+    }
+  });
+
+  ipcMain.handle('desktop:getThemePreference', (event) => {
+    validateIpcSender(event);
+    return currentThemePayload();
+  });
+
+  ipcMain.handle('desktop:setThemePreference', (event, raw: unknown) => {
+    validateIpcSender(event);
+    const next = normalizeThemePreference(raw);
+    try {
+      themeStore.save(next);
+    } catch (err: any) {
+      return { ok: false, message: err?.message || '外观偏好保存失败', ...currentThemePayload() };
+    }
+    themePreference = next;
+    nativeTheme.themeSource = next;
+    publishTheme();
+    return { ok: true, ...currentThemePayload() };
   });
 }
 

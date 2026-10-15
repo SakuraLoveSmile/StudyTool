@@ -422,6 +422,149 @@ OPTIONS https://feedback.xn--fhqths51enha.cn/api/auth/login
 | | 导出与取消 | 原生保存对话框导出 ZIP（脱敏日志 + 版本/平台/校验值清单），默认 24 小时、最多 7 天、原始日志上限 20 MiB 且截断有标注；取消不留半成品，不打包数据库、资料或凭据 | 实现中（打包、截断与原子写入已测；原生对话框取消路径待实机） |
 | **Feedback 发布配置门禁**（本轮 T4） | 发布构建注入反馈配置 | Windows 发布构建显式注入 `https://feedback.xn--fhqths51enha.cn` 与 `appId=rag`，不依赖 `.env.local`；缺失或地址无效即构建失败 | 已通过（2026-09-15 Windows CI 实跑：校验步骤通过、构建通过；单测证明缺失/非法即失败） |
 | | 实际挂载与截图遮罩 | 安装包内反馈入口可见、独立登录可用、日志详情区域默认截图遮罩、外部链接走系统浏览器；不得以组件文件存在替代实际挂载验证 | 实现中（日志详情已加截图遮罩；**实际挂载尚未验证**） |
+| **安装器启动崩溃加固与冒烟**（T1.1/T1.2） | NSIS 安全目录读取补丁 | 回移上游 `a356198`：`Push/Pop` 保护寄存器替换 `System::Store`，`lstrcpynW` 限制长度，`CoTaskMemFree` 安全释放；`beforePack` 钩子自动应用，首次/幂等/版本不符/模板漂移硬门禁全部单测通过 | 已通过（自动化单测全绿） |
+| | 安装冒烟测试脚本与 CI 拦截 | 提供 `smoke-windows-installer.ps1`，环境隔离检测（拒碰已有安装）、`/S /currentuser` 静默安装、180s 超时强杀、崩溃取证；CI 构建后发布前强制门禁，失败阻止发布但保留证据 | 已通过（CI run `35509516465` 冒烟结论 SUCCESS；门禁在前三次运行中实际拦截了 3 个问题） |
+| | 候选包与实机验收规程（T1.3） | 升级至 `1.0.6-beta.6`，精确锁定 `electron-builder@25.1.8`；编制 `e2e/windows-sandbox/acceptance-runbook.md`，制定 Win11 build 26200 连续 3 次取消再安装验证及 Win10 兼容性验收 | 待体验（候选包已发布为 Pre-release，待在干净实机执行验收） |
+
+---
+
+## Windows 安装器启动崩溃修复与 1.0.6-beta.6 执行记录
+
+### 1. 背景与根因
+- 在 Windows 11 build 26200 环境下测试 beta.4 安装包时，启动向导初始化出现 `System.dll / 0xc0000005 / 0x1581` 内存访问越界崩溃。
+- 根因：`electron-builder@25.1.8` 附带的 `app-builder-lib/templates/nsis/multiUser.nsh` 中，在读取用户程序目录（`FOLDERID_UserProgramFiles`）时使用了 `System::Store S` 与 `System::Store L`，以及不安全的内存直读操作 `*$2(&w${NSIS_MAX_STRLEN} .s)`，在高版本 Windows 内核下导致寄存器上下文损坏或指针越界。
+
+### 2. 修复任务与落地情况
+- **T1.1 修复安装目录读取（补丁与 beforePack 钩子）**：
+  - 精确采用上游 commit `a356198ec7c54c7795659342bff36d9a5162cd93`。
+  - 使用 `Push $1` / `Push $2` 与 `Pop $2` / `Pop $1` 保护寄存器，移除问题 `System::Store`。
+  - 初始化 `StrCpy $2 0`，调用 Win32 `KERNEL32::lstrcpynW` 限制长度安全复制字符串。
+  - 无论 API 是否成功，只要分配指针不为 0 即调用 `OLE32::CoTaskMemFree(p r2)` 释放系统返回内存。
+  - 保留历史已安装目录识别、用户程序自定义目录、查询失败时的 `$LocalAppData\Programs` 默认回退以及 `/D` 参数覆写行为。
+  - 编写 `desktop/scripts/patch-nsis-template.js`，作为 CommonJS `beforePack` 钩子配置在 `desktop/electron-builder.json5`。
+  - 严格校验 `app-builder-lib` 版本（必须精确为 25.1.8），核验原始模板 SHA256（`afa90464...`）与已修补 SHA256（`519a2338...`）；未知漂移立即中断构建；重复运行零写盘幂等。
+  - 自动化单元测试 `desktop/tests/patch-nsis-template.test.js`（Node 内置 test runner）：首次应用、幂等性、版本错误防御、模板漂移防御 4 大场景共 6 项测试 100% 通过。
+- **T1.2 防止再次发布未经安装验证的包（冒烟脚本与 CI 门禁）**：
+  - 新增 `desktop/scripts/smoke-windows-installer.ps1`：
+    - 参数：`-InstallerPath`、`-EvidenceDir`、`-TimeoutSeconds`（默认 180s）。
+    - 严格隔离检测：执行前核对注册表配置项、卸载项、默认安装目录及运行进程，检测到已有安装立即抛出异常并以非零退出，绝不触碰已有环境。
+    - 静默安装：`/S /currentuser` 参数运行。
+    - 超时守护：180 秒超时自动通过 `taskkill` 强杀子进程树。
+    - 崩溃取证：采集最近 Application 与 System 事件日志，定向过滤 `System.dll`、`0xc0000005`、`Application Error` 导出到 `installer-crash-events.txt` 与 `smoke-summary.json`。
+    - 完整性校验：退出码 0、主 exe 存在、卸载项生成，全部满足退出 0，任一失败退出 1。
+  - 接入现有 CI（`.github/workflows/windows-desktop-release.yml`）：
+    - 在打包构建完成后、向 Releases 发布之前接入冒烟步骤；
+    - 冒烟失败自动阻止后续发布步骤，但通过 `if: always()` 将证据作为 Artifact 上传。
+  - 发布清单增强（`desktop/scripts/build-release.py`）：
+    - 在 `RELEASE_MANIFEST.json` 中注入 `builder_version: 25.1.8`、`upstream_patch_commit: a356198...` 与 `patched_template_sha256: 519a2338...`。
+- **T1.3 候选包与兼容性验收规程**：
+  - 桌面端版本升级为 `1.0.6-beta.6`，`package.json` 与 `package-lock.json` 精确锁定 `electron-builder` 为 `25.1.8`。
+  - 更新 `e2e/windows-sandbox/acceptance-runbook.md`，确立三条红线（全流程合成数据、严禁真实生产提交、强制收尾清理）。
+  - 制定原故障 Windows 11 build 26200 专项验收：连续 3 次打开向导并取消（验证解压与取消阶段不崩溃）、第 4 次完成安装、桌面与开始菜单快捷方式启动、退出后重启；核查无 `System.dll` 事件。
+  - 制定 Windows 10 x64 路径兼容性、覆盖升级数据保留、卸载后重装验证方案。
+
+### 3. 候选包发布与 CI 实测证据（2026-09-20）
+
+- **已发布候选包**：GitHub Pre-release `desktop-v1.0.6-beta.6`（仓库 `SakuraLoveSmile/StudyTool-Releases`），资产为安装包、`.blockmap`、`latest.yml`、`RELEASE_MANIFEST.json`、`SHA256SUMS.txt`；`latest` 仍指向 `desktop-v1.0.5`，旧包未被覆盖或改写。
+- **候选包 SHA256**：`d64069d3d9dbb94db27c28c4290b85874e91e0d28018e8710e1e9e4bc89d5db8`（安装包与清单一致）。
+- **打包元数据**（`RELEASE_MANIFEST.json` 的 `packaging` 段）：`builder_version = 25.1.8`、`upstream_patch_commit = a356198ec7c54c7795659342bff36d9a5162cd93`、`patched_template_sha256 = 519a23385d3b3da4ce3925f9b9c34e2b8d2b98a1bcc8a510f721f56cffe910ee`。
+- **CI 实测**：运行 `35509516465` 全绿（5m28s），发布前安装冒烟门禁通过，冒烟结论 `SUCCESS`：
+  - 安装退出码 `0`、耗时 24.43 秒、未超时；隔离预检 `precheck_clean = true`；
+  - 卸载注册项已写入（`RAG备考助手 1.0.6-beta.6`）；
+  - 主程序实际落盘位置 `%LOCALAPPDATA%\Programs\rag-study-assistant-desktop\RAG备考助手.exe`；
+  - `critical_system_dll_crash = false`，事件日志中无 `System.dll` / `0xc0000005` / `Application Error` 记录。
+- **门禁有效性实证**：该门禁并非空转——同一候选包在前三次运行中依次拦截了 3 个真实缺陷（`node.cmd` 不存在导致打包中断、PowerShell 脚本缺 UTF-8 BOM 导致 PS 5.1 解析失败、冒烟脚本按错误目录名/程序名硬编码查找主程序），修复后第四次运行才放行发布。
+- **注意（验收边界）**：CI runner 为 Windows Server 2022，**不等于**原故障机 Windows 11 build 26200；上述结论只证明“打包产物可被静默安装且无对应崩溃事件”，交互向导的连续取消/安装/快捷方式启动仍需按手册在真机执行。
+
+### 4. 当前状态与结论
+- **状态**：**待体验**（本地自动化单测 135 项全绿、代码审查 PASS、候选包已通过 CI 安装冒烟并发布为 Pre-release；待在干净 Windows 11 build 26200 原故障实机执行交互验收）。
+
+---
+
+## 产品更名 StudyTool / 学习助手 与 1.0.7-beta.1 发布记录
+
+### 1. 背景与目标
+- 产品更名：用户可见名称统一为「学习助手」，包名 `studytool`，appId `com.sakurasep.studytool`，数据根目录 `StudyTool`，内部契约 `STUDYTOOL_*` / `X-StudyTool-Instance-Token`。
+- 数据零丢失：主进程启动时一次性把遗留的 `RAGStudyAssistant` 根目录整体改名为 `StudyTool`；新旧并存时保留新目录，改名失败则静默回退旧目录，功能不中断。
+- appId 变更意味着旧 beta 安装项与新包在注册表中相互独立，新包**不会**覆盖升级旧版，需先卸载旧版（冒烟脚本与验收手册已按此契约更新）。
+
+### 2. 关键实现
+- 新增 `desktop/src/app-paths.ts` 作为数据路径真源（路径解析纯净、迁移显式一次性执行），`credentials-store` / `theme-prefs` / `backend-manager` 全部改为共用；保留原有语义差异——data 目录读 `STUDYTOOL_DESKTOP_DATA_DIR` 覆盖，logs/config 不读（沙盒隔离契约依赖此行为）。
+- 桌面↔后端契约两端同步改名；Windows 冒烟、沙盒 setup/teardown、验收手册同步新标识，并**有意保留**对旧版安装项与旧进程名的拒绝匹配（appId 变更后新旧版并存需显式冲突，否则会互相争抢端口与数据目录）。
+- 本地验证：desktop `npm run build` + 单测 145 项全绿（含 9 项数据迁移用例）、backend `pytest` 293 项全绿、frontend `npm run build` 通过、`npm ci --dry-run` 通过。
+
+### 3. 候选包发布与 CI 实测证据（2026-09-20）
+
+- **已发布候选包**：GitHub Pre-release `desktop-v1.0.7-beta.1`（仓库 `SakuraLoveSmile/StudyTool-Releases`），资产为安装包、`.blockmap`、`latest.yml`、`RELEASE_MANIFEST.json`、`SHA256SUMS.txt`；`latest` 仍指向 `desktop-v1.0.5`，旧包未被覆盖或改写。
+- **候选包 SHA256**：`92a805649997810c49a6da9e7af61a05b0087fb6b4698c5fb954338b35a99732`（安装包与清单一致）。
+- **打包元数据**（`RELEASE_MANIFEST.json`）：`builder_version = 25.1.8`、`upstream_patch_commit = a356198ec7c54c7795659342bff36d9a5162cd93`、`patched_template_sha256 = 519a23385d3b3da4ce3925f9b9c34e2b8d2b98a1bcc8a510f721f56cffe910ee`；反馈组件 tarball 为 `feedback-web-0.4.1-studytool.1.tgz`。
+- **CI 实测**：运行 `35524997850` 全绿（约 4 分钟），发布前安装冒烟门禁通过，冒烟结论 `SUCCESS`：
+  - 安装退出码 `0`、耗时 16.98 秒、未超时；隔离预检干净（无任何历史残留）；
+  - 卸载注册项 DisplayName 为 `学习助手 1.0.7-beta.1`（新 appId 派生的 GUID，与旧 beta 安装项相互独立）；
+  - 主程序实际落盘位置 `%LOCALAPPDATA%\Programs\studytool\学习助手.exe`（180.04 MB）——安装目录与程序名均已切换为新标识；
+  - `critical_system_dll_crash = false`，事件日志中无 `System.dll` / `0xc0000005` / `Application Error` 记录。
+- **失败与修复记录**：首次运行 `35524314076` 在冒烟步骤失败——更名编辑时抹掉了三个 PowerShell 脚本的 UTF-8 BOM，PowerShell 按 ANSI(cp936) 解析中文导致语法错误（与历史 `ee5ac95` 同一类问题）；补回 BOM（`f92d904`）后重跑通过。安装包本身在首次运行即构建成功，新产物名 `studytool-setup-1.0.7-beta.1.exe` 生效。
+- **注意（验收边界）**：CI runner 为 Windows Server 2022，**不等于**原故障机 Windows 11 build 26200；上述结论只证明“打包产物可被静默安装且无对应崩溃事件”，数据目录迁移、新旧版并存、覆盖升级数据保留等仍需按 `e2e/windows-sandbox/acceptance-runbook.md` 在真机执行。
+
+### 4. 当前状态与结论
+- **状态**：**待体验**（更名改动本地全量测试通过、候选包已通过 CI 安装冒烟并发布为 Pre-release；待在干净 Windows 实机执行交互验收，重点验证 `RAGStudyAssistant → StudyTool` 数据迁移与旧版并存冲突）。
+
+---
+
+## 学习调度算法闭环与全链路可用性提升 与 1.0.8-beta.1 发布记录
+
+### 1. 背景与目标
+- 针对前期智能体团队全面审查发现的可用性与调度缺陷进行系统性修复。
+- 解决背诵卡学习调度轮次解耦、次日结转卡推进、模糊评级跳级问题，消除调度死循环与过早毕业。
+- 建立混合检索熔断降级与 API 边界防御机制，消除级联崩溃隐患。
+- 完善背诵全键盘交互流（Space/1/2/3/Esc）、跨天 409 会话无缝承接、回忆卡批量生成及四维学习卡转入闭环。
+
+### 2. 核心修复与改进
+1. **学习调度核心算法修复**：
+   - `learning_progress` 引入 `new_round` 持久化字段，解耦总尝试次数 `repetitions` 与当日新卡连续达标轮次；
+   - 彻底解除次日结转卡（`carryover`）在多轮背诵中的硬编码阻断，保证结转卡可完整推进至达标；
+   - 修复复习卡 `fuzzy` 评级跳至多日后间隔梯队的问题，统一对齐至 `+1 天` 强化复习。
+2. **混合检索降级熔断与 API 边界防御**：
+   - 向量检索失败或被锁时平滑降级为 SQLite FTS5 全文检索输出（标记 `degraded: true`），核心业务不中断；
+   - 增加真题录入年份合理范围校验；
+   - 主观题批改改用 `asyncio.gather` 并发评估并增强分数清洗容错。
+3. **前端交互与闭环打通**：
+   - 背诵卡支持全键盘操作（Space/Enter 查看答案与切卡、1/2/3 快捷评定、Esc 暂停）；
+   - 今日学习捕获 409 `DAY_CHANGED` 弹出跨天衔接提示并一键刷新；
+   - 回忆卡库提供「批量生成回忆卡」入口；
+   - 四维学习卡提供「转入回忆卡」闭环转换；
+   - 考情分析优化近 5 年频次高亮判定。
+
+### 3. 本地验证结果
+- 后端回归：`pytest backend/tests` 304 项用例全部通过（耗时 31.65s）。
+- 前端构建：`npm --prefix frontend run build`（Vite + vue-tsc）编译通过。
+- 桌面端：`npm --prefix desktop test` 145 项单测全部通过。
+- 状态判定：推进为“**待体验**”。
+
+---
+
+## Windows 后端启动等待修复与 1.0.8-beta.2 发布记录
+
+### 1. 修复内容
+- Windows 打包版后端就绪预算为 90 秒，开发态仍为 15 秒；预算从 spawn 前以单调时钟计时。
+- 探针请求有独立超时并销毁；区分后端提前退出、就绪超时、bootstrap 写入失败及终止确认结果。
+- 后端数据库、HTTP client、TaskWorker 启动步骤写入诊断事件；启动异常记录失败阶段和脱敏异常摘要。
+- 更新 Windows 冷启动验收规程；不改变 schema、数据目录或迁移策略。
+
+### 2. 本地验证
+- 桌面：`npm run build` 通过；`npm test` **155 passed**。
+- 后端：在 `backend/` 目录运行 `python -m pytest tests/test_diagnostics_startup.py tests/test_diagnostics_policy.py`，**27 passed**，5 条 PyMuPDF SWIG deprecation warnings。
+
+### 3. Windows 构建与发布结果
+- GitHub Actions `36374467449` 在 Windows Server 2022 全绿（5 分 15 秒），源码提交 `e99a2323cbbfa838df83c42d0d8f8c66fe3d361e`；冻结后端 readiness、首页、排空/退出验证通过。
+- 安装器静默冒烟 `SUCCESS`：隔离预检通过，退出码 0，耗时 24.83 秒，安装文件与卸载注册项均存在；`critical_system_dll_crash=false`。扫描到的 2 条系统事件属于 Edge Update 服务和 runner 的 RdAgent，与安装器无关。
+- 已发布 GitHub prerelease [`desktop-v1.0.8-beta.2`](https://github.com/SakuraLoveSmile/StudyTool-Releases/releases/tag/desktop-v1.0.8-beta.2)，`isPrerelease=true`；稳定 `latest` 仍为 `desktop-v1.0.8-beta.1`。
+- 安装包 `studytool-setup-1.0.8-beta.2.exe` 大小 143,147,321 bytes，SHA-256 `689e7d645c5693c76e06380e57da9ef9d0c58b0e1bb9718df17f83d13e5c623f`。该值同时出现在 `RELEASE_MANIFEST.json`、`SHA256SUMS.txt` 与 GitHub asset digest。
+- 同次发布还上传 `latest.yml`、`.blockmap`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS.txt`；CI 冒烟证据见 workflow artifact `studytool-smoke-evidence-1.0.8-beta.2`。
+
+### 4. Windows 实机验收边界
+- Windows Server 2022 构建和静默安装冒烟不等于原故障 Windows 11 实机启动。候选包 SHA-256、Windows 冷启动、窗口加载和进程退出按 `e2e/windows-sandbox/acceptance-runbook.md` 的 W11-6 记录。
+- 尚未在交互式 Windows 10/11 或原故障机启动安装后的 Electron 程序；整体状态保持“实现中”，不得写成“已验收”。
 
 ---
 

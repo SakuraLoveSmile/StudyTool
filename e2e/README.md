@@ -1,6 +1,6 @@
-# RAG 反馈接入 e2e（Playwright）
+# 学习助手 反馈接入 e2e（Playwright）
 
-独立依赖树。**本目录的任何内容都不会进入 RAG 前端依赖**：不写
+独立依赖树。**本目录的任何内容都不会进入前端依赖**：不写
 `frontend/package.json`、`frontend/package-lock.json`、`frontend/vendor/`。
 
 ## 运行
@@ -13,13 +13,13 @@ npx playwright test --reporter=list
 
 ## 模式与选择理由
 
-两种页面形态 = **同一份 RAG 前端源码**、两个 Vite dev server，用 `webServer[].env` 注入
+两种页面形态 = **同一份前端源码**、两个 Vite dev server，用 `webServer[].env` 注入
 不同的构建期变量（Vite 会把进程环境里 `VITE_` 前缀的变量暴露为 `import.meta.env`）：
 
 | project | 端口 | 构建期变量 | 用途 |
 |---|---|---|---|
 | `unconfigured` | 5274 | 都不设置 | 验证未配置时无反馈入口、组件包不被加载（F1） |
-| `configured` | 5275 | `VITE_FEEDBACK_API_BASE=http://127.0.0.1:5199`、`VITE_FEEDBACK_APP_ID=rag` | 宿主集成级用例 |
+| `configured` | 5275 | `VITE_FEEDBACK_API_BASE=http://127.0.0.1:5199`、`VITE_FEEDBACK_APP_ID=studytool` | 宿主集成级用例 |
 | `component` | 5276（fixture 静态服务器） | 直接加载 UMD 产物 | 组件级用例（运行期切换 api-base） |
 
 选这个方案而不是「各自构建 dist」，是为了验证**真实构建期变量路径**本身，
@@ -30,13 +30,13 @@ npx playwright test --reporter=list
 `@feedback/web` 通过**只读引用**已核验产物 tarball 锁定：
 
 ```
-"@feedback/web": "file:../frontend/vendor/feedback-web-0.2.0.tgz"
+"@feedback/web": "file:../frontend/vendor/feedback-web-0.4.1-studytool.1.tgz"
 ```
 
-该 tarball 的 SHA-256 必须等于 `.feedback-work/vendor-verified/SHA256SUMS` 中登记的
-`578eb1db7fb7ef9814f3852cf603acca6718a107f5b192a90a5bdbbe3a216c0d`；
-`specs/component-level.spec.ts` 会在运行时断言实装版本为 `0.2.0` 且 sha256 一致，
-不一致即 fail。
+该 tarball 的 SHA-256 必须等于
+`2c56ebcaa2f6f051fdf898fdac165f56e430bf14a01e9ead2081ad3f9dac4bcf`；
+`specs/component-level.spec.ts` 会在运行时断言实装版本为 `0.4.1-studytool.1`
+且 sha256 一致，不一致即 fail。
 
 **不要**把 fixture 指向 `frontend/node_modules/@feedback/web`：该路径随前端安装状态漂移，
 可能静默测到 0.1.0。
@@ -54,7 +54,7 @@ revision 正是 **1243**，与全局缓存 `~/Library/Caches/ms-playwright/chrom
 | 挂载门禁与公开属性 | `specs/host-integration.spec.ts` | 会话就绪才挂载；`apiBase`/`appId`/`pageLabel` 取构建期配置 |
 | 登录页不挂载 | 同上 | 不加载组件界面、无入口 |
 | 路由保留草稿 | 同上 | 路由切换后草稿文字与截图字节仍在、实例不重建、`page-label` 更新 |
-| 组件内独立登录 | 同上 | 只打反馈服务；`clientLabel=web:rag`；宿主 `/api/auth/login` 零调用 |
+| 组件内独立登录 | 同上 | 只打反馈服务；`clientLabel=web:studytool`；宿主 `/api/auth/login` 零调用 |
 | 退出清理 | 同上 | **移除前** 已置空 `api-base`、清空令牌与草稿（顺序 + 后果双证据） |
 | 迟到响应不进入新会话 | 同上 | 世代切换后放行旧响应：新实例零继承、无事件、无重放 |
 | 未保存保留草稿 | 同上 | 5xx 后草稿保留；重试复用**同一幂等键与同一截图字节** |
@@ -62,7 +62,7 @@ revision 正是 **1243**，与全局缓存 `~/Library/Caches/ms-playwright/chrom
 | 组件加载失败 | `specs/component-level.spec.ts` | 学习页面不受影响、无反馈入口、诊断脱敏 |
 | 同一实例上的身份世代 | 同上 | 运行期换 `api-base`：旧令牌/草稿清空、迟到响应被丢弃 |
 | 清洗身份的归一化陷阱 | 同上 | `api-base` 属性必须真的被移除（不是哨兵值残留） |
-| 依赖来源固定 | 同上 | 实装 0.2.0 + vendor tarball sha256 与核验清单一致 |
+| 依赖来源固定 | 同上 | 实装 0.4.1-studytool.1 + vendor tarball sha256 与核验清单一致 |
 
 ## 关键实现说明
 

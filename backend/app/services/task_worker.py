@@ -655,7 +655,10 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         total = detail.get("total")
         succeeded = detail.get("succeeded", 0)
         pct = None
-        if total is not None and total > 0:
+        # Tasks driving their own explicit progress (e.g. parse_document) must
+        # never have tasks.progress overwritten by the derived succeeded/total
+        # ratio — unit/heartbeat flushes would otherwise bounce it to 0 or 99.
+        if detail.get("progressMode") != "explicit" and total is not None and total > 0:
             pct = min(99, int((succeeded / total) * 100))
 
         now_mono = time.monotonic()
@@ -771,6 +774,71 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         except Exception as exc:
             logger.warning("Failed to load checkpoints for %s/%s: %s", task_type, target_id, exc)
             return {}
+
+    @classmethod
+    def get_completed_checkpoints_for_snapshot(
+        cls, task_type: str, target_id: str, source_snapshot_hash: Optional[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Load completed checkpoints only when their source snapshot matches.
+
+        Older checkpoints have no snapshot metadata and are deliberately not
+        reused when the caller supplies a source hash.  This prevents a retry
+        from treating stale extraction output as valid after source edits.
+        """
+        checkpoints = cls.get_completed_checkpoints(task_type, target_id)
+        if not source_snapshot_hash:
+            return checkpoints
+        matched: Dict[str, Dict[str, Any]] = {}
+        for key, checkpoint in checkpoints.items():
+            raw = checkpoint.get("data_json")
+            try:
+                data = json.loads(raw) if raw else {}
+            except (TypeError, ValueError):
+                data = {}
+            if data.get("source_snapshot_hash") == source_snapshot_hash:
+                matched[key] = checkpoint
+        return matched
+
+    @classmethod
+    def sync_extraction_batch_for_task(
+        cls, task_id: str, task_status: str, message: Optional[str] = None
+    ) -> bool:
+        """Synchronize an extraction batch owned by a task.
+
+        The conditional ownership check is the generation guard: an old task
+        finishing late cannot overwrite a batch already retried onto a newer
+        task.  The helper is best effort for legacy databases without the
+        extraction table and intentionally does not create schema columns.
+        """
+        status_map = {
+            "completed": "completed",
+            "partial": "partial",
+            "failed": "failed",
+            "cancelled": "cancelled",
+        }
+        batch_status = status_map.get(task_status)
+        if not batch_status:
+            return False
+        try:
+            with db_session() as conn:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(extraction_batches)").fetchall()}
+                if not columns or "task_id" not in columns:
+                    return False
+                assignments = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+                params: list[Any] = [batch_status]
+                if message and "error_msg" in columns and batch_status in {"failed", "partial", "cancelled"}:
+                    assignments.append("error_msg = ?")
+                    params.append(message)
+                params.append(task_id)
+                cur = conn.execute(
+                    f"UPDATE extraction_batches SET {', '.join(assignments)} "
+                    "WHERE task_id = ? AND status IN ('processing', 'pending')",
+                    params,
+                )
+                return cur.rowcount > 0
+        except Exception:
+            logger.exception("Failed to synchronize extraction batch for task %s", task_id)
+            return False
 
     @classmethod
     def is_cancelled(cls, task_id: str) -> bool:
@@ -921,11 +989,16 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         # Reset any leftover 'processing' or 'cancel_requested' tasks on startup to 'cancelled'
         with db_session() as conn:
             cursor = conn.cursor()
+            stale_rows = cursor.execute(
+                "SELECT id FROM tasks WHERE status IN ('processing', 'cancel_requested')"
+            ).fetchall()
             cursor.execute("""
                 UPDATE tasks
                 SET status = 'cancelled', message = '服务重启，任务已取消', updated_at = CURRENT_TIMESTAMP
                 WHERE status IN ('processing', 'cancel_requested')
             """)
+        for stale in stale_rows:
+            cls.sync_extraction_batch_for_task(stale["id"], "cancelled", "服务重启，任务已取消")
 
         while cls._running:
             try:
@@ -986,11 +1059,13 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             except asyncio.CancelledError:
                 logger.info("Task %s received asyncio cancellation", task_id)
                 cls.finalize_cancellation(task_id)
+                cls.sync_extraction_batch_for_task(task_id, "cancelled", "任务已取消")
             except Exception as e:
                 safe_msg = cls.sanitize_error(e)
                 logger.error("Task %s failed: %s", task_id, safe_msg)
                 if not cls.is_cancelled(task_id):
                     cls.mark_task_failed(task_id, str(e))
+                    cls.sync_extraction_batch_for_task(task_id, "failed", safe_msg)
                     if task_type == "parse_document" and target_id:
                         with db_session() as conn:
                             conn.execute(
@@ -999,7 +1074,17 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
                             )
                 else:
                     cls.finalize_cancellation(task_id)
+                    cls.sync_extraction_batch_for_task(task_id, "cancelled", "任务已取消")
             finally:
+                try:
+                    with db_session() as conn:
+                        final_row = conn.execute("SELECT status, error_msg, message FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if final_row and final_row["status"] in ("completed", "partial", "failed", "cancelled"):
+                        cls.sync_extraction_batch_for_task(
+                            task_id, final_row["status"], final_row["error_msg"] or final_row["message"]
+                        )
+                except Exception:
+                    logger.exception("Failed final extraction batch synchronization for task %s", task_id)
                 cls._running_tasks.pop(task_id, None)
 
     @classmethod
@@ -1091,6 +1176,7 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             failed=0,
             skipped=0,
             currentAction="读取文档信息...",
+            progressMode="explicit",
             force=True
         )
         cls.update_task_progress(task_id, 10, "读取文档信息...")

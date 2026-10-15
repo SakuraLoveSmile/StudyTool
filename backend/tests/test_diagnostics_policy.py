@@ -38,6 +38,11 @@ from app.diagnostics import (
 def temp_log_dir(tmp_path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
+    # Reset to the uninitialized state BEFORE the test too: collection-time imports
+    # (e.g. another test module's `from app.main import app`) run the module-level
+    # setup_diagnostics() with real default paths, leaving a live file handler that
+    # would make setup_diagnostics() early-return here instead of attaching one.
+    shutdown_diagnostics()
     yield log_dir
     shutdown_diagnostics()
 
@@ -128,6 +133,14 @@ def test_whitelist_drops_unvetted_fields_but_keeps_stack_frames(temp_log_dir):
         prompt="用户的完整提示词",
         content="资料原文",
         answer="模型回答",
+        spawn_elapsed_ms=41000,
+        probe_elapsed_ms=5000,
+        total_elapsed_ms=46000,
+        remaining_budget_ms=85000,
+        failure_reason="ready_timeout",
+        termination_confirmed=True,
+        termination_failed=False,
+        unvetted_process_field="must be dropped",
         exception_info={
             "exception_type": "ConnectError",
             "message": "连接失败",
@@ -139,6 +152,14 @@ def test_whitelist_drops_unvetted_fields_but_keeps_stack_frames(temp_log_dir):
     entry = _read_entries(temp_log_dir)[-1]
     for dropped in ("prompt", "content", "answer"):
         assert dropped not in entry, f"{dropped} must never be persisted"
+    assert entry["spawn_elapsed_ms"] == 41000
+    assert entry["probe_elapsed_ms"] == 5000
+    assert entry["total_elapsed_ms"] == 46000
+    assert entry["remaining_budget_ms"] == 85000
+    assert entry["failure_reason"] == "ready_timeout"
+    assert entry["termination_confirmed"] is True
+    assert entry["termination_failed"] is False
+    assert "unvetted_process_field" not in entry
     # Regression: inner frame keys must survive the recursive whitelist or the stack is lost.
     frames = entry["exception_info"]["frames"]
     assert frames[0]["file"] == "client.py"
@@ -161,8 +182,8 @@ def test_sanitize_text_masks_paths_url_params_and_file_names():
     assert sanitize_text(
         "GET https://api.example.com/v1/models?api-key=secret&user=bob"
     ) == "GET https://api.example.com/v1/models"
-    assert "测试用户" not in sanitize_text(r"C:\Users\测试用户\AppData\Local\RAGStudyAssistant\data\app.db")
-    assert "someone" not in sanitize_text("/Users/someone/Library/Application Support/RAGStudyAssistant/logs")
+    assert "测试用户" not in sanitize_text(r"C:\Users\测试用户\AppData\Local\StudyTool\data\app.db")
+    assert "someone" not in sanitize_text("/Users/someone/Library/Application Support/StudyTool/logs")
     assert "private" not in sanitize_text("~/Documents/private/notes")
     assert sanitize_text("failed to parse 2024真题.pdf") == "failed to parse <file>"
     # Source module names stay readable: they are diagnostics, not user content.

@@ -1,12 +1,13 @@
 {
-  "name": "rag-study-assistant-desktop",
-  "version": "1.0.5",
-  "description": "RAG 备考助手 Windows 桌面版",
+  "name": "studytool",
+  "version": "1.0.8-beta.2",
+  "description": "学习助手 Windows 桌面版",
   "main": "dist/main.js",
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test dist/tests/*.test.js",
+    "test": "node --test dist/tests/*.test.js tests/*.test.js",
+    "test:patch": "node --test tests/*.test.js",
     "test:stress": "node --expose-gc --test dist/stress/*.test.js",
     "test:ui": "electron scripts/verify-logs-ui-timing.js",
     "start": "electron dist/main.js",
@@ -19,7 +20,7 @@
   "devDependencies": {
     "@types/node": "^22.10.1",
     "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "25.1.8",
     "typescript": "~5.6.3"
   }
 }

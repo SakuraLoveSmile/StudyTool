@@ -503,6 +503,7 @@ test.describe('今日页保存反馈（学习范围 / 今日设置）', () => {
 
     // —— 补一张 390px 设置成功态（让两卡的成功/失败态都有截图留档）——
     api.controls.failSettingsPut = false;
+    api.controls.failTodayGet = false;
     await saveButton(settings).click();
     await expect(cardStatus(settings)).toContainText(SETTINGS_SAVED);
     await settings.screenshot({ path: shotPath('settings-card-390-success.png') });

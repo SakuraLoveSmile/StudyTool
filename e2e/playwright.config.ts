@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * 两种页面形态用同一份 RAG 前端源码、两个 Vite dev server：
+ * 两种页面形态用同一份前端源码、两个 Vite dev server：
  *  - "unconfigured"（5274）：完全不提供 VITE_FEEDBACK_API_BASE / VITE_FEEDBACK_APP_ID
  *  - "configured"  （5275）：提供两个构建期变量
  *
@@ -38,14 +38,39 @@ export default defineConfig({
       testMatch: /specs\/unconfigured\.spec\.ts/,
     },
     {
+      name: 'theme',
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5274' },
+      testMatch: /specs\/theme\.spec\.ts/,
+    },
+    {
       name: 'configured',
       use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5275' },
       testMatch: /specs\/host-integration\.spec\.ts/,
     },
     {
+      // 反馈日志附件（T3b）：同样的已配置形态 dev server（5275），
+      // 桌面 API 由各用例经 addInitScript/exposeFunction 注入桩。
+      name: 'configured-logs',
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5275' },
+      testMatch: /specs\/feedback-logs\.spec\.ts/,
+    },
+    {
+      // T4 验收（Windows 候选包前的浏览器级门禁）：导航点击链路与日志页交互。
+      name: 'acceptance',
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5274' },
+      testMatch: /specs\/windows-acceptance\.spec\.ts/,
+    },
+    {
       name: 'component',
       use: { ...devices['Desktop Chrome'] },
       testMatch: /specs\/component-level\.spec\.ts/,
+    },
+    {
+      // STU-3 资料页回归：材料/任务 API 全部由 spec 内 route 拦截 mock，
+      // 用未配置形态 dev server（5274），不发真实 OCR/反馈请求。
+      name: 'materials-ocr',
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5274' },
+      testMatch: /specs\/materials-ocr\.spec\.ts/,
     },
   ],
   webServer: [
@@ -88,7 +113,7 @@ export default defineConfig({
       stderr: 'pipe',
       env: {
         VITE_FEEDBACK_API_BASE: 'http://127.0.0.1:5199',
-        VITE_FEEDBACK_APP_ID: 'rag',
+        VITE_FEEDBACK_APP_ID: 'studytool',
       },
     },
     {

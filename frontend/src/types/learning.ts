@@ -131,6 +131,9 @@ export interface RecallCard {
   is_confirmed?: boolean;
   is_ai_generated?: boolean;
   published_revision_id?: string | null;
+  current_revision_id?: string | null;
+  current_revision_status?: string | null;
+  has_unpublished_changes?: boolean;
   version?: number;
 }
 
@@ -273,6 +276,9 @@ export interface TodayLearning {
   date: string;
   study_date?: string;
   status: LearningTodayStatus;
+  round_complete?: boolean;
+  can_advance?: boolean;
+  empty_reason?: 'no_chapters' | 'no_published_cards' | 'limits_unconfigured' | 'no_due_cards' | 'day_completed' | 'round_completed' | null;
   current_round_number?: number | null;
   round?: LearningRound | null;
   current_round?: LearningRound | null;
@@ -541,6 +547,9 @@ export function normaliseRecallCard(value: unknown, index = 0): RecallCard {
     is_confirmed: booleanValue(record.is_confirmed, false),
     is_ai_generated: booleanValue(record.is_ai_generated, false),
     published_revision_id: stringValue(record.published_revision_id, '') || null,
+    current_revision_id: stringValue(record.current_revision_id, '') || null,
+    current_revision_status: stringValue(record.current_revision_status, '') || null,
+    has_unpublished_changes: booleanValue(record.has_unpublished_changes, false),
     version: optionalNumber(record.version) ?? undefined,
     created_at: stringValue(record.created_at, '') || null,
     updated_at: stringValue(record.updated_at, '') || null,
@@ -562,10 +571,11 @@ export function normaliseAttempt(value: unknown, index = 0): TodayAttempt {
   const dayUnitId = firstValue(record, ['day_unit_id', 'unit_id']) ?? firstValue(nestedAttempt, ['day_unit_id', 'unit_id']);
   const revealedAnswer = firstValue(record, ['answer', 'back', 'expanded_answer', 'explanation']) ?? firstValue(nestedAttempt, ['answer', 'back', 'expanded_answer', 'explanation']);
   return {
-    id: stringValue(attemptId, `attempt-${index + 1}`),
+    id: stringValue(attemptId, ''),
     day_unit_id: stringValue(dayUnitId, '') || null,
     card_id: stringValue(firstValue(source, ['card_id', 'cardId']), card?.id ?? ''),
     study_date: stringValue(source.study_date, '') || null,
+    content_revision_no: optionalNumber(source.content_revision_no),
     position: numberValue(firstValue(source, ['position', 'index', 'sequence', 'display_order']), index + 1),
     display_order: optionalNumber(source.display_order),
     total: numberValue(source.total, 0),
@@ -595,13 +605,15 @@ export function normaliseToday(value: unknown): TodayLearning {
   const unwrapped = unwrap(value);
   const record = asRecord(unwrapped) ?? {};
   const attemptsValue = firstValue(record, ['attempts', 'items', 'queue']);
-  const attempts = Array.isArray(attemptsValue) ? attemptsValue.map(normaliseAttempt) : [];
+  const attempts = Array.isArray(attemptsValue) ? attemptsValue.map(normaliseAttempt).filter(item => Boolean(item.id)) : [];
   const queueValue = firstValue(record, ['cards', 'queue_cards', 'units']);
   const queue = Array.isArray(queueValue)
     ? queueValue.map(item => normaliseRecallCard(item))
     : [];
-  const currentValue = firstValue(record, ['current_attempt', 'active_attempt', 'current', 'next_item']);
-  const currentAttempt = currentValue ? normaliseAttempt(currentValue) : attempts.find(item => Boolean(item.id) && !item.completed && Boolean(item.day_unit_id)) ?? null;
+  const currentKey = ['current_attempt', 'active_attempt', 'current', 'next_item'].find(key => Object.prototype.hasOwnProperty.call(record, key));
+  const currentValue = currentKey ? record[currentKey] : undefined;
+  const candidate = currentValue ? normaliseAttempt(currentValue) : null;
+  const currentAttempt = currentKey ? (candidate?.id ? candidate : null) : attempts.find(item => !item.completed && Boolean(item.day_unit_id)) ?? null;
   const currentCardValue = firstValue(record, ['current_card', 'active_card']);
   const currentCard = currentCardValue ? normaliseRecallCard(currentCardValue) : currentAttempt?.card ?? queue.find(card => card.id === currentAttempt?.card_id) ?? null;
   const total = numberValue(firstValue(record, ['total', 'total_count']), attempts.length || queue.length);
@@ -615,6 +627,9 @@ export function normaliseToday(value: unknown): TodayLearning {
     date: stringValue(firstValue(record, ['date', 'day', 'study_date']), new Date().toISOString().slice(0, 10)),
     study_date: stringValue(record.study_date, '') || undefined,
     status: ['idle', 'active', 'paused', 'completed'].includes(statusValue) ? statusValue as LearningTodayStatus : 'idle',
+    round_complete: booleanValue(record.round_complete, false),
+    can_advance: booleanValue(record.can_advance, false),
+    empty_reason: (stringValue(record.empty_reason, '') || null) as TodayLearning['empty_reason'],
     round: numericRound ?? (['morning', 'noon', 'evening'].includes(roundValue) ? roundValue as LearningRound : null),
     current_round: numericRound ?? (['morning', 'noon', 'evening'].includes(stringValue(record.current_round, '')) ? stringValue(record.current_round) as LearningRound : null),
     current_round_number: optionalNumber(record.current_round),
@@ -638,8 +653,8 @@ export function normaliseToday(value: unknown): TodayLearning {
 export function normaliseLearningAction(value: unknown): LearningActionResponse {
   const record = asRecord(unwrap(value)) ?? {};
   const unit = record.unit ? normaliseAttempt({ ...(asRecord(record.unit) ?? {}), attempt: record.attempt }) : null;
-  const attempt = record.attempt ? normaliseAttempt(record.attempt) : null;
-  const additional = record.additional_attempt ? normaliseAttempt(record.additional_attempt) : null;
+  const attempt = record.attempt ? normaliseAttempt({ attempt: record.attempt }) : null;
+  const additional = record.additional_attempt ? normaliseAttempt({ attempt: record.additional_attempt }) : null;
   return {
     request_id: stringValue(record.request_id, '') || undefined,
     idempotent_replay: booleanValue(record.idempotent_replay, false),

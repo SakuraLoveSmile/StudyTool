@@ -38,6 +38,11 @@ from app.services.llm.client import LLMClient
 def temp_log_dir(tmp_path):
     log_d = tmp_path / "logs"
     log_d.mkdir(parents=True, exist_ok=True)
+    # Reset to the uninitialized state BEFORE the test too: collection-time imports
+    # (e.g. another test module's `from app.main import app`) run the module-level
+    # setup_diagnostics() with real default paths, leaving a live file handler that
+    # would make setup_diagnostics() early-return here instead of attaching one.
+    shutdown_diagnostics()
     yield log_d
     shutdown_diagnostics()
 

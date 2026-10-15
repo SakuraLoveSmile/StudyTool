@@ -62,7 +62,7 @@ def bootstrap_desktop(input_stream=None):
     if _desktop_bootstrapped:
         return
     _desktop_bootstrapped = True
-    os.environ["RAG_DESKTOP_MODE"] = "1"
+    os.environ["STUDYTOOL_DESKTOP_MODE"] = "1"
 
     stream = input_stream or sys.stdin
     line = stream.readline()
@@ -94,7 +94,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # `bootstrap_desktop()` stays gated on script execution so importing this module (tests,
 # uvicorn --reload child, tooling) can never block on reading stdin.
 _running_as_script = __name__ == "__main__"
-if _running_as_script and ("--desktop" in sys.argv or os.environ.get("RAG_DESKTOP_MODE") == "1"):
+if _running_as_script and ("--desktop" in sys.argv or os.environ.get("STUDYTOOL_DESKTOP_MODE") == "1"):
     bootstrap_desktop()
 
 from app.diagnostics import (
@@ -183,28 +183,55 @@ async def lifespan(app: FastAPI):
     setup_diagnostics()
     logger.info("Initializing database...")
     log_diagnostic("startup.lifespan.begin", message="后台应用启动流程开始", phase="lifespan")
-    if settings.PUBLIC_MODE:
-        from urllib.parse import urlsplit
-        origin = urlsplit(settings.PUBLIC_ORIGIN)
-        if origin.scheme != "https" or not origin.netloc or origin.path not in {"", "/"} or origin.query or origin.fragment:
-            raise RuntimeError("PUBLIC_ORIGIN must be a single HTTPS origin")
-        if not settings.AUTH_COOKIE_SECURE:
-            raise RuntimeError("Public mode requires secure cookies")
-        if settings.DEMO_MODE or settings.OCR_MODE != "vision_llm" or settings.EMBEDDING_MODE != "remote":
-            raise RuntimeError("Public mode requires real LLM, vision OCR and remote embeddings")
-        init_auth_db()
-        for user_id in enabled_user_ids():
-            with tenant_scope(user_id):
-                init_db()
-    else:
-        init_db()
-    await HttpClientProvider.start()
-    log_diagnostic("startup.database.ready", message="数据库初始化完成", phase="database")
-    logger.info("Starting background TaskWorker...")
-    if settings.PUBLIC_MODE:
-        TaskWorker.start_all()
-    else:
-        TaskWorker.start()
+    failed_stage = "configuration"
+    try:
+        if settings.PUBLIC_MODE:
+            from urllib.parse import urlsplit
+            origin = urlsplit(settings.PUBLIC_ORIGIN)
+            if origin.scheme != "https" or not origin.netloc or origin.path not in {"", "/"} or origin.query or origin.fragment:
+                raise RuntimeError("PUBLIC_ORIGIN must be a single HTTPS origin")
+            if not settings.AUTH_COOKIE_SECURE:
+                raise RuntimeError("Public mode requires secure cookies")
+            if settings.DEMO_MODE or settings.OCR_MODE != "vision_llm" or settings.EMBEDDING_MODE != "remote":
+                raise RuntimeError("Public mode requires real LLM, vision OCR and remote embeddings")
+
+        failed_stage = "database"
+        log_diagnostic("startup.database.begin", message="开始初始化数据库", phase="database")
+        if settings.PUBLIC_MODE:
+            init_auth_db()
+            for user_id in enabled_user_ids():
+                with tenant_scope(user_id):
+                    init_db()
+        else:
+            init_db()
+        # init_db commits and closes its transaction before returning.  Keep this
+        # event after the call so it cannot be mistaken for a pre-commit marker.
+        log_diagnostic("startup.database.ready", message="数据库初始化完成", phase="database")
+
+        failed_stage = "http_client"
+        log_diagnostic("startup.http_client.begin", message="开始初始化 HTTP client", phase="http_client")
+        await HttpClientProvider.start()
+        log_diagnostic("startup.http_client.ready", message="HTTP client 初始化完成", phase="http_client")
+
+        failed_stage = "task_worker"
+        log_diagnostic("startup.task_worker.begin", message="开始启动后台任务工作器", phase="task_worker")
+        logger.info("Starting background TaskWorker...")
+        if settings.PUBLIC_MODE:
+            TaskWorker.start_all()
+        else:
+            TaskWorker.start()
+        log_diagnostic("startup.task_worker.ready", message="后台任务工作器启动完成", phase="task_worker")
+    except BaseException as startup_exc:  # noqa: BLE001 - preserve the original failure
+        log_diagnostic(
+            "startup.failed",
+            level=logging.ERROR,
+            message="后台服务启动失败",
+            phase="startup",
+            failed_stage=failed_stage,
+            error_type=type(startup_exc).__name__,
+            exception_info=extract_safe_exception_info(startup_exc, failed_stage),
+        )
+        raise
     log_diagnostic(
         "startup.ready",
         message="后台服务已就绪",
@@ -235,7 +262,7 @@ async def lifespan(app: FastAPI):
         shutdown_diagnostics()
 
 app = FastAPI(
-    title="专业课备考助手 MVP",
+    title="学习助手",
     description="单机个人专业课备考知识库、考点统计、背诵卡与练习批改系统",
     version="1.0.0",
     lifespan=lifespan,
@@ -302,7 +329,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default=None, help="Host to listen on")
     args, _ = parser.parse_known_args()
 
-    if args.desktop or os.environ.get("RAG_DESKTOP_MODE") == "1":
+    if args.desktop or os.environ.get("STUDYTOOL_DESKTOP_MODE") == "1":
         bootstrap_desktop()
 
     from app.config import settings

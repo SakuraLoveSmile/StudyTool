@@ -91,6 +91,19 @@ test('archive carries redacted logs plus version/platform/checksum manifest', ()
   }
   assert.ok(manifest.excludes.includes('数据库'));
 
+  // A clean export discloses a complete bundle: no read errors, no memory-sourced
+  // records, nothing buffered or dropped. 'frontend' was simply absent on disk.
+  assert.strictEqual(manifest.incomplete, false);
+  assert.strictEqual(archive.incomplete, false);
+  assert.deepStrictEqual(manifest.read_errors, []);
+  assert.deepStrictEqual(manifest.missing_sources, ['frontend']);
+  assert.deepStrictEqual(manifest.memory_sources, []);
+  assert.strictEqual(manifest.buffered_entries, 0);
+  assert.strictEqual(manifest.dropped_pending_entries, 0);
+  assert.strictEqual(manifest.read_truncated, false);
+  assert.strictEqual(manifest.skipped_lines, 0);
+  assert.strictEqual(manifest.truncated, false);
+
   // CHECKSUMS.txt must actually verify: every digest has to match the archived bytes.
   const checksumLines = files['CHECKSUMS.txt'].trim().split('\n');
   assert.strictEqual(checksumLines.length, manifest.files.length + 2, 'one checksum per archived file');
@@ -171,6 +184,91 @@ test('archive export is caps-bounded and reports truncation in the manifest', ()
   const manifest = JSON.parse(unzip(archive.buffer)['MANIFEST.json']);
   assert.strictEqual(manifest.truncated, true);
   assert.match(manifest.note, /已仅保留最新记录/);
+});
+
+test('manifest discloses incomplete causes and checksums cover the disclosed bytes', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  const active = path.join(dir, 'desktop.jsonl');
+  fs.writeFileSync(
+    active,
+    `${JSON.stringify({
+      timestamp: new Date(now).toISOString(),
+      level: 'INFO',
+      source: 'desktop',
+      event: 'active.unreadable',
+      message: 'm',
+    })}\n`
+  );
+  fs.writeFileSync(
+    path.join(dir, 'desktop.jsonl.1'),
+    `${JSON.stringify({
+      timestamp: new Date(now - 1000).toISOString(),
+      level: 'INFO',
+      source: 'desktop',
+      event: 'rotated.kept',
+      message: 'm',
+    })}\n`
+  );
+  const originalOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+    if (String(file) === active) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return originalOpen(file, flags, mode);
+  });
+
+  const archive = buildDiagnosticArchive({
+    dir,
+    appVersion: '1.0.6-beta.3',
+    sessionId: 'sess-x',
+    from: 0,
+    to: now + 1000,
+    pendingEntries: [
+      {
+        timestamp: new Date(now).toISOString(),
+        level: 'INFO',
+        source: 'frontend',
+        event: 'pending.ui',
+        message: 'm',
+        log_record_id: 'sess-x:frontend:00000002',
+      },
+    ],
+    droppedPendingEntries: 2,
+  });
+
+  assert.strictEqual(archive.incomplete, true, 'incomplete is returned for IPC forwarding');
+  const files = unzip(archive.buffer);
+  const manifest = JSON.parse(files['MANIFEST.json']);
+
+  // All disclosure fields are top-level manifest keys with the frozen names.
+  assert.strictEqual(manifest.incomplete, true);
+  assert.deepStrictEqual(manifest.read_errors, [
+    { source: 'desktop', file: 'desktop.jsonl', stage: 'open', code: 'EACCES' },
+  ]);
+  // backend had nothing on disk; frontend had no disk files either but its pending
+  // record still shipped — missing_sources reports the disk state honestly.
+  assert.deepStrictEqual(manifest.missing_sources, ['backend', 'frontend']);
+  assert.deepStrictEqual(manifest.memory_sources, ['frontend']);
+  assert.strictEqual(manifest.buffered_entries, 1);
+  assert.strictEqual(manifest.dropped_pending_entries, 2);
+  assert.strictEqual(manifest.read_truncated, false);
+  assert.strictEqual(manifest.skipped_lines, 0);
+  assert.match(manifest.note, /读取失败/);
+  assert.match(manifest.note, /待写记录/);
+  assert.match(files['VERSION.txt'], /incomplete: true/);
+
+  // The pending record really shipped inside the archive payload.
+  assert.match(files['frontend.jsonl'], /pending\.ui/);
+  assert.match(files['desktop.jsonl'], /rotated\.kept/);
+  assert.ok(!files['backend.jsonl'], 'no payload file for a fully absent source');
+
+  // CHECKSUMS.txt must cover the manifest bytes exactly as archived — including the
+  // new disclosure fields — otherwise the verification list verifies nothing.
+  const checksumLines = files['CHECKSUMS.txt'].trim().split('\n');
+  const manifestLine = checksumLines.find((line) => line.endsWith('MANIFEST.json'))!;
+  const digest = manifestLine.split(/\s+/)[0];
+  const expected = crypto.createHash('sha256').update(Buffer.from(files['MANIFEST.json'], 'utf8')).digest('hex');
+  assert.strictEqual(digest, expected, 'MANIFEST.json checksum covers the disclosed fields');
 });
 
 test('atomic write leaves no partial or temp file behind', () => {

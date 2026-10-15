@@ -7,18 +7,23 @@
  * at most one *latest* waiting job, hard timeouts, cancellation, and worker recycling
  * after a timeout or a crash.
  *
- * Two independent channels are used on purpose: an export must never queue behind log
- * browsing, and a stuck query must never take the export down with it. Nodes without a
- * usable Worker implementation are irrelevant here — the app ships with Electron's
- * bundled Node, and the worker file is unpacked from app.asar so it is a real file.
+ * Three independent channels are used on purpose: an export must never queue behind log
+ * browsing, a stuck query must never take the export down with it, and a stalled
+ * feedback collection must never touch either — each gets its own worker thread,
+ * timeout and failure domain. Nodes without a usable Worker implementation are
+ * irrelevant here — the app ships with Electron's bundled Node, and the worker file
+ * is unpacked from app.asar so it is a real file.
  */
 
 import path from 'path';
 import { Worker } from 'worker_threads';
 import type { LogQueryOptions, LogQueryResult } from './log-store';
 import type { DiagnosticArchive, DiagnosticArchiveOptions } from './diagnostic-export';
+import type { FeedbackJobPayload, FeedbackLogsSuccess } from './feedback-logs';
 import {
+  FEEDBACK_ERROR_CODES,
   LOG_EXPORT_TIMEOUT_MS,
+  LOG_FEEDBACK_TIMEOUT_MS,
   LOG_QUERY_TIMEOUT_MS,
   RETRYABLE_CODES,
   type LogJobKind,
@@ -40,6 +45,7 @@ export interface LogWorkerServiceOptions {
   workerPath?: string;
   queryTimeoutMs?: number;
   exportTimeoutMs?: number;
+  feedbackTimeoutMs?: number;
   /** Structured logging hook (the main process routes this into the desktop log). */
   report?: (event: string, message: string, fields?: Record<string, unknown>) => void;
 }
@@ -95,6 +101,15 @@ interface ChannelOptions {
   rejectWhenBusy?: boolean;
   timeoutCode: LogWorkerErrorCode;
   timeoutMessage: string;
+  /**
+   * Final say on every failure code this channel reports — internal codes
+   * (cancel/timeout/supersede/crash) AND codes arriving inside a worker error
+   * response. The default reproduces the historical behaviour (`undefined` falls
+   * back to LOG_QUERY_FAILED); the feedback channel narrows everything to the
+   * LOG_FEEDBACK_* set so its IPC contract can never be widened by an internal
+   * accident (a crash reports LOG_FEEDBACK_FAILED, not LOG_WORKER_CRASHED).
+   */
+  normalizeErrorCode?: (code: LogWorkerErrorCode | undefined) => LogWorkerErrorCode;
   report?: (event: string, message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -176,13 +191,16 @@ class WorkerChannel {
     this.killWorker();
   }
 
-  private failure(code: LogWorkerErrorCode, message: string, since: number): JobOutcome<unknown> {
+  private failure(code: LogWorkerErrorCode | undefined, message: string, since: number): JobOutcome<unknown> {
+    const normalized = this.options.normalizeErrorCode
+      ? this.options.normalizeErrorCode(code)
+      : code || 'LOG_QUERY_FAILED';
     return {
       ok: false,
       error: {
-        code,
+        code: normalized,
         message,
-        retryable: RETRYABLE_CODES.has(code),
+        retryable: RETRYABLE_CODES.has(normalized),
         elapsedMs: Math.max(0, Date.now() - since),
       },
     };
@@ -256,8 +274,10 @@ class WorkerChannel {
     this.active = null;
     clearTimeout(active.timer);
     if (response.status === 'error') {
+      // The channel's normalizeErrorCode has the final word: for feedback this is
+      // what keeps a stray/missing worker code from escaping as LOG_QUERY_FAILED.
       active.resolve(
-        this.failure((response.code as LogWorkerErrorCode) || 'LOG_QUERY_FAILED', response.message || '日志任务失败', active.startedAt)
+        this.failure(response.code as LogWorkerErrorCode | undefined, response.message || '日志任务失败', active.startedAt)
       );
     } else {
       active.resolve({ ok: true, value: response.value, elapsedMs: Math.max(0, Date.now() - active.startedAt) });
@@ -326,6 +346,7 @@ class WorkerChannel {
 export class LogWorkerService {
   private readonly queryChannel: WorkerChannel;
   private readonly exportChannel: WorkerChannel;
+  private readonly feedbackChannel: WorkerChannel;
 
   constructor(options: LogWorkerServiceOptions = {}) {
     const workerPath = options.workerPath ?? defaultWorkerPath();
@@ -355,6 +376,28 @@ export class LogWorkerService {
       timeoutMessage: `诊断包导出超过 ${Math.round((options.exportTimeoutMs ?? LOG_EXPORT_TIMEOUT_MS) / 1000)} 秒未完成，已中止，可重试`,
       report,
     });
+    // Feedback collection gets its own thread: a stalled scan must never take the
+    // log viewer or a diagnostic export down with it, and vice versa. One job in
+    // flight, NO waiting slot — a second request is answered BUSY instead of being
+    // queued behind work it may already have superseded in the user's mind.
+    this.feedbackChannel = new WorkerChannel({
+      kind: 'feedback',
+      workerPath,
+      timeoutMs: options.feedbackTimeoutMs ?? LOG_FEEDBACK_TIMEOUT_MS,
+      cancelCode: 'LOG_FEEDBACK_CANCELED',
+      cancelMessage: '反馈日志采集已取消',
+      supersedeCode: 'LOG_FEEDBACK_BUSY',
+      supersedeMessage: '已有反馈日志采集在进行中，请等待其完成',
+      rejectWhenBusy: true,
+      timeoutCode: 'LOG_FEEDBACK_TIMEOUT',
+      timeoutMessage: `反馈日志采集超过 ${Math.round((options.feedbackTimeoutMs ?? LOG_FEEDBACK_TIMEOUT_MS) / 1000)} 秒未完成，已中止，可重试`,
+      // The frozen IPC contract only knows the five LOG_FEEDBACK_* codes: internal
+      // codes like LOG_WORKER_CRASHED and any stray worker-supplied code normalize
+      // to LOG_FEEDBACK_FAILED here, so the contract can never leak internals.
+      normalizeErrorCode: (code) =>
+        code && FEEDBACK_ERROR_CODES.has(code) ? code : 'LOG_FEEDBACK_FAILED',
+      report,
+    });
   }
 
   public query(requestId: string, options: LogQueryOptions): Promise<JobOutcome<LogQueryResult>> {
@@ -372,8 +415,23 @@ export class LogWorkerService {
     return this.exportChannel.submit(requestId, options) as Promise<JobOutcome<DiagnosticArchive>>;
   }
 
+  /**
+   * Restricted feedback-log collection. `payload` is built by the main process
+   * (dir / sessionId / appVersion / now); the resolved `value` is the frozen
+   * `ok:true` contract variant — `{ ok: true, files, truncated, unavailable,
+   * skippedLines }` — ready to hand to the renderer verbatim.
+   */
+  public feedback(requestId: string, payload: FeedbackJobPayload): Promise<JobOutcome<FeedbackLogsSuccess>> {
+    return this.feedbackChannel.submit(requestId, payload) as Promise<JobOutcome<FeedbackLogsSuccess>>;
+  }
+
+  public cancelFeedback(requestId: string): boolean {
+    return this.feedbackChannel.cancel(requestId);
+  }
+
   public shutdown(): void {
     this.queryChannel.shutdown();
     this.exportChannel.shutdown();
+    this.feedbackChannel.shutdown();
   }
 }

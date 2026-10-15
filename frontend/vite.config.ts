@@ -16,6 +16,12 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    // 资源完整性门禁：manifest 让发布管线能递归核对入口、静态与动态 chunk
+    // 是否真实存在于 dist——懒加载路由（/logs、/settings）缺失会在安装包里
+    // 表现为"点击无反应"，必须在构建期拦住。
+    manifest: true,
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

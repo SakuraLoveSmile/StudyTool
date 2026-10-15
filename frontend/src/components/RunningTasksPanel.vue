@@ -3,18 +3,18 @@
     <!-- Header -->
     <div class="flex items-center justify-between gap-2 flex-wrap">
       <div class="flex items-center gap-2">
-        <Activity class="w-4 h-4 text-brand-600" />
-        <h3 class="text-sm font-semibold text-stone-800">运行任务摘要</h3>
+        <Activity class="w-4 h-4 text-accent" />
+        <h3 class="text-sm font-semibold text-ink">运行任务摘要</h3>
         <span
           v-if="runningTasks.length > 0"
-          class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-brand-100 text-brand-800 animate-pulse"
+          class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-accent/15 text-accent animate-pulse"
         >
           {{ runningTasks.length }} 个进行中
         </span>
       </div>
       <button
         type="button"
-        class="text-xs text-brand-600 hover:text-brand-700 font-medium hover:underline cursor-pointer"
+        class="text-xs text-accent hover:text-accent font-medium hover:underline cursor-pointer"
         @click="openDrawer"
       >
         打开任务监控
@@ -24,11 +24,11 @@
     <!-- 轮询中断提示 -->
     <div
       v-if="pollFailed"
-      class="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs"
+      class="flex items-center gap-2 px-3 py-2 rounded-lg bg-warn/10 border border-warn/30 text-warn text-xs"
     >
       <AlertTriangle class="w-3.5 h-3.5 shrink-0" />
       <span>状态更新中断，正在自动重试…</span>
-      <span v-if="lastSyncedAt" class="text-amber-600">
+      <span v-if="lastSyncedAt" class="text-warn">
         最后成功更新：{{ lastSyncedClock }}
       </span>
     </div>
@@ -36,7 +36,7 @@
     <!-- 无任务 -->
     <div
       v-if="visibleTasks.length === 0 && !pollFailed"
-      class="text-xs text-stone-400 py-2"
+      class="text-xs text-faint py-2"
     >
       当前没有正在执行或等待处理的任务。
     </div>
@@ -47,10 +47,10 @@
         v-for="task in visibleTasks"
         :key="task.id"
         type="button"
-        class="w-full text-left p-3 rounded-xl border transition-colors cursor-pointer hover:border-brand-300 hover:bg-brand-50/30"
+        class="w-full text-left p-3 rounded-xl border transition-colors cursor-pointer hover:border-accent/40 hover:bg-accent/10"
         :class="task.status === 'partial' || task.status === 'failed'
-          ? 'border-rose-200 bg-rose-50/40'
-          : 'border-stone-200 bg-white'"
+          ? 'border-err/30 bg-err/10'
+          : 'border-line bg-surface'"
         @click="openTaskDetail(task.id)"
       >
         <!-- Title Row -->
@@ -63,39 +63,39 @@
                 ? 'bg-rose-500'
                 : 'bg-brand-500 animate-pulse'"
           />
-          <span class="text-sm font-semibold text-stone-800">{{ taskTypeLabel(task.task_type) }}</span>
+          <span class="text-sm font-semibold text-ink">{{ taskTypeLabel(task.task_type) }}</span>
           <span
             class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
             :class="statusBadgeClass(task.status)"
           >
             {{ statusLabel(task.status) }}
           </span>
-          <span class="ml-auto text-[11px] text-stone-400 font-mono">
+          <span class="ml-auto text-[11px] text-faint font-mono">
             {{ formatDuration(getLiveElapsed(task)) }}
           </span>
         </div>
 
         <!-- Batch Counters -->
         <div class="mt-1.5 flex items-center gap-3 flex-wrap text-[11px]">
-          <span v-if="summaryOf(task)" class="text-stone-600">
+          <span v-if="summaryOf(task)" class="text-sub">
             批次：
-            <span class="text-emerald-600 font-semibold">成功 {{ summaryOf(task)!.succeeded }}</span>
+            <span class="text-ok font-semibold">成功 {{ summaryOf(task)!.succeeded }}</span>
             <template v-if="summaryOf(task)!.failed > 0">
-              · <span class="text-rose-600 font-semibold">失败 {{ summaryOf(task)!.failed }}</span>
+              · <span class="text-err font-semibold">失败 {{ summaryOf(task)!.failed }}</span>
             </template>
             <template v-if="summaryOf(task)!.skipped > 0">
-              · <span class="text-stone-500">跳过 {{ summaryOf(task)!.skipped }}</span>
+              · <span class="text-sub">跳过 {{ summaryOf(task)!.skipped }}</span>
             </template>
             / 总 {{ summaryOf(task)!.total ?? '?' }}
           </span>
-          <span v-else-if="task.progress_detail?.total" class="text-stone-600">
+          <span v-else-if="task.progress_detail?.total" class="text-sub">
             已处理 {{ task.progress_detail.succeeded }}/{{ task.progress_detail.total }}
             {{ unitName(task.progress_detail.unit) }}
           </span>
-          <span v-if="(task.progress_detail?.resultCount || 0) > 0" class="text-brand-600">
+          <span v-if="(task.progress_detail?.resultCount || 0) > 0" class="text-accent">
             识别结果 {{ task.progress_detail!.resultCount }}
           </span>
-          <span v-if="isLegacyDetail(task)" class="text-stone-400">
+          <span v-if="isLegacyDetail(task)" class="text-faint">
             详细调用状态不可用
           </span>
         </div>
@@ -106,7 +106,7 @@
             v-for="(line, idx) in blockingLines(task)"
             :key="idx"
             class="text-[11px] leading-relaxed flex items-start gap-1.5"
-            :class="line.tone === 'warn' ? 'text-amber-700' : (line.tone === 'error' ? 'text-rose-700' : 'text-brand-700')"
+            :class="line.tone === 'warn' ? 'text-warn' : (line.tone === 'error' ? 'text-err' : 'text-accent')"
           >
             <span class="mt-1 w-1.5 h-1.5 rounded-full shrink-0"
               :class="line.tone === 'warn' ? 'bg-amber-500' : (line.tone === 'error' ? 'bg-rose-500' : 'bg-brand-500 animate-pulse')" />
@@ -119,7 +119,7 @@
           <div
             v-for="(hint, idx) in hintsFor(task)"
             :key="'h' + idx"
-            class="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1"
+            class="text-[11px] text-warn bg-warn/10 border border-warn/20 rounded px-2 py-1"
           >
             {{ hint }}
           </div>
@@ -211,11 +211,11 @@ const statusLabel = (status: string): string => {
 
 const statusBadgeClass = (status: string): string => {
   switch (status) {
-    case 'processing': return 'bg-brand-50 text-brand-700 border border-brand-200';
-    case 'pending': return 'bg-amber-50 text-amber-700 border border-amber-200';
+    case 'processing': return 'bg-accent/10 text-accent border border-accent/30';
+    case 'pending': return 'bg-warn/10 text-warn border border-warn/30';
     case 'partial': return 'bg-orange-50 text-orange-700 border border-orange-200';
-    case 'failed': return 'bg-rose-50 text-rose-700 border border-rose-200';
-    default: return 'bg-stone-100 text-stone-600';
+    case 'failed': return 'bg-err/10 text-err border border-err/30';
+    default: return 'bg-raised text-sub';
   }
 };
 

@@ -304,6 +304,7 @@ export interface CandidateCitation {
   page_number?: number | null;
   paragraph_ref?: string | null;
   quote: string;
+  source_hash?: string | null;
 }
 
 export interface ExtractionCandidate {
@@ -313,16 +314,20 @@ export interface ExtractionCandidate {
   chapter?: string | null;
   definition?: string | null;
   citations: CandidateCitation[];
-  status: 'pending' | 'accepted' | 'ignored' | 'merged';
+  status: 'pending' | 'accepted' | 'ignored' | 'merged' | 'invalid';
   match_type: 'new' | 'existing' | 'source_changed' | 'deleted_or_ignored';
   matched_kp_id?: string | null;
   matched_kp_name?: string | null;
   target_kp_id?: string | null;
+  source_status?: 'valid' | 'stale' | 'missing' | 'supplement_needed' | string;
+  requires_source_review?: boolean;
+  version?: number;
   created_at: string;
 }
 
 export interface CandidateDecisionItem {
   candidate_id: string;
+  version?: number;
   action: 'accept' | 'ignore' | 'merge';
   target_kp_id?: string;
   custom_name?: string;
@@ -341,6 +346,14 @@ export interface ExtractionBatch {
   } | null;
   error_msg?: string | null;
   candidates_count: number;
+  pending_candidates?: number;
+  task_status?: string | null;
+  accepted_candidates?: number;
+  merged_candidates?: number;
+  ignored_candidates?: number;
+  invalid_candidates?: number;
+  can_retry?: boolean;
+  recovery_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -349,6 +362,25 @@ export interface ApplyCandidatesResponse {
   applied_count: number;
   ignored_count: number;
   merged_count: number;
+  replayed_count?: number;
+  results?: Array<{ candidate_id: string; status: string; target_kp_id: string | null; replayed: boolean }>;
+}
+
+export interface CandidateSourceReview {
+  candidate_id: string;
+  version: number;
+  name: string;
+  chapter: string | null;
+  citations: Array<CandidateCitation & { content: string }>;
+  can_confirm: boolean;
+  reason: string | null;
+}
+
+export interface CandidateSourceReviewPayload {
+  version: number;
+  name: string;
+  chapter?: string | null;
+  citations: CandidateCitation[];
 }
 
 export interface QuestionLinkItem {
@@ -378,4 +410,3 @@ export interface QuestionLinkDecision {
 export interface QuestionLinkApplyResponse {
   applied_count: number;
 }
-

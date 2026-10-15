@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Automated release pipeline for RAG Windows Desktop Application.
+"""Automated release pipeline for StudyTool (学习助手) Windows Desktop Application.
 
 Stages:
 1. Verify environment & dependencies.
@@ -55,6 +55,21 @@ def npx_executable() -> str:
     return "npx.cmd" if os.name == "nt" else "npx"
 
 
+def node_executable() -> str:
+    """Return the executable name that Python can launch on each host OS.
+
+    Unlike npm/npx, Node.js ships only ``node.exe`` on Windows — there is no
+    ``node.cmd`` shim, so ``CreateProcess`` fails with WinError 2 when the
+    ``.cmd`` suffix is assumed (observed on the windows-2022 release runner).
+    """
+    return "node.exe" if os.name == "nt" else "node"
+
+
+ELECTRON_BUILDER_PINNED_VERSION = "25.1.8"
+NSIS_UPSTREAM_PATCH_COMMIT = "a356198ec7c54c7795659342bff36d9a5162cd93"
+NSIS_PATCHED_TEMPLATE_SHA256 = "519a23385d3b3da4ce3925f9b9c34e2b8d2b98a1bcc8a510f721f56cffe910ee"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -82,10 +97,10 @@ FEEDBACK_APP_ID_ENV = "VITE_FEEDBACK_APP_ID"
 #: 发行版唯一允许的反馈服务 origin（punycode，无结尾斜杠）。
 FEEDBACK_API_BASE = "https://feedback.xn--fhqths51enha.cn"
 #: 发行版唯一允许的 appId。
-FEEDBACK_APP_ID = "rag"
+FEEDBACK_APP_ID = "studytool"
 
 #: 产物文本门禁里 appId 字面量允许的引号写法。
-#: 实测（Vite 8 / esbuild）产物为反引号形式：`r.apiBase=\`https://...\`,r.appId=\`rag\``，
+#: 实测（Vite 8 / esbuild）产物为反引号形式：`r.apiBase=\`https://...\`,r.appId=\`studytool\``，
 #: 因此必须接受双引号、单引号与反引号三种写法，否则真实发布构建会被门禁误判为失败。
 FEEDBACK_BUNDLE_APP_ID_QUOTES = ('"', "'", "`")
 
@@ -116,7 +131,7 @@ def validate_feedback_config(
       - `api_base` / `app_id` 必须存在且去除首尾空白后非空；
       - `api_base` 必须是绝对的 `https://` URL，且不含 query、fragment 与结尾斜杠；
       - `api_base` 不得含空白字符；
-      - `app_id` 必须恰好等于 `FEEDBACK_APP_ID`（`"rag"`）；
+      - `app_id` 必须恰好等于 `FEEDBACK_APP_ID`（`"studytool"`）；
       - 当传入 `expected_api_base` 时（发行构建路径必须传入 `FEEDBACK_API_BASE`），
         `api_base` 还必须与之完全相等——语法合法但指向预发 / 本地服务的地址同样判定失败。
     """
@@ -215,7 +230,7 @@ def verify_feedback_bundle_contains_config(
 
     判别方式：在 `frontend/dist/assets` 下所有 `.js` 产物中查找 API base 的 host 字面量
     （`feedback.xn--fhqths51enha.cn`），并要求**同一个产物文件**里同时出现带引号的 appId
-    字面量。appId `"rag"` 是短字面量，单独匹配判别力弱，因此以 host 字面量为主要证据。
+    字面量。appId 单独匹配判别力弱，因此以 host 字面量为主要证据。
 
     返回命中配置的产物文件列表；任一条件不满足则抛出 :class:`FeedbackConfigError`。
     """
@@ -229,7 +244,7 @@ def verify_feedback_bundle_contains_config(
     host_marker = urllib.parse.urlsplit(api_base).netloc or api_base
     app_id_markers = [f"{quote}{app_id}{quote}" for quote in FEEDBACK_BUNDLE_APP_ID_QUOTES]
     # Word-boundary fallback: a minifier may inline the value without surrounding quotes
-    # (e.g. `appId=rag`), and `rag` must still not match inside `storage` / `fragment`.
+    # (e.g. `appId=studytool`), and `studytool` must still not match inside longer words.
     app_id_word = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(app_id)}(?![A-Za-z0-9_-])")
 
     host_hits: list[Path] = []
@@ -255,6 +270,167 @@ def verify_feedback_bundle_contains_config(
             f"{app_id!r}，说明构建期 {FEEDBACK_APP_ID_ENV} 没有真正注入。"
         )
     return matched
+
+
+# ---------------------------------------------------------------------------
+# Frontend asset integrity gates (Vite build manifest + frozen serving chain)
+# ---------------------------------------------------------------------------
+#
+# 懒加载路由（/logs、/settings）与反馈组件都是独立 chunk：安装包里缺一个，
+# 用户看到的就是"点了没反应"。下面两道门禁把这种失败模式拦在构建期——
+# manifest 递归核对产物存在，再把 dist 挂到**真实的后端服务链**上逐个请求，
+# 校验状态码与 MIME（缺失的 /assets 资源必须是 404，绝不允许 SPA 回退拿
+# index.html 冒充成功）。
+
+
+def load_vite_manifest(dist_dir: Path) -> dict:
+    """Read `dist/.vite/manifest.json`; the build must have it (build.manifest: true)."""
+    manifest_path = dist_dir / ".vite" / "manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(
+            f"构建错误：缺少 {manifest_path}。frontend/vite.config.ts 必须开启 "
+            f"build.manifest，否则无法核对懒加载 chunk 是否齐全。"
+        )
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def collect_manifest_assets(manifest: dict) -> set[str]:
+    """Recursively collect every file referenced by entries, imports and dynamicImports."""
+    files: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(key: str) -> None:
+        if key in visiting:
+            return
+        visiting.add(key)
+        entry = manifest.get(key)
+        if not isinstance(entry, dict):
+            return
+        out = entry.get("file")
+        if isinstance(out, str) and out:
+            files.add(out)
+        # Chunk-level css/assets lists point at real emitted files too — a lazy
+        # chunk whose CSS is missing must trip the gate, not just a missing JS.
+        for extra in list(entry.get("css") or []) + list(entry.get("assets") or []):
+            if isinstance(extra, str) and extra:
+                files.add(extra)
+        for child_key in list(entry.get("imports") or []) + list(entry.get("dynamicImports") or []):
+            visit(child_key)
+        visiting.discard(key)
+
+    for key, entry in manifest.items():
+        if isinstance(entry, dict) and (entry.get("isEntry") or entry.get("isDynamicEntry") or "file" in entry):
+            visit(key)
+    return files
+
+
+def verify_frontend_manifest(dist_dir: Path) -> set[str]:
+    """Gate: every file the manifest references must exist inside dist."""
+    manifest = load_vite_manifest(dist_dir)
+    assets = collect_manifest_assets(manifest)
+    missing = sorted(a for a in assets if not (dist_dir / a).is_file())
+    if missing:
+        raise RuntimeError(
+            "构建错误：Vite manifest 引用的产物缺失（懒加载 chunk 不完整）: "
+            + ", ".join(missing)
+        )
+    return assets
+
+
+def verify_frontend_assets_served(dist_dir: Path, backend_dir: Path) -> set[str]:
+    """Serve dist through the real backend static chain and request every asset.
+
+    Uses the actual `setup_desktop_static_serving` (StaticFiles mount + SPA
+    catch-all), so the MIMEs and fallthrough behaviour under test are the ones a
+    packaged backend will exhibit on the build host — including whatever
+    `mimetypes` resolves for `.js` there (a `text/plain` mapping makes module
+    scripts unloadable, which is exactly the "logs link does nothing" class of
+    failure this gate exists to catch).
+    """
+    sys.path.insert(0, str(backend_dir))
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from app.config import settings
+        from app.desktop import setup_desktop_static_serving
+    except ImportError as err:
+        raise RuntimeError(f"构建错误：无法导入后端静态服务链进行资源校验: {err}") from err
+
+    settings.FRONTEND_DIST_DIR = str(dist_dir)
+    app = FastAPI()
+    setup_desktop_static_serving(app)
+    client = TestClient(app)
+
+    assets = verify_frontend_manifest(dist_dir)
+    js_mimes = {"text/javascript", "application/javascript"}
+    failures: list[str] = []
+    for asset in sorted(assets):
+        resp = client.get(f"/{asset}")
+        if resp.status_code != 200:
+            failures.append(f"{asset}: HTTP {resp.status_code}")
+            continue
+        content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if asset.endswith((".js", ".mjs")):
+            if content_type not in js_mimes:
+                failures.append(f"{asset}: JS MIME 异常 {content_type!r}")
+        elif asset.endswith(".css"):
+            if content_type != "text/css":
+                failures.append(f"{asset}: CSS MIME 异常 {content_type!r}")
+        elif content_type == "text/html":
+            failures.append(f"{asset}: 返回了 HTML（疑似 SPA 回退冒充）")
+
+    # Negative controls: a missing asset must be a real 404, and the SPA route
+    # must still serve index.html (document navigation, not a module request).
+    missing = client.get("/assets/__definitely_missing__.js")
+    if missing.status_code == 200:
+        failures.append("/assets/__definitely_missing__.js: 缺失资源返回 200（SPA 冒充成功）")
+    spa = client.get("/logs")
+    if spa.status_code != 200 or "text/html" not in (spa.headers.get("content-type") or ""):
+        failures.append("/logs: SPA 回退未返回 index.html")
+
+    if failures:
+        raise RuntimeError(
+            "构建错误：冻结后端资源完整性校验失败:\n  - " + "\n  - ".join(failures)
+        )
+    return assets
+
+
+def verify_desktop_worker_unpacked(desktop_dir: Path) -> list[str]:
+    """Worker entries must compile and be covered by asarUnpack.
+
+    worker_threads cannot load from inside app.asar; electron-builder.json5 must
+    unpack every compiled module the worker entry can require.
+    """
+    config_path = desktop_dir / "electron-builder.json5"
+    config_text = config_path.read_text(encoding="utf-8")
+    if "dist/**" not in config_text.replace(" ", ""):
+        raise RuntimeError(
+            "构建错误：electron-builder.json5 的 asarUnpack 未覆盖 dist/**，"
+            "Worker 线程将无法从 app.asar.unpacked 加载。"
+        )
+    required = ["log-worker.js", "log-workers.js", "log-store.js", "feedback-logs.js", "diagnostics.js"]
+    missing = [name for name in required if not (desktop_dir / "dist" / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            "构建错误：桌面编译产物缺少 Worker 入口或依赖: " + ", ".join(missing)
+        )
+    return required
+
+
+def read_feedback_dependency(frontend_dir: Path) -> dict:
+    """Record the pinned widget version and the vendored tarball SHA-256."""
+    pkg_path = frontend_dir / "node_modules" / "@feedback" / "web" / "package.json"
+    info: dict[str, str] = {}
+    if pkg_path.is_file():
+        info["version"] = json.loads(pkg_path.read_text(encoding="utf-8"))["version"]
+    deps = json.loads((frontend_dir / "package.json").read_text(encoding="utf-8"))["dependencies"]
+    spec = deps.get("@feedback/web", "")
+    if spec.startswith("file:"):
+        tarball = frontend_dir / spec[len("file:"):]
+        info["tarball"] = tarball.name
+        if tarball.is_file():
+            info["tarball_sha256"] = sha256_file(tarball)
+    return info
 
 
 def check_environment():
@@ -285,7 +461,7 @@ def main():
     pyinstaller_dir = desktop_dir / "pyinstaller"
 
     print("==================================================")
-    print(" RAG Windows Desktop Release Pipeline ")
+    print(" StudyTool (学习助手) Windows Desktop Release Pipeline ")
     print("==================================================")
 
     # 0. Check environment
@@ -339,6 +515,13 @@ def main():
         + ", ".join(p.name for p in injected_assets)
     )
 
+    # 2c. Asset integrity gates: every manifest-referenced file must exist, and
+    #     the frozen serving chain must answer each one with a correct MIME —
+    #     a missing/mis-served lazy chunk is the packaged-build "dead link" mode.
+    print("\n[Step 2c] Verifying frontend assets via manifest + frozen serving chain...")
+    served_assets = verify_frontend_assets_served(frontend_dir / "dist", repo_root / "backend")
+    print(f"  {len(served_assets)} manifest assets verified (exist + served with correct MIME).")
+
     # 3. Build backend onedir with PyInstaller
     run_command(
         [sys.executable, str(pyinstaller_dir / "build_backend.py")],
@@ -359,8 +542,23 @@ def main():
     # 4. Compile desktop TypeScript
     run_command([npm_executable(), "run", "build"], desktop_dir, "Compiling desktop TypeScript")
 
+    # 4b. Worker unpack gate: the worker entry and its imports must exist in dist
+    #     and be covered by asarUnpack, or log queries die inside the installer.
+    worker_modules = verify_desktop_worker_unpacked(desktop_dir)
+    print(f"  Worker modules verified at unpacked path: {', '.join(worker_modules)}")
+
     # 5. Run desktop unit tests
     run_command([npm_executable(), "test"], desktop_dir, "Running desktop unit tests")
+
+    # 5b. Verify and apply NSIS template patch ahead of electron-builder
+    print("\n[Step 5b] Verifying and applying NSIS multiUser template patch...")
+    patch_script = desktop_dir / "scripts" / "patch-nsis-template.js"
+    if patch_script.is_file():
+        run_command(
+            [node_executable(), str(patch_script)],
+            desktop_dir,
+            "Verifying / applying NSIS template patch ahead of packaging",
+        )
 
     # 6. Package with electron-builder
     if sys.platform == "win32" or os.environ.get("FORCE_BUILD_WIN"):
@@ -408,6 +606,14 @@ def main():
     manifest = {
         "build_time": datetime.now(timezone.utc).isoformat(),
         "version": package_version,
+        "packaging": {
+            "builder": "electron-builder",
+            "builder_version": ELECTRON_BUILDER_PINNED_VERSION,
+            "upstream_patch_commit": NSIS_UPSTREAM_PATCH_COMMIT,
+            "patched_template_sha256": NSIS_PATCHED_TEMPLATE_SHA256,
+        },
+        "feedback": read_feedback_dependency(frontend_dir),
+        "frontend_assets": sorted(served_assets),
         "installers": [],
         "update_manifests": [p.name for p in update_manifests],
         "blockmaps": [p.name for p in blockmaps],

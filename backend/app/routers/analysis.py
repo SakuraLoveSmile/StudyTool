@@ -1,14 +1,15 @@
 import uuid
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from app.database import db_session
 from app.models.schemas import (
     KnowledgePointCreate, KnowledgePointUpdate, KnowledgePointResponse,
     KnowledgePointMergeRequest, KnowledgePointStats, OverallStatsResponse,
     ExtractionCreateRequest, ExtractionBatchResponse, CandidateResponse,
     ApplyCandidatesRequest, ApplyCandidatesResponse,
-    QuestionLinkSuggestionResponse, QuestionLinkApplyRequest, QuestionLinkApplyResponse
+    QuestionLinkSuggestionResponse, QuestionLinkApplyRequest, QuestionLinkApplyResponse,
+    ExtractionBatchListResponse, CandidateSourceReview, CandidateSourceReviewRequest
 )
 from app.services.stats_engine import StatsEngine
 from app.services.knowledge_extractor import KnowledgeExtractor
@@ -329,6 +330,21 @@ def create_extraction(req: ExtractionCreateRequest):
         logger.error("Failed to create extraction batch: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"创建考点提取批次失败: {str(e)}")
 
+@router.get("/extractions/latest", response_model=ExtractionBatchResponse)
+def get_latest_extraction():
+    batch = KnowledgeExtractor.get_latest_extraction()
+    if not batch:
+        raise HTTPException(status_code=404, detail="尚无考点提取批次")
+    return ExtractionBatchResponse(**batch)
+
+@router.get("/extractions", response_model=ExtractionBatchListResponse)
+def list_extractions(
+    pending_only: bool = Query(False),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    return KnowledgeExtractor.list_extractions(pending_only=pending_only, limit=limit, offset=offset)
+
 @router.get("/extractions/{extraction_id}", response_model=ExtractionBatchResponse)
 def get_extraction(extraction_id: str):
     batch = KnowledgeExtractor.get_extraction_batch(extraction_id)
@@ -340,9 +356,30 @@ def get_extraction(extraction_id: str):
 def get_extraction_candidates(extraction_id: str):
     return KnowledgeExtractor.get_candidates(extraction_id)
 
+@router.get("/extractions/{extraction_id}/candidates/{candidate_id}/source-review", response_model=CandidateSourceReview)
+def get_candidate_source_review(extraction_id: str, candidate_id: str):
+    review = KnowledgeExtractor.get_candidate_source_review(extraction_id, candidate_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="候选考点不存在")
+    return review
+
+@router.post("/extractions/{extraction_id}/candidates/{candidate_id}/source-review", response_model=CandidateResponse)
+def confirm_candidate_source_review(extraction_id: str, candidate_id: str, req: CandidateSourceReviewRequest):
+    try:
+        return KnowledgeExtractor.confirm_candidate_source_review(extraction_id, candidate_id, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
 @router.post("/extractions/{extraction_id}/apply", response_model=ApplyCandidatesResponse)
 def apply_extraction_candidates(extraction_id: str, req: ApplyCandidatesRequest):
-    counts = KnowledgeExtractor.apply_candidates(extraction_id, req.decisions)
+    try:
+        counts = KnowledgeExtractor.apply_candidates(extraction_id, req.decisions)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return ApplyCandidatesResponse(**counts)
 
 @router.get("/extractions/{extraction_id}/question-links", response_model=QuestionLinkSuggestionResponse)

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
+import { configDir } from './app-paths';
 
 export interface SafeStorageInterface {
   isEncryptionAvailable(): boolean;
@@ -79,29 +79,7 @@ export class CredentialsStore {
 
   constructor(customConfigDir?: string, storageImpl?: SafeStorageInterface) {
     this.storage = storageImpl || getDefaultSafeStorage();
-    if (customConfigDir) {
-      this.configDir = customConfigDir;
-    } else if (process.platform === 'win32' || process.env.LOCALAPPDATA) {
-      this.configDir = path.join(
-        process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-        'RAGStudyAssistant',
-        'config'
-      );
-    } else if (process.platform === 'darwin') {
-      this.configDir = path.join(
-        os.homedir(),
-        'Library',
-        'Application Support',
-        'RAGStudyAssistant',
-        'config'
-      );
-    } else {
-      this.configDir = path.join(
-        process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-        'RAGStudyAssistant',
-        'config'
-      );
-    }
+    this.configDir = customConfigDir || configDir();
 
     fs.mkdirSync(this.configDir, { recursive: true });
     this.filePath = path.join(this.configDir, 'credentials.enc');

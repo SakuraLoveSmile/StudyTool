@@ -9,6 +9,16 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 CURRENT_SCHEMA_VERSION = 6
+STUDENT_FLOW_MIGRATION = "student_flow_v1"
+
+
+def _needs_student_flow_migration() -> bool:
+    """Feature marker keeps the additive v6 upgrade backed up exactly once."""
+    with sqlite3.connect(settings.db_path, timeout=30.0) as conn:
+        try:
+            return conn.execute("SELECT value FROM schema_meta WHERE key = ?", (STUDENT_FLOW_MIGRATION,)).fetchone() is None
+        except sqlite3.OperationalError:
+            return True
 
 
 def _read_schema_version() -> int:
@@ -123,6 +133,7 @@ def _ensure_learning_columns(cursor: sqlite3.Cursor) -> None:
             ("metadata_json", "TEXT"),
         ),
         "recall_cards": (
+            ("published_revision_id", "TEXT"), ("current_revision_id", "TEXT"),
             ("knowledge_point_id", "TEXT"), ("prompt", "TEXT"), ("answer", "TEXT"),
             ("hint", "TEXT"), ("source_excerpt", "TEXT"), ("tags_json", "TEXT"),
             ("publication_status", "TEXT DEFAULT 'draft'"), ("candidate", "INTEGER DEFAULT 0"),
@@ -153,7 +164,8 @@ def _ensure_learning_columns(cursor: sqlite3.Cursor) -> None:
             ("chapter_id", "TEXT"), ("card_revision_id", "TEXT"), ("layer", "TEXT DEFAULT 'outline'"),
             ("content_revision_no", "INTEGER DEFAULT 0"), ("progress_type", "TEXT DEFAULT 'overall'"),
             ("state", "TEXT DEFAULT 'new'"), ("status", "TEXT DEFAULT 'new'"),
-            ("interval_index", "INTEGER DEFAULT 0"), ("repetitions", "INTEGER DEFAULT 0"),
+            ("interval_index", "INTEGER DEFAULT 0"), ("new_round", "INTEGER DEFAULT 0"),
+            ("repetitions", "INTEGER DEFAULT 0"),
             ("ease_factor", "REAL DEFAULT 2.5"), ("interval_days", "INTEGER DEFAULT 0"),
             ("due_at", "TIMESTAMP"), ("due_date", "TEXT"), ("first_study_date", "TEXT"),
             ("last_studied_at", "TIMESTAMP"), ("last_reviewed_at", "TIMESTAMP"),
@@ -490,6 +502,7 @@ def _create_learning_schema(cursor: sqlite3.Cursor) -> None:
             state TEXT NOT NULL DEFAULT 'new',
             status TEXT NOT NULL DEFAULT 'new',
             interval_index INTEGER NOT NULL DEFAULT 0,
+            new_round INTEGER NOT NULL DEFAULT 0,
             repetitions INTEGER NOT NULL DEFAULT 0,
             ease_factor REAL NOT NULL DEFAULT 2.5,
             interval_days INTEGER NOT NULL DEFAULT 0,
@@ -681,7 +694,7 @@ def init_db() -> None:
         raise RuntimeError(
             f"数据库 schema_version={previous_version} 高于当前支持版本 {CURRENT_SCHEMA_VERSION}，拒绝降级"
         )
-    if existing_database and previous_version < CURRENT_SCHEMA_VERSION:
+    if existing_database and (previous_version < CURRENT_SCHEMA_VERSION or _needs_student_flow_migration()):
         # Do not catch this exception: backup failure must abort the upgrade.
         backup_database()
 
@@ -942,6 +955,12 @@ def init_db() -> None:
         """)
 
         # Migrations
+        for table, columns in {
+            "extraction_batches": (("source_status", "TEXT DEFAULT 'valid'"), ("source_snapshot_hash", "TEXT")),
+            "extraction_candidates": (("source_status", "TEXT DEFAULT 'valid'"), ("decision_json", "TEXT"), ("version", "INTEGER NOT NULL DEFAULT 1")),
+        }.items():
+            for column, definition in columns:
+                _add_column_if_missing(cursor, table, column, definition)
         _migrate_questions_year_nullable(cursor)
         for column, definition in (
             ("source_chunk_id", "TEXT"),
@@ -992,6 +1011,20 @@ def init_db() -> None:
         # v6 indexes are created.
         _ensure_learning_columns(cursor)
         _create_learning_schema(cursor)
+
+        # A timestamp on an approved historical revision is publication evidence.
+        # Never infer publication from the current (possibly unreviewed) draft.
+        cursor.execute("""
+            UPDATE recall_cards SET published_revision_id = (
+                SELECT r.id FROM recall_card_revisions r
+                WHERE r.card_id = recall_cards.id AND r.published_at IS NOT NULL
+                  AND (r.review_status = 'approved' OR r.status = 'approved')
+                ORDER BY r.published_at DESC, r.revision_number DESC LIMIT 1
+            )
+            WHERE published_revision_id IS NULL AND is_confirmed = 1
+              AND publication_status IN ('published', 'approved')
+        """)
+        cursor.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, '1')", (STUDENT_FLOW_MIGRATION,))
 
         cursor.execute(
             "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?) "
