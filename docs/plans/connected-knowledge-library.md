@@ -103,3 +103,11 @@ Windows 第二轮安装退出 0、文件和卸载登记存在，但首窗检查 
 - T6 待体验：最终 Linux amd64 镜像包已下载，所有文件校验和通过；BUILD.json 指向上述提交且工作区干净。真实隔离容器检查和重启持久化均通过，远程模型未调用。三个产品产物和 Windows 冒烟证据保存在该次 Actions artifacts，未发布正式 Release、推送注册表或部署。
 
 本轮构建与交付已完成；整体仍为实现中：生产服务器/HTTPS 未提供，用户设备流程与真实 AI 内容质量未验证，OCR 排查暂停、扫描卷未确认、管理学资料未齐，全书真实内容尚未生成。用户尚未确认体验结果，不标已验收。
+
+## 2026-10-16 预览版发布
+
+用户明确授权“构建完成了就发 release”后，已发布 [联网版 0.1.0 预览版](https://github.com/SakuraLoveSmile/StudyTool-Releases/releases/tag/connected-v0.1.0)。发布仓库沿用公开下载仓库 `SakuraLoveSmile/StudyTool-Releases`，源码仓库的 `connected-v0.1.0` 标签指向实际构建提交 `9e2cfd1cd7dee9b2a8df168b5f6ab037673cbe16`；下载仓库自身标签指向其 main，源码依据以 manifest 为准。
+
+发布包含原 CI 的调试签名 APK、未签名 Windows x64 安装包、封装同次 CI 文件的 Linux amd64 Docker 包，以及 README、RELEASE_MANIFEST.json、SHA256SUMS.txt，共六个附件。服务端封装前后逐项核对 13 个 CI 原文件；六个远端附件的大小与 GitHub SHA-256 均匹配本地，公开 README 匿名下载后哈希一致。该 Release 为已公开的 prerelease，既有 latest 仍为 `desktop-v1.0.8-beta.1`。
+
+T5/T6 维持待体验；发布不代表生产部署或用户设备验收，真实模型、资料和 OCR 等剩余范围沿上节记录。
