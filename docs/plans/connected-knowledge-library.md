@@ -127,8 +127,10 @@ T6 待体验：用户授权补齐 GHCR 发布和自动拉取部署文件后，�
 
 ## 2026-10-16 单应用与按版本发布修订
 
-T6 实现中：按用户现有 Nginx 和版本更新要求，将推荐部署改为一个无 Caddy 的应用容器，网页与 API 同端口；镜像改为 `ghcr.io/sakuralovesmile/studytool:<版本>`，默认 Compose 与环境模板使用 `:latest`，`APP_IMAGE` 可固定版本。摘要仅保留在构建证据与精确回滚中。新增公开 Release 发布步骤，复用 `RELEASE_REPO_TOKEN` 向 `StudyTool-Releases` 的 `connected-v<版本>` 上传部署附件；先隔离验证版本与匿名拉取，再推广 latest，避免未验证构建覆盖默认入口。
+T6 待体验：按用户现有 Nginx 和版本更新要求，将推荐部署改为一个无 Caddy 的应用容器，网页与 API 同端口；镜像改为 `ghcr.io/sakuralovesmile/studytool:<版本>`，默认 Compose 与环境模板使用 `:latest`，`APP_IMAGE` 可固定版本。摘要仅保留在构建证据与精确回滚中。新增公开 Release 发布步骤，复用 `RELEASE_REPO_TOKEN` 向 `StudyTool-Releases` 的 `connected-v<版本>` 上传部署附件；先隔离验证版本与匿名拉取，再推广 latest，避免未验证构建覆盖默认入口。
 
-无 Caddy 应用的既有本地验证：51 项静态授权/账号/隔离/桌面 OCR 回归通过；本地镜像在临时 Nginx HTTPS 后完成账号、CSRF、合成 DOCX、章节、隔离与重启持久化检查，真实浏览器可显示登录页面。此处未重新运行后端检查，业务实现未变化。本轮新增的默认/latest 和固定版本 Compose 渲染、Python 语法、workflow job 依赖检查通过；发布编排以隔离替身核对旧客户端正文保留、旧部署改名和校验修正、失败验证阻止发布。远端新标准镜像与自动 Release 流程尚待 Actions 实际完成，之后补记结果。
+无 Caddy 应用的既有本地验证：51 项静态授权/账号/隔离/桌面 OCR 回归通过；本地镜像在临时 Nginx HTTPS 后完成账号、CSRF、合成 DOCX、章节、隔离与重启持久化检查，真实浏览器可显示登录页面。此处未重新运行后端检查，业务实现未变化。本轮新增的默认/latest 和固定版本 Compose 渲染、Python 语法、workflow job 依赖检查通过；发布编排以隔离替身核对旧客户端正文保留、旧部署改名和校验修正、失败验证阻止发布。[Actions 38779962219](https://github.com/SakuraLoveSmile/StudyTool/actions/runs/38779962219) 最终 publish、verify、release 三项成功；首次匿名拉取因新包默认私有失败，用户完成公开设置后重跑失败步骤通过。版本与 latest 均已匿名拉取并核对同一摘要，公开 Release 附件下载后 APP 与旧 GHCR 两套校验全部通过。
 
 旧版双镜像的 Compose 将保留为 `compose.caddy.yaml`，其部署说明与校验同步改名，避免新单应用 `compose.yaml` 覆盖后破坏旧证据；原 APK、Windows、离线包与其构建来源保持。未部署用户服务器，真实模型与设备验收状态不变。
+
+发布源为 `e63a607c40264398f5cb0b552a08f4c5e0ea222b`。公开镜像 `ghcr.io/sakuralovesmile/studytool:0.1.0` 与 `:latest` 均解析至 `sha256:8eb6eeeacdddc35c58f00d52e7687a620a0c5f04b2d6d4368ade24a097df85ce`，GHCR 网页匿名可见。现有 [connected-v0.1.0 Release](https://github.com/SakuraLoveSmile/StudyTool-Releases/releases/tag/connected-v0.1.0) 已由流水线上传默认 latest 的单应用 `compose.yaml`、`app.env.example`、`NGINX.md` 和 APP 构建/验证/校验文件；旧 Compose 归档及说明/校验也已同步，原 APK/EXE/离线包与原始证据的 asset 数字 ID、大小、摘要均保持。原源码标签未重打；不将该服务端来源误记为旧客户端构建来源。
