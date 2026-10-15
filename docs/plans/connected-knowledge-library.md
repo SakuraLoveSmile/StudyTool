@@ -111,3 +111,16 @@ Windows 第二轮安装退出 0、文件和卸载登记存在，但首窗检查 
 发布包含原 CI 的调试签名 APK、未签名 Windows x64 安装包、封装同次 CI 文件的 Linux amd64 Docker 包，以及 README、RELEASE_MANIFEST.json、SHA256SUMS.txt，共六个附件。服务端封装前后逐项核对 13 个 CI 原文件；六个远端附件的大小与 GitHub SHA-256 均匹配本地，公开 README 匿名下载后哈希一致。该 Release 为已公开的 prerelease，既有 latest 仍为 `desktop-v1.0.8-beta.1`。
 
 T5/T6 维持待体验；发布不代表生产部署或用户设备验收，真实模型、资料和 OCR 等剩余范围沿上节记录。
+
+## 2026-10-16 GHCR 与直接拉取 Compose
+
+T6 待体验：用户授权补齐 GHCR 发布和自动拉取部署文件后，已新增发布 workflow、带 OCI 来源标签的构建、纯 image Compose、配置模板及中文部署说明。生产数据继续使用原专用 bind 目录和 UID 10001，证书卷与账号契约保留。镜像平台为 linux/amd64；Release Compose 与配置模板固定镜像摘要。
+
+- 镜像发布源：`7d63e24897335d68508ad28091379a07e519b384`，源码标签 `connected-server-v0.1.0`。原 `connected-v0.1.0` 标签和 APK/EXE/离线包未修改。[发布运行 38771412994](https://github.com/SakuraLoveSmile/StudyTool/actions/runs/38771412994) 成功，先隔离检查后推送 GHCR，两个包均已公开。
+- Backend：`ghcr.io/sakuralovesmile/studytool-connected-backend:0.1.0`，digest `sha256:d5cba37d256f81b3306c98d05800c09de4e2d4e9567e0fbad2f1d8495b9b7bb5`。
+- Frontend：`ghcr.io/sakuralovesmile/studytool-connected-frontend:0.1.0`，digest `sha256:a814d3213c57b8dd7a9c1cde8b88d60895b0990efdf5475141a1ea37e9883965`。
+- [验证运行 38772738407](https://github.com/SakuraLoveSmile/StudyTool/actions/runs/38772738407) 在 Ubuntu 上成功退出；验证脚本源为 `6e7b5dc`。无认证 Docker config 对生产 Compose 的两镜像执行真实匿名 pull，再使用独立 Compose project、内部网络、临时命名数据卷和探针专用 CA，完成 HTTPS/账号/改密/CSRF/合成 DOCX 上传解析/章节/双账号隔离及重启后持久化检查。模型是本地协议替身，没有真实模型调用。测试用命名卷替换生产 bind，仅用于隔离数据与 Linux 清理，不代表生产挂载权限已现场验收。
+- 首轮 Ubuntu `38772516441` 的匿名拉取及功能探针通过，但临时 bind 中 UID 10001 文件导致宿主清理失败；改用专属临时命名卷后最终整项成功。本机 Docker 的匿名拉取返回 denied，而宿主匿名注册表读取与 Ubuntu Docker 均通过；本机 Docker 网络原因未进一步归因，不能把本机 pull 写为通过。
+- 现有公开预览 Release 新增 `compose.yaml`、`ghcr.env.example`、`GHCR.md`、`GHCR_MANIFEST.json`、`GHCR_SMOKE.json`、`GHCR_SHA256SUMS.txt`；部署不再依赖离线导入或源码构建。填写服务器域名与模型参数，准备数据目录，执行 compose pull/up，再创建账号。
+
+本轮仅完成镜像、部署入口及隔离验证；尚未部署用户生产服务器，真实 AI/OCR、全书内容、资料缺口与用户设备验收维持前述状态，不标已验收。
