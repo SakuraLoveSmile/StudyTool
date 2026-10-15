@@ -70,11 +70,19 @@
               <h2 id="chapter-heading" class="font-display text-lg font-bold text-ink">{{ selectedChapter?.title || '章节学习' }}</h2>
               <p class="text-xs text-sub mt-2">点击生成会调用服务端配置的 AI 模型，并保存结果。</p>
             </div>
-            <button class="btn btn-primary shrink-0" :disabled="!selectedChapterId || generating || chaptersLoading || guidesLoading" @click="generateGuide">
-              {{ generating ? '正在生成…' : activeGuide ? '重新生成' : '生成章节资料' }}
+            <button class="btn btn-primary shrink-0" :disabled="!selectedChapterId || generating || !!guideTaskSyncError || guideTasksLoading || chaptersLoading || guidesLoading" @click="generateGuide">
+              {{ submittingGuide ? '正在提交…' : generating ? '正在生成…' : activeGuide ? '重新生成' : '生成章节资料' }}
             </button>
           </div>
-          <p v-if="generating" class="text-xs text-sub mt-3" role="status">{{ generationScope === guideScope ? '正在阅读章节并整理学习资料，请稍候。' : '上一章节仍在生成，结果会保存至该章节。完成后可生成当前章节。' }}</p>
+          <div v-if="generationTask" class="text-xs text-sub mt-3 space-y-2" role="status">
+            <p>{{ generationTask.message || '章节生成任务' }} · {{ generationTask.progress }}%</p>
+            <p v-if="generating">任务已加入后台队列，离开或刷新页面后仍会继续。</p>
+            <button class="text-accent underline underline-offset-2" @click="taskManager.openTaskDetail(generationTask.id)">查看任务进度与日志</button>
+          </div>
+          <p v-if="guideTaskSyncError" class="notice text-warn bg-warn/10 mt-3" role="alert">
+            {{ guideTaskSyncError }}
+            <button class="underline underline-offset-2 ml-2" @click="loadGuideTasks">重新获取任务状态</button>
+          </p>
           <p v-if="guideError" class="notice text-err bg-err/5 mt-4" role="alert">{{ guideError }}</p>
           <label v-if="guides.length" class="block mt-4">
             <span class="field-label">已保存的学习资料</span>
@@ -248,7 +256,8 @@ import { apiClient, sessionTransport } from '../api/client';
 import { libraryApi } from '../api/library';
 import SourceQuoteModal from '../components/SourceQuoteModal.vue';
 import KnowledgeMindMap from '../components/KnowledgeMindMap.vue';
-import type { DocumentItem } from '../types';
+import { useTaskManager } from '../composables/useTaskManager';
+import type { DocumentItem, TaskStatus } from '../types';
 import type { LibraryAnswer, LibraryChapter, LibraryCitation, LibraryGuide } from '../types/library';
 
 const documents = ref<DocumentItem[]>([]);
@@ -265,8 +274,13 @@ const guides = ref<LibraryGuide[]>([]);
 const selectedGuideId = ref('');
 const guidesLoading = ref(false);
 const guideSourcesVerified = ref(false);
-const generating = ref(false);
-const generationScope = ref('');
+const taskManager = useTaskManager();
+const generationTask = ref<TaskStatus | null>(null);
+const submittingGuide = ref(false);
+const guideTasksLoading = ref(false);
+const guideTaskSyncError = ref('');
+const activeTaskStates = new Set(['pending', 'processing', 'cancel_requested']);
+const generating = computed(() => submittingGuide.value || (!!generationTask.value && activeTaskStates.has(generationTask.value.status)));
 const guideError = ref('');
 const activeTab = ref('summary');
 const tabs = [ { id: 'summary', label: '章节总结' }, { id: 'map', label: '思维导图' }, { id: 'recitation', label: '背诵短段' }, { id: 'connections', label: '真题与管理学' } ];
@@ -289,6 +303,8 @@ let chapterSequence = 0;
 let guideSequence = 0;
 let answerHistorySequence = 0;
 let askSequence = 0;
+let generationSequence = 0;
+let generationTimer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 
 const readyDocuments = computed(() => documents.value.filter(doc => doc.status === 'completed'));
@@ -299,7 +315,6 @@ const examOptions = computed(() => readyDocuments.value.filter(doc => ['exam', '
 const selectedChapter = computed(() => chapters.value.find(chapter => chapter.id === selectedChapterId.value));
 const activeGuide = computed(() => guides.value.find(guide => guide.id === selectedGuideId.value));
 const examConcepts = computed(() => activeGuide.value?.exam_points.map(point => point.concept) || []);
-const guideScope = computed(() => `${selectedDocId.value}:${selectedChapterId.value}`);
 const effectiveQaDocIds = computed(() => qaChapterId.value ? qaDocIds.value.filter(id => id === selectedDocId.value) : qaDocIds.value);
 const qaScope = computed(() => JSON.stringify([effectiveQaDocIds.value.slice().sort(), qaChapterId.value]));
 const followUpAvailable = computed(() => answerSourcesVerified.value && !!activeAnswer.value && !activeAnswer.value.source_stale && JSON.stringify([activeAnswer.value.doc_ids.slice().sort(), activeAnswer.value.chapter_id || '']) === qaScope.value);
@@ -389,25 +404,83 @@ async function loadGuides() {
 
 async function generateGuide() {
   if (generating.value || !selectedChapter.value) return;
-  const scope = guideScope.value;
   const payload = { doc_id: selectedDocId.value, chapter_id: selectedChapterId.value, management_doc_ids: managementDocIds.value.slice(), exam_doc_ids: examDocIds.value.slice() };
   const epoch = sessionTransport.epoch;
-  ++guideSequence;
-  generationScope.value = scope;
-  generating.value = true;
+  const sequence = ++generationSequence;
+  submittingGuide.value = true;
   guideError.value = '';
+  guideTaskSyncError.value = '';
   try {
-    const result = await libraryApi.generateGuide(payload);
-    if (disposed || scope !== guideScope.value || epoch !== sessionTransport.epoch) return;
-    ++guideSequence;
-    guidesLoading.value = false;
-    guides.value = [result, ...guides.value.filter(guide => guide.id !== result.id)];
-    guideSourcesVerified.value = true;
-    selectedGuideId.value = result.id;
+    const result = await libraryApi.submitGuide(payload);
+    if (disposed || sequence !== generationSequence || epoch !== sessionTransport.epoch) return;
+    await applyGenerationTask(result, sequence);
+    void taskManager.fetchTasks();
   } catch (error) {
-    if (!disposed && scope === guideScope.value && !sessionTransport.isCancelled(error)) guideError.value = errorText(error, '章节生成失败，请检查服务端模型配置或稍后重试。');
+    if (!disposed && sequence === generationSequence && epoch === sessionTransport.epoch && !sessionTransport.isCancelled(error)) {
+      guideError.value = errorText(error, '章节任务提交失败，请先重新获取任务状态后再试。');
+      // A lost submission response does not mean that the server failed to enqueue.
+      await loadGuideTasks();
+    }
   } finally {
-    generating.value = false;
+    if (sequence === generationSequence) submittingGuide.value = false;
+  }
+}
+
+async function applyGenerationTask(task: TaskStatus, sequence: number) {
+  if (disposed || sequence !== generationSequence) return;
+  const previous = generationTask.value;
+  generationTask.value = task;
+  guideTaskSyncError.value = '';
+  if (activeTaskStates.has(task.status)) {
+    guideError.value = '';
+    scheduleGenerationPoll(sequence);
+  } else if (task.status === 'completed') {
+    if (previous?.id !== task.id || previous.status !== 'completed') await loadGuides();
+  } else if (task.status === 'failed' || task.status === 'partial') {
+    guideError.value = task.error_msg || task.message || '章节生成失败，请查看任务日志。';
+  }
+}
+
+function scheduleGenerationPoll(sequence: number) {
+  clearTimeout(generationTimer);
+  const epoch = sessionTransport.epoch;
+  generationTimer = setTimeout(async () => {
+    const task = generationTask.value;
+    if (disposed || sequence !== generationSequence || epoch !== sessionTransport.epoch || !task) return;
+    try {
+      const result = await apiClient.getTaskStatus(task.id);
+      if (epoch !== sessionTransport.epoch) return;
+      await applyGenerationTask(result, sequence);
+    } catch (error) {
+      if (disposed || sequence !== generationSequence || epoch !== sessionTransport.epoch || sessionTransport.isCancelled(error)) return;
+      guideTaskSyncError.value = '任务状态更新中断，后台可能仍在处理，请勿重复提交。';
+      scheduleGenerationPoll(sequence);
+    }
+  }, 2000);
+}
+
+async function loadGuideTasks() {
+  const sequence = ++generationSequence;
+  const epoch = sessionTransport.epoch;
+  const docId = selectedDocId.value;
+  const chapterId = selectedChapterId.value;
+  clearTimeout(generationTimer);
+  generationTask.value = null;
+  submittingGuide.value = false;
+  guideTaskSyncError.value = '';
+  guideTasksLoading.value = !!docId && !!chapterId;
+  if (!docId || !chapterId) return;
+  try {
+    const result = await libraryApi.guideTasks(docId, chapterId);
+    if (disposed || sequence !== generationSequence || epoch !== sessionTransport.epoch) return;
+    const latest = result.find(task => activeTaskStates.has(task.status)) || result[0];
+    if (latest) await applyGenerationTask(latest, sequence);
+  } catch (error) {
+    if (!disposed && sequence === generationSequence && epoch === sessionTransport.epoch && !sessionTransport.isCancelled(error)) {
+      guideTaskSyncError.value = '暂时无法读取章节任务，请重新获取状态后再生成。';
+    }
+  } finally {
+    if (sequence === generationSequence) guideTasksLoading.value = false;
   }
 }
 
@@ -498,12 +571,29 @@ watch(selectedDocId, () => {
 watch(selectedChapterId, () => {
   qaChapterId.value = qaDocIds.value.length === 1 && qaDocIds.value[0] === selectedDocId.value ? selectedChapterId.value : '';
   void loadGuides();
+  void loadGuideTasks();
 }, { flush: 'sync' });
+// Retrying from the shared task drawer must also resume this chapter's status.
+watch(taskManager.tasks, tasks => {
+  const current = generationTask.value;
+  if (!current || submittingGuide.value) return;
+  const currentIndex = tasks.findIndex(task => task.id === current.id);
+  // History is newest first. A fast retry can already be terminal by the first
+  // refresh, and must still replace the previous attempt and reload its result.
+  const retry = tasks.find((task, index) => task.task_type === 'generate_library_guide'
+    && task.target_id === current.target_id && task.id !== current.id
+    && (task.retry_of === current.id || (currentIndex >= 0 && index < currentIndex)));
+  if (retry) {
+    const sequence = ++generationSequence;
+    clearTimeout(generationTimer);
+    void applyGenerationTask(retry, sequence);
+  }
+});
 watch(selectedGuideId, () => { selectedMapNode.value = ''; sourceCitation.value = null; });
 watch(qaScope, () => { ++askSequence; startNewQuestion(); }, { flush: 'sync' });
 watch(qaDocIds, () => { if (qaDocIds.value.length !== 1 || !qaDocIds.value.includes(selectedDocId.value)) qaChapterId.value = ''; }, { deep: true, flush: 'sync' });
 onMounted(() => { void loadMaterials(); void loadAnswers(); });
-onBeforeUnmount(() => { disposed = true; ++materialsSequence; ++chapterSequence; ++guideSequence; ++answerHistorySequence; ++askSequence; });
+onBeforeUnmount(() => { disposed = true; clearTimeout(generationTimer); ++generationSequence; ++materialsSequence; ++chapterSequence; ++guideSequence; ++answerHistorySequence; ++askSequence; });
 </script>
 
 <style scoped>

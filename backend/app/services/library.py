@@ -5,6 +5,7 @@ before lexical ranking, so retrieval cannot leak another document or tenant.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import HTTPException
 from pydantic import ValidationError
 
@@ -184,13 +186,14 @@ def _citations(raw, allowed, *, required=False):
     return result
 
 
-async def _generate(system, prompt):
+async def _generate(system, prompt, *, on_event=None):
     if settings.DEMO_MODE or os.getenv("DEMO_MODE", "").lower() in {"1", "true", "yes"}:
         raise HTTPException(503, "演示模式不支持真实知识库生成，请在服务端关闭演示模式并配置模型")
     if not settings.LLM_API_KEY:
         raise HTTPException(503, "尚未配置 AI 服务，请在设置中查看配置状态，或联系服务管理员。")
     try:
-        result = await LLMClient.chat_json(system, _json(prompt))
+        kwargs = {"on_event": on_event} if on_event else {}
+        result = await LLMClient.chat_json(system, _json(prompt), **kwargs)
     except Exception as exc:
         raise HTTPException(502, "模型生成失败，请检查服务端模型配置后重试") from exc
     if not isinstance(result, dict):
@@ -220,21 +223,58 @@ def _exam_points(conn, exam_doc_ids, chapter_chunks):
     return points
 
 
-def _save(table, value, snapshot):
+def _save(table, value, snapshot, *, task_id=None):
     with db_session() as conn:
         # Serialize source recheck with document edits/deletes. No LLM call holds
         # a database lock; this transaction only validates and saves the result.
         conn.execute("BEGIN IMMEDIATE")
+        if task_id:
+            task = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task or task["status"] not in {"pending", "processing"}:
+                raise asyncio.CancelledError()
         if _snapshot(conn, snapshot["doc_ids"], snapshot["exam_doc_ids"]) != snapshot:
             raise HTTPException(409, "生成期间来源资料或真题关联已变化，请刷新后重新生成")
         conn.execute(f"""INSERT INTO {table}
             (id,doc_id,chapter_id,payload_json,source_snapshot_json,created_at)
             VALUES (?,?,?,?,?,?)""", (value.id, getattr(value, "doc_id", None), value.chapter_id,
                                       value.model_dump_json(), _json(snapshot), value.created_at))
+        if task_id:
+            from app.services.task_worker import TaskWorker
+            # Result and terminal status commit together. Cancellation acquired
+            # before this transaction cannot leave a successful saved result.
+            TaskWorker._get_detail(task_id).update(succeeded=1, resultCount=1)
+            if not TaskWorker.mark_task_completed(task_id, "章节资料已生成并保存", conn=conn):
+                raise asyncio.CancelledError()
     return value
 
 
-async def generate_guide(req: GuideRequest):
+def guide_task_error(exc):
+    """Preserve useful typed failures without persisting a provider body/prompt."""
+    current, seen = exc, set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.TimeoutException):
+            return f"AI 服务响应超时（{type(current).__name__}），请稍后重试或调整服务端模型超时配置"
+        if isinstance(current, httpx.HTTPStatusError):
+            return f"AI 服务请求失败（HTTP {current.response.status_code}），请核对服务端模型配置"
+        if isinstance(current, httpx.RequestError):
+            return f"AI 服务网络连接失败（{type(current).__name__}），请检查服务端网络"
+        if isinstance(current, json.JSONDecodeError):
+            return "模型返回非合规 JSON，重试后仍无法解析"
+        current = current.__cause__ or current.__context__
+    if isinstance(exc, HTTPException):
+        return {
+            404: "章节来源资料不存在或已删除，请刷新后重新生成",
+            409: "生成前后来源资料或真题关联已变化，请刷新后重新生成",
+            413: "章节正文与真题证据超过生成上下文上限，请拆分资料后重试",
+            422: "章节来源资料范围无效或尚未解析完成，请核对资料后重试",
+            503: "服务端尚未配置可用的 AI 服务，或仍处于演示模式",
+            502: "模型生成失败或返回的章节资料、原文引用未通过校验，请重试",
+        }.get(exc.status_code, "章节生成失败，请查看服务端诊断日志")
+    return f"章节生成失败（{type(exc).__name__}），请查看服务端诊断日志"
+
+
+def _prepare_guide(req: GuideRequest):
     doc_ids = list(dict.fromkeys([req.doc_id, *req.management_doc_ids, *req.exam_doc_ids]))
     if req.doc_id in req.management_doc_ids or req.doc_id in req.exam_doc_ids or set(req.management_doc_ids) & set(req.exam_doc_ids):
         raise HTTPException(422, "教材、管理学教材和真题资料范围不能重复")
@@ -269,6 +309,75 @@ async def generate_guide(req: GuideRequest):
             selected.append(chunk)
             available -= len(chunk["content"])
     supplied = members + selected
+    return title, members, selected, supplied, points, snapshot
+
+
+def enqueue_guide(req: GuideRequest, idempotency_key=None):
+    """Commit parameters, idempotency and the standard task in one transaction."""
+    from app.services.task_worker import TaskWorker
+
+    key = idempotency_key if isinstance(idempotency_key, str) and idempotency_key else None
+    if key and len(key) > 255:
+        raise HTTPException(400, "Idempotency-Key too long")
+    payload_hash = _hash(req.model_dump())
+    # Replay before validating sources: the same key always identifies the same
+    # task, including after its source was subsequently edited or deleted.
+    with db_session() as conn:
+        prior = conn.execute("SELECT * FROM library_guide_task_keys WHERE idempotency_key=?", (key,)).fetchone() if key else None
+        if prior:
+            if prior["payload_hash"] != payload_hash:
+                raise HTTPException(409, "Idempotency-Key was used with a different request")
+            return conn.execute("SELECT * FROM tasks WHERE id=?", (prior["task_id"],)).fetchone()
+    title, _, _, _, _, snapshot = _prepare_guide(req)
+    request_id = "guide-request-" + _hash([req.model_dump(), snapshot])
+    with db_session() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if key:
+            prior = conn.execute("SELECT * FROM library_guide_task_keys WHERE idempotency_key=?", (key,)).fetchone()
+            if prior:
+                if prior["payload_hash"] != payload_hash:
+                    raise HTTPException(409, "Idempotency-Key was used with a different request")
+                return conn.execute("SELECT * FROM tasks WHERE id=?", (prior["task_id"],)).fetchone()
+        if _snapshot(conn, snapshot["doc_ids"], snapshot["exam_doc_ids"]) != snapshot:
+            raise HTTPException(409, "排队期间来源资料已变化，请刷新后重新生成")
+        conn.execute("INSERT OR IGNORE INTO library_guide_requests VALUES(?,?,?,?,?)",
+                     (request_id, req.doc_id, req.chapter_id, req.model_dump_json(), _json(snapshot)))
+        active = conn.execute("""SELECT * FROM tasks WHERE task_type='generate_library_guide' AND target_id=?
+            AND status IN ('pending','processing','cancel_requested') ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                              (request_id,)).fetchone()
+        task_id = active["id"] if active else TaskWorker.create_task(
+            "generate_library_guide", request_id, f"章节资料生成已排队：{title}", conn=conn)
+        if key:
+            conn.execute("INSERT INTO library_guide_task_keys VALUES(?,?,?)", (key, payload_hash, task_id))
+        return conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+
+
+def list_guide_tasks(doc_id: str, chapter_id: str):
+    # Authenticated tenant-local storage plus source/chapter validation prevents
+    # arbitrary scope IDs from being used to query another library.
+    with db_session() as conn:
+        _, chunks = _load_scope(conn, [doc_id])
+        _selected_chapter(doc_id, chapter_id, chunks)
+        return conn.execute("""SELECT t.* FROM tasks t JOIN library_guide_requests r ON r.id=t.target_id
+            WHERE t.task_type='generate_library_guide' AND r.doc_id=? AND r.chapter_id=? AND t.hidden_at IS NULL
+            ORDER BY t.created_at DESC,t.rowid DESC LIMIT 50""", (doc_id, chapter_id)).fetchall()
+
+
+async def generate_guide(req: GuideRequest, *, task_id=None, expected_snapshot=None):
+    title, members, selected, supplied, points, snapshot = _prepare_guide(req)
+    if expected_snapshot is not None and snapshot != expected_snapshot:
+        raise HTTPException(409, "排队后来源资料或真题关联已变化，请刷新后重新生成")
+    on_event = None
+    if task_id:
+        from app.services.task_worker import TaskWorker
+        if TaskWorker.is_cancelled(task_id):
+            raise asyncio.CancelledError()
+        TaskWorker.update_task_progress(task_id, 30, "正在调用 AI 生成章节资料")
+        TaskWorker.update_progress_detail(task_id, stage="llm_generate", currentScope=title, total=1, force=True)
+        TaskWorker.log_event(task_id, "model_call", "开始调用 AI 生成章节资料", stage="llm_generate")
+        TaskWorker.upsert_exec_unit(task_id, "guide-model", kind="batch", index=1, scope=title, service="llm",
+                                    state="processing", action="准备模型请求", force=True)
+        on_event = TaskWorker.make_unit_event_handler(task_id, "guide-model", "章节资料生成", stage="llm_generate", service="llm")
     allowed = {c["id"]: c for c in supplied}
     accounting = {c["id"]: c for c in members}
     raw = await _generate(
@@ -287,7 +396,12 @@ async def generate_guide(req: GuideRequest):
         "真题已考标注仅由服务端生成，不输出 exam_points。"
         "管理学关联没有双方教材依据时必须为 suggestion，并明确这是学习建议；会计真题不能证明管理学已考。",
         {"chapter_title": title, "complete_accounting_chapter": _context(members),
-         "management_excerpts": _context(selected), "confirmed_exam_evidence": points})
+         "management_excerpts": _context(selected), "confirmed_exam_evidence": points}, on_event=on_event)
+    if task_id:
+        if TaskWorker.is_cancelled(task_id):
+            raise asyncio.CancelledError()
+        TaskWorker.update_task_progress(task_id, 80, "正在校验引用和章节资料")
+        TaskWorker.log_event(task_id, "validation", "模型已返回，正在校验原文引用与资料范围", stage="validation")
     try:
         raw["citations"] = _citations(raw.get("citations"), accounting, required=True)
         concepts = raw.get("concepts")
@@ -316,7 +430,11 @@ async def generate_guide(req: GuideRequest):
                       created_at=datetime.now(timezone.utc).isoformat())
     except (ValidationError, TypeError, ValueError, AttributeError) as exc:
         raise HTTPException(502, "模型返回的章节解读不完整，请重试") from exc
-    return _save("library_guides", guide, snapshot)
+    if task_id:
+        TaskWorker.update_progress_detail(task_id, stage="save_guide", force=True)
+        TaskWorker.log_event(task_id, "saving", "引用校验完成，正在保存章节资料", stage="save_guide")
+        TaskWorker.finish_exec_unit(task_id, "guide-model", force=True)
+    return _save("library_guides", guide, snapshot, task_id=task_id)
 
 
 def _history(conn, previous_id, doc_ids, chapter_id, current_snapshot):

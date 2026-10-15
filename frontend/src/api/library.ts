@@ -1,4 +1,5 @@
 import { api, sessionTransport } from './client';
+import type { TaskStatus } from '../types';
 import type {
   LibraryAnswer, LibraryAskRequest, LibraryChapter, LibraryGuide, LibraryGuideRequest,
 } from '../types/library';
@@ -21,6 +22,12 @@ export const libraryApi = {
   },
   generateGuide(payload: LibraryGuideRequest): Promise<LibraryGuide> {
     return write('guides', payload);
+  },
+  submitGuide(payload: LibraryGuideRequest): Promise<TaskStatus> {
+    return write('guides/tasks', payload);
+  },
+  async guideTasks(docId: string, chapterId: string): Promise<TaskStatus[]> {
+    return (await api.get('/library/guides/tasks', { params: { doc_id: docId, chapter_id: chapterId } })).data;
   },
   ask(payload: LibraryAskRequest): Promise<LibraryAnswer> {
     return write('ask', payload);

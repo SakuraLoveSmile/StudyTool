@@ -19,6 +19,8 @@ nano .env
 
 设置 `PUBLIC_ORIGIN` 为完整 HTTPS origin，例如 `https://learn.example.com`，不要带路径或结尾斜杠。`RAG_DATA_DIR` 必须指向本实例专属目录。填写 LLM、向量模型和 OCR 的服务地址、模型名及密钥。`DOMAIN` 变量已不再使用。
 
+章节资料通过后台任务生成，提交后可在“任务”中查看进度、重试与执行日志，刷新页面不会中断。`LLM_TIMEOUT=180` 控制每次模型请求的等待时限；已有部署若仍使用默认 60 秒，可在原 `.env` 添加这一项，再执行 `docker compose --env-file .env up -d --force-recreate app`。它与 Nginx 的 `proxy_read_timeout` 独立，延长等待不能保证模型一定成功。OCR 连通性测试等同步请求仍需要下面的代理超时配置。
+
 创建全新的数据目录时：
 
 ```bash

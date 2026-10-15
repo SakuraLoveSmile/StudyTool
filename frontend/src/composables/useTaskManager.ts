@@ -21,6 +21,7 @@ const eventSyncFailed = ref<Record<string, boolean>>({});
 
 // 从分析页点击任务摘要时打开抽屉并定位展开该任务
 const focusTaskId = ref<string | null>(null);
+let detailTaskId: string | null = null;
 
 const lastClearToken = ref<string | null>(null);
 const lastClearedCount = ref(0);
@@ -50,8 +51,13 @@ export function useTaskManager() {
     tasks.value.filter(t => ['completed', 'cancelled'].includes(t.status))
   );
 
-  const applyHistoryResponse = (res: Awaited<ReturnType<typeof apiClient.getTaskHistory>>) => {
-    tasks.value = res.tasks;
+  const applyHistoryResponse = async (res: Awaited<ReturnType<typeof apiClient.getTaskHistory>>) => {
+    const epoch = sessionTransport.epoch;
+    const detailId = detailTaskId;
+    const extra = detailId && !res.tasks.some(task => task.id === detailId)
+      ? await apiClient.getTaskStatus(detailId) : null;
+    if (epoch !== sessionTransport.epoch) return;
+    tasks.value = extra && detailTaskId === detailId ? [...res.tasks, extra] : res.tasks;
     activeCount.value = res.active_count;
     actionableCount.value = res.actionable_count;
     historyCount.value = res.history_count;
@@ -62,7 +68,9 @@ export function useTaskManager() {
     try {
       isLoading.value = true;
       const res = await apiClient.getTaskHistory({ limit: 50 });
-      applyHistoryResponse(res);
+      if (epoch !== sessionTransport.epoch) return;
+      await applyHistoryResponse(res);
+      if (epoch !== sessionTransport.epoch) return;
       pollFailed.value = false;
       lastSyncedAt.value = Date.now();
 
@@ -88,7 +96,9 @@ export function useTaskManager() {
       if (!isPollingActive) return;
       try {
         const res = await apiClient.getTaskHistory({ limit: 50 });
-        applyHistoryResponse(res);
+        if (epoch !== sessionTransport.epoch) return;
+        await applyHistoryResponse(res);
+        if (epoch !== sessionTransport.epoch) return;
         pollFailed.value = false;
         lastSyncedAt.value = Date.now();
 
@@ -197,6 +207,7 @@ export function useTaskManager() {
     taskLastEventIds.value = {};
     eventSyncFailed.value = {};
     focusTaskId.value = null;
+    detailTaskId = null;
     lastClearToken.value = null;
     lastClearedCount.value = 0;
     showUndoToast.value = false;
@@ -285,6 +296,7 @@ export function useTaskManager() {
   const closeDrawer = () => {
     isDrawerOpen.value = false;
     focusTaskId.value = null;
+    detailTaskId = null;
     // 关闭详情后停止事件轮询
     stopAllEventPolling();
   };
@@ -300,9 +312,12 @@ export function useTaskManager() {
 
   // 分析页任务摘要点击直达：打开抽屉并展开对应任务详情
   const openTaskDetail = async (taskId: string) => {
+    const epoch = sessionTransport.epoch;
+    detailTaskId = taskId;
+    await fetchTasks();
+    if (epoch !== sessionTransport.epoch) return;
     focusTaskId.value = taskId;
     isDrawerOpen.value = true;
-    await fetchTasks();
   };
 
   const consumeFocusTaskId = (): string | null => {

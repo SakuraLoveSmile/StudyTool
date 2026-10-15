@@ -14,6 +14,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   generate_card: '考点学习卡生成',
   generate_recall_cards: '主动回忆卡生成',
   extract_knowledge_points: '教材考点梳理',
+  generate_library_guide: '章节学习资料生成',
   reindex_chunk: '切片语义更新'
 };
 

@@ -26,7 +26,7 @@ from app.diagnostics import (
 )
 
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -957,9 +957,14 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             ))
 
     @classmethod
-    def mark_task_completed(cls, task_id: str, message: str = "执行完成") -> bool:
-        cls.log_event(task_id, "completed", message)
-        cls.update_progress_detail(task_id, phase="working", currentAction=message, force=True)
+    def mark_task_completed(cls, task_id: str, message: str = "执行完成", conn: Optional[Any] = None) -> bool:
+        cls.log_event(task_id, "completed", message, conn=conn)
+        if conn is None:
+            cls.update_progress_detail(task_id, phase="working", currentAction=message, force=True)
+        else:
+            # A caller saving its result in the same transaction must not open
+            # a second writer while holding SQLite's write lock.
+            cls._get_detail(task_id).update(phase="working", currentAction=message)
         timings = cls._task_timings.get(task_id)
         detail = cls._task_details.get(task_id)
         elapsed_ms = None
@@ -967,8 +972,8 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             elapsed_ms = round((time.monotonic() - cls._task_start_mono[task_id]) * 1000.0, 2)
         res_cnt = (detail.get("resultCount") if detail else None) or (detail.get("succeeded", 0) if detail else 0)
         log_diagnostic("task_completed", level=logging.INFO, message=message, task_id=task_id, duration_ms=elapsed_ms, result_count=res_cnt)
-        with db_session() as conn:
-            cursor = conn.cursor()
+        with (nullcontext(conn) if conn is not None else db_session()) as active_conn:
+            cursor = active_conn.cursor()
             cursor.execute("""
             UPDATE tasks 
             SET status = 'completed', progress = 100, message = ?,
@@ -1103,8 +1108,40 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         elif task_type == "generate_recall_cards":
             from app.services.recall_generator import RecallGenerator
             await RecallGenerator.execute_generation_task(task_id, target_id)
+        elif task_type == "generate_library_guide":
+            await cls._execute_library_guide(task_id, target_id)
         else:
             cls.mark_task_failed(task_id, f"未知任务类型: {task_type}")
+
+    @classmethod
+    async def _execute_library_guide(cls, task_id: str, request_id: str):
+        from app.models.library import GuideRequest
+        from app.services import library
+
+        cls.update_task_progress(task_id, 10, "正在读取教材、管理学资料和真题")
+        cls.update_progress_detail(task_id, stage="read_sources", progressMode="explicit",
+                                   currentAction="正在读取章节资料", force=True)
+        cls.log_event(task_id, "reading_sources", "正在读取并核验章节资料范围", stage="read_sources")
+        try:
+            with db_session() as conn:
+                row = conn.execute("SELECT * FROM library_guide_requests WHERE id=?", (request_id,)).fetchone()
+            if not row:
+                raise RuntimeError("missing persisted guide request")
+            req = GuideRequest.model_validate_json(row["request_json"])
+            with unit_context(unit_id="guide-model", scope=req.chapter_id):
+                await library.generate_guide(req, task_id=task_id,
+                                             expected_snapshot=json.loads(row["source_snapshot_json"]))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if cls.is_cancelled(task_id):
+                raise asyncio.CancelledError() from exc
+            # Exception strings can contain request bodies/provider secrets.
+            # Report only safe typed causes and application-authored messages.
+            safe = library.guide_task_error(exc)
+            cls.finish_exec_unit(task_id, "guide-model", state="failed", error=safe, force=True)
+            cls.update_progress_detail(task_id, failed=1, force=True)
+            cls.mark_task_failed(task_id, safe)
 
     @classmethod
     async def _execute_reindex_chunk(cls, task_id: str, chunk_id: str):

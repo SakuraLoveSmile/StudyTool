@@ -139,7 +139,7 @@
             </div>
             <div v-else class="space-y-3">
               <div
-                v-for="task in activeTasks"
+                v-for="task in prioritizeFocused(activeTasks)"
                 :key="task.id"
                 class="rounded-xl border border-line bg-surface shadow-xs overflow-hidden transition-all"
               >
@@ -459,50 +459,7 @@
 
                   <!-- Live Incremental Event Stream -->
                   <div class="space-y-1.5">
-                    <div class="flex items-center justify-between text-[11px] font-semibold text-sub uppercase tracking-wider">
-                      <span>实时执行事件流</span>
-                      <button
-                        type="button"
-                        class="text-accent hover:text-accent normal-case font-normal cursor-pointer"
-                        @click="fetchTaskEvents(task.id, true)"
-                      >
-                        刷新日志
-                      </button>
-                    </div>
-
-                    <div
-                      v-if="eventSyncFailed[task.id]"
-                      class="text-[10px] text-warn bg-warn/10 border border-warn/20 rounded px-2 py-1"
-                    >
-                      事件流同步中断，将自动重试…
-                    </div>
-
-                    <div class="bg-surface rounded-lg border border-line/80 p-2 max-h-48 overflow-y-auto space-y-1.5 font-mono text-[11px]">
-                      <div
-                        v-if="!taskEvents[task.id] || taskEvents[task.id].length === 0"
-                        class="text-faint py-3 text-center"
-                      >
-                        暂无事件记录
-                      </div>
-                      <div
-                        v-for="ev in taskEvents[task.id]"
-                        :key="ev.id"
-                        class="flex items-start gap-2 leading-tight"
-                      >
-                        <span class="text-faint shrink-0 select-none">
-                          {{ formatEventTime(ev.created_at) }}
-                        </span>
-                        <span
-                          class="px-1 py-0.5 rounded text-[10px] shrink-0 font-sans"
-                          :class="getEventBadgeClass(ev.event_type)"
-                        >
-                          {{ formatEventType(ev.event_type) }}
-                        </span>
-                        <span class="text-ink font-sans break-all">
-                          {{ ev.message }}
-                        </span>
-                      </div>
-                    </div>
+                    <TaskEventLog :events="taskEvents[task.id]" :sync-failed="eventSyncFailed[task.id]" @refresh="fetchTaskEvents(task.id, true)" />
                   </div>
                 </div>
               </div>
@@ -516,7 +473,7 @@
             </div>
             <div v-else class="space-y-3">
               <div
-                v-for="task in actionableTasks"
+                v-for="task in prioritizeFocused(actionableTasks)"
                 :key="task.id"
                 class="rounded-xl border border-err/30 bg-err/10 overflow-hidden space-y-2.5 p-3.5"
               >
@@ -562,6 +519,9 @@
                   <span>识别结果: {{ task.progress_detail.resultCount }} 个</span>
                 </div>
 
+                <button type="button" class="text-xs text-accent underline" :aria-expanded="isTaskExpanded(task.id)" @click="toggleTaskExpansion(task.id)">{{ isTaskExpanded(task.id) ? '收起日志' : '查看执行日志' }}</button>
+                <TaskEventLog v-if="isTaskExpanded(task.id)" :events="taskEvents[task.id]" :sync-failed="eventSyncFailed[task.id]" @refresh="fetchTaskEvents(task.id, true)" />
+
                 <div class="text-[11px] text-faint flex justify-between pt-1 border-t border-err/30">
                   <span>ID: {{ task.id.slice(0, 8) }}</span>
                   <span>{{ formatTime(task.created_at) }}</span>
@@ -577,9 +537,9 @@
             </div>
             <div v-else class="space-y-2.5">
               <div
-                v-for="task in historyTasks"
+                v-for="task in prioritizeFocused(historyTasks)"
                 :key="task.id"
-                class="p-3 rounded-xl border border-line bg-surface hover:border-line transition-colors flex items-center justify-between gap-3 text-xs"
+                class="p-3 rounded-xl border border-line bg-surface hover:border-line transition-colors flex flex-wrap items-center justify-between gap-3 text-xs"
               >
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
@@ -599,6 +559,7 @@
                   <p class="text-[11px] text-sub mt-0.5 truncate">
                     {{ task.message || formatTime(task.created_at) }}
                   </p>
+                  <button type="button" class="text-xs text-accent underline mt-2" :aria-expanded="isTaskExpanded(task.id)" @click="toggleTaskExpansion(task.id)">{{ isTaskExpanded(task.id) ? '收起日志' : '查看执行日志' }}</button>
                 </div>
 
                 <button
@@ -611,6 +572,7 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
+                <TaskEventLog v-if="isTaskExpanded(task.id)" class="w-full" :events="taskEvents[task.id]" :sync-failed="eventSyncFailed[task.id]" @refresh="fetchTaskEvents(task.id, true)" />
               </div>
             </div>
           </div>
@@ -751,9 +713,11 @@ import {
 import { formatDateTime, formatClock, formatDuration, secondsSince } from '../utils/time';
 import BaseModal from './BaseModal.vue';
 import EmptyState from './EmptyState.vue';
+import TaskEventLog from './TaskEventLog.vue';
 import { AlertTriangle } from 'lucide-vue-next';
 
 const {
+  tasks,
   activeTasks,
   actionableTasks,
   historyTasks,
@@ -784,6 +748,12 @@ const {
 const currentTab = ref<'active' | 'actionable' | 'history'>('active');
 const showClearAllModal = ref(false);
 const expandedTaskIds = ref<Set<string>>(new Set());
+const focusedTaskId = ref<string | null>(null);
+
+function prioritizeFocused(items: TaskStatus[]): TaskStatus[] {
+  const focused = items.find(task => task.id === focusedTaskId.value);
+  return focused ? [focused, ...items.filter(task => task.id !== focused.id)] : items;
+}
 
 // Candidate Preview Modal
 const showCandidateModal = ref(false);
@@ -810,12 +780,18 @@ onUnmounted(() => {
 
 const lastSyncedClock = computed(() => lastSyncedAt.value ? formatClock(new Date(lastSyncedAt.value).toISOString()) : '');
 
-// 从分析页点击直达：自动切换到运行中并展开对应任务
+function focusTaskTab(status?: string) {
+  currentTab.value = status === 'failed' || status === 'partial' ? 'actionable'
+    : status === 'completed' || status === 'cancelled' ? 'history' : 'active';
+}
+
+// Open the requested task's current category, including completed/failed tasks.
 watch(isDrawerOpen, (open) => {
   if (open) {
     const focusId = consumeFocusTaskId();
     if (focusId) {
-      currentTab.value = 'active';
+      focusedTaskId.value = focusId;
+      focusTaskTab(tasks.value.find(task => task.id === focusId)?.status);
       if (!expandedTaskIds.value.has(focusId)) {
         expandedTaskIds.value.add(focusId);
         fetchTaskEvents(focusId, true);
@@ -823,9 +799,13 @@ watch(isDrawerOpen, (open) => {
       startEventPolling(focusId);
     }
   } else {
+    focusedTaskId.value = null;
     stopAllEventPolling();
     expandedTaskIds.value.clear();
   }
+});
+watch(() => tasks.value.find(task => task.id === focusedTaskId.value)?.status, status => {
+  if (isDrawerOpen.value && focusedTaskId.value && status) focusTaskTab(status);
 });
 
 const isTaskExpanded = (id: string) => expandedTaskIds.value.has(id);
@@ -982,47 +962,6 @@ const getRequestElapsedSeconds = (task: TaskStatus): number => {
 const formatTime = (ts: string): string => formatDateTime(ts);
 const formatEventTime = (ts: string): string => formatClock(ts);
 
-const formatEventType = (type: string): string => {
-  const map: Record<string, string> = {
-    created: '创建',
-    stage_change: '阶段变更',
-    slot_wait: '等待名额',
-    request_start: '请求发送',
-    response_received: '响应返回',
-    save_done: '结果入库',
-    checkpoint_restored: '检查点复用',
-    retry_wait: '重试等待',
-    failed: '异常',
-    partial: '部分完成',
-    completed: '完成',
-    cancelled: '取消'
-  };
-  return map[type] || type;
-};
-
-const getEventBadgeClass = (type: string): string => {
-  switch (type) {
-    case 'created':
-    case 'stage_change':
-      return 'bg-raised text-ink';
-    case 'slot_wait':
-    case 'request_start':
-      return 'bg-accent/10 text-accent';
-    case 'response_received':
-    case 'save_done':
-    case 'completed':
-      return 'bg-ok/10 text-ok';
-    case 'checkpoint_restored':
-      return 'bg-purple-50 text-purple-700';
-    case 'retry_wait':
-      return 'bg-warn/10 text-warn';
-    case 'failed':
-      return 'bg-err/10 text-err';
-    default:
-      return 'bg-raised text-sub';
-  }
-};
-
 const formatTimingCategory = (cat: string): string => {
   const map: Record<string, string> = {
     local_parse: '本地文件解析',
@@ -1039,6 +978,12 @@ const formatTimingCategory = (cat: string): string => {
 // Task pipeline stages
 const getStagesForTask = (type: string) => {
   switch (type) {
+    case 'generate_library_guide':
+      return [
+        { key: 'read_sources', label: '读取章节资料' },
+        { key: 'llm_generate', label: '模型生成' },
+        { key: 'save_guide', label: '校验与保存' }
+      ];
     case 'parse_document':
       return [
         { key: 'read_doc', label: '读取文档' },

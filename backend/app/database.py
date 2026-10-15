@@ -11,12 +11,14 @@ logger = logging.getLogger(__name__)
 CURRENT_SCHEMA_VERSION = 6
 STUDENT_FLOW_MIGRATION = "student_flow_v1"
 LIBRARY_MIGRATION = "library_v1"
+LIBRARY_TASKS_MIGRATION = "library_tasks_v1"
 
 
 def _needs_library_migration() -> bool:
     with sqlite3.connect(settings.db_path, timeout=30.0) as conn:
         try:
-            return conn.execute("SELECT value FROM schema_meta WHERE key = ?", (LIBRARY_MIGRATION,)).fetchone() is None
+            return any(conn.execute("SELECT value FROM schema_meta WHERE key = ?", (key,)).fetchone() is None
+                       for key in (LIBRARY_MIGRATION, LIBRARY_TASKS_MIGRATION))
         except sqlite3.OperationalError:
             return True
 
@@ -1051,6 +1053,25 @@ def init_db() -> None:
             """)
             cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_scope ON {table}(doc_id, chapter_id)")
         cursor.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, '1')", (LIBRARY_MIGRATION,))
+        # Immutable parameters make queued work and retries survive restarts.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS library_guide_requests (
+                id TEXT PRIMARY KEY,
+                doc_id TEXT NOT NULL,
+                chapter_id TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                source_snapshot_json TEXT NOT NULL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_guide_requests_scope ON library_guide_requests(doc_id, chapter_id)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS library_guide_task_keys (
+                idempotency_key TEXT PRIMARY KEY,
+                payload_hash TEXT NOT NULL,
+                task_id TEXT NOT NULL
+            )
+        """)
+        cursor.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, '1')", (LIBRARY_TASKS_MIGRATION,))
 
         cursor.execute(
             "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?) "

@@ -11,6 +11,7 @@ services:
       DEMO_MODE: "false"
       OCR_MODE: vision_llm
       EMBEDDING_MODE: remote
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
       HOST: 0.0.0.0
       PORT: "8000"
       DATA_DIR: /data

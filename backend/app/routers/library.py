@@ -2,6 +2,8 @@
 from fastapi import APIRouter, Header
 
 from app.models.library import Answer, AskRequest, Chapter, Guide, GuideRequest
+from app.models.schemas import TaskResponse
+from app.routers.materials import _task_row_to_response
 from app.services import library
 from app.services.request_operations import run_idempotent
 
@@ -16,6 +18,16 @@ def list_chapters(doc_id: str):
 @router.get("/guides", response_model=list[Guide])
 def list_guides(doc_id: str | None = None, chapter_id: str | None = None):
     return library.list_guides(doc_id, chapter_id)
+
+
+@router.post("/guides/tasks", response_model=TaskResponse, status_code=202)
+def enqueue_guide(req: GuideRequest, idempotency_key: str | None = Header(None, alias="Idempotency-Key")):
+    return _task_row_to_response(library.enqueue_guide(req, idempotency_key))
+
+
+@router.get("/guides/tasks", response_model=list[TaskResponse])
+def list_guide_tasks(doc_id: str, chapter_id: str):
+    return [_task_row_to_response(row) for row in library.list_guide_tasks(doc_id, chapter_id)]
 
 
 @router.get("/guides/{guide_id}", response_model=Guide)
