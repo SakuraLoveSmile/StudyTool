@@ -1,0 +1,90 @@
+name: Publish single application to GHCR
+
+on:
+  push:
+    tags: ['connected-app-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Application version (for example 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connected-app-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: docker/setup-buildx-action@v3
+      - name: Resolve version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python - <<'PY'
+          import os, re
+          version = os.environ['INPUT_VERSION'] if os.environ['EVENT_NAME'] == 'workflow_dispatch' else os.environ['REF_NAME'].removeprefix('connected-app-v')
+          if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[a-z0-9][a-z0-9.-]*)?', version):
+              raise SystemExit('Invalid release version')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('APP_VERSION=' + version + '\n')
+          PY
+      - name: Build application without Caddy
+        run: >-
+          docker buildx build --platform linux/amd64 --load --provenance=false
+          --label org.opencontainers.image.source=https://github.com/SakuraLoveSmile/StudyTool
+          --label org.opencontainers.image.revision=${{ github.sha }}
+          -f deploy/Dockerfile.app -t studytool-app:ci .
+      - name: Check application behind isolated HTTPS Nginx
+        run: python deploy/smoke_app.py --image studytool-app:ci --output artifacts/app-build-smoke.json
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified application
+        run: python deploy/publish_app.py --image studytool-app:ci --version "$APP_VERSION" --smoke artifacts/app-build-smoke.json --output artifacts/app-deployment
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studytool-app-deployment
+          path: artifacts/app-deployment/
+          if-no-files-found: error
+
+  verify:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: studytool-app-deployment
+          path: artifacts/app-deployment
+      - name: Verify anonymous pull and delivered Compose behind Nginx
+        run: python deploy/smoke_app.py --deployment artifacts/app-deployment
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studytool-app-verified-deployment
+          path: artifacts/app-deployment/
+          if-no-files-found: error

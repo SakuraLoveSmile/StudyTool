@@ -1,0 +1,22 @@
+services:
+  app:
+    image: ${APP_IMAGE:-ghcr.io/sakuralovesmile/studytool-connected-app:0.1.0}
+    platform: linux/amd64
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PUBLIC_MODE: "true"
+      AUTH_COOKIE_SECURE: "true"
+      DEMO_MODE: "false"
+      OCR_MODE: vision_llm
+      EMBEDDING_MODE: remote
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DATA_DIR: /data
+      LOG_DIR: /data/logs
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}
+    ports:
+      - "127.0.0.1:${APP_PORT:-8088}:8000"
+    volumes:
+      - "${RAG_DATA_DIR:?RAG_DATA_DIR is required}:/data"

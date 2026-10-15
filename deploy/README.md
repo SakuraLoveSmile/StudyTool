@@ -1,8 +1,12 @@
 # StudyTool 联网服务部署
 
-## 直接从 GHCR 拉取
+## 推荐：已有宿主机 Nginx 部署
 
-推荐直接部署方式见 [GHCR.md](GHCR.md)：从联网版 Release 下载 `compose.yaml` 和 `ghcr.env.example`，配置 `.env` 和专属数据目录后执行 `docker compose pull`、`docker compose up -d`。无需下载离线镜像包或编译源码。Release 的两个镜像固定 digest；平台为 Linux x64。离线镜像部署方式保留如下。
+优先参考 [NGINX.md](NGINX.md)：从联网版 Release 下载 `compose.app.yaml` 和 `app.env.example`，分别复制为 `compose.yaml` 与 `.env`，再由 Docker Compose 拉取单应用 GHCR 镜像。升级旧的 backend/frontend+Caddy 部署时，先备份并停止旧容器，沿用原 `RAG_DATA_DIR`；不删除旧数据或证书卷。旧版双容器说明与离线镜像流程保留在下文供兼容使用。
+
+## 旧版双镜像 GHCR 部署
+
+旧版独立 HTTPS 部署方式见 [GHCR.md](GHCR.md)：从联网版 Release 下载 `compose.yaml` 和 `ghcr.env.example`，配置 `.env` 和专属数据目录后执行 `docker compose pull`、`docker compose up -d`。无需下载离线镜像包或编译源码。Release 的两个镜像固定 digest；平台为 Linux x64。离线镜像部署方式保留如下。
 
 ## 服务器配置与镜像交付
 

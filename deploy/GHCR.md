@@ -1,5 +1,7 @@
 # 使用 GHCR 镜像部署
 
+**已有 Nginx 的新部署请用 [单应用精简方案](NGINX.md)**：一个应用镜像同时提供网页与 API，Compose 不含 Caddy，也不管理证书。下文保留旧版双镜像部署步骤供已有实例使用。
+
 本方式从公开 GitHub Release 下载 Compose 文件和环境变量模板，然后由 Docker Compose 自动拉取 GHCR 镜像。配置目标为 Linux x64（`linux/amd64`）。Release 部署文件固定镜像 digest，具体版本和验证结果见同 Release 的 `GHCR_MANIFEST.json`、`GHCR_SMOKE.json`。
 
 ## 准备服务器

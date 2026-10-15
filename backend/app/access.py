@@ -4,9 +4,23 @@ import hmac
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
+from starlette.routing import Match
 
 from app.config import settings
 from app.tenancy import tenant_scope
+
+
+def _is_public_frontend_request(scope):
+    """Only publish registered frontend routes, respecting backend route priority."""
+    app = scope.get("app")
+    public_routes = getattr(getattr(app, "state", None), "public_frontend_routes", ())
+    if not public_routes:
+        return False
+    for route in app.routes:
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return any(route is public_route for public_route in public_routes)
+    return False
 
 
 class AccessMiddleware:
@@ -28,8 +42,16 @@ class AccessMiddleware:
         if path == "/health" and request.method in {"GET", "HEAD"}:
             await self.app(scope, receive, send)
             return
-        if path in {"/docs", "/redoc", "/openapi.json"} or path.startswith("/docs/"):
+        if any(path == prefix or path.startswith(prefix + "/") for prefix in ("/docs", "/redoc", "/openapi.json")):
             await reject(404, "NOT_FOUND", "页面不存在")
+            return
+        if (
+            request.method in {"GET", "HEAD"}
+            and path != "/api"
+            and not path.startswith("/api/")
+            and _is_public_frontend_request(scope)
+        ):
+            await self.app(scope, receive, send)
             return
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             if request.headers.get("origin") != settings.PUBLIC_ORIGIN.rstrip("/"):

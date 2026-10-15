@@ -1097,31 +1097,48 @@ def get_frontend_dist_dir() -> Optional[Path]:
 
 def setup_desktop_static_serving(app):
     """Mount frontend static files and SPA catch-all route when dist is available."""
+    app.state.public_frontend_routes = ()
     dist_dir = get_frontend_dist_dir()
     if not dist_dir:
         logger.info("Frontend dist directory not found; skipping static file serving.")
         return
 
     logger.info("Setting up frontend static serving from: %s", dist_dir)
+    dist_dir = dist_dir.resolve()
+    frontend_routes = []
     assets_dir = dist_dir / "assets"
-    if assets_dir.is_dir():
+    if assets_dir.is_dir() and assets_dir.resolve().is_relative_to(dist_dir):
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+        frontend_routes.append(app.routes[-1])
 
     index_html = dist_dir / "index.html"
 
-    @app.get("/{full_path:path}", include_in_schema=False)
+    def confined_path(path: Path) -> Path:
+        try:
+            resolved = path.resolve()
+        except (OSError, ValueError, RuntimeError):
+            raise HTTPException(status_code=404, detail="Frontend file not found")
+        if not resolved.is_relative_to(dist_dir):
+            raise HTTPException(status_code=403, detail="拒绝访问：路径越界")
+        return resolved
+
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def serve_spa(full_path: str):
         # Don't intercept API routes
         if full_path.startswith("api/") or full_path == "api":
             raise HTTPException(status_code=404, detail="API route not found")
 
         # Resolve candidate and enforce strict path traversal check
-        candidate = (dist_dir / full_path).resolve()
-        if not candidate.is_relative_to(dist_dir.resolve()):
-            raise HTTPException(status_code=403, detail="拒绝访问：路径越界")
-
-        if candidate.is_file() and not candidate.is_symlink():
+        candidate = confined_path(dist_dir / full_path)
+        if candidate.is_file():
             return FileResponse(str(candidate))
-        if index_html.is_file():
-            return FileResponse(str(index_html))
+        index = confined_path(index_html)
+        if index.is_file():
+            return FileResponse(str(index))
         raise HTTPException(status_code=404, detail="Frontend index.html not found")
+
+    frontend_routes.append(app.routes[-1])
+    # Desktop/development auto-discovery must not silently publish a web UI.
+    # Public deployments opt in by explicitly configuring the bundled directory.
+    if settings.FRONTEND_DIST_DIR and Path(settings.FRONTEND_DIST_DIR).resolve() == dist_dir:
+        app.state.public_frontend_routes = tuple(frontend_routes)
