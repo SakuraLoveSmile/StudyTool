@@ -53,8 +53,9 @@ def preserve_legacy_deployment(root, release, tag):
                 raise RuntimeError('Legacy deployment checksum mismatch: ' + name)
         (root / 'compose.caddy.yaml').write_bytes((legacy / compose_name).read_bytes())
         # Archive first: a partial later upload can always recover the original Compose.
-        run('gh', 'release', 'upload', tag, str(root / 'compose.caddy.yaml'),
-            '--repo', RELEASE_REPO, '--clobber')
+        if 'compose.caddy.yaml' not in names:
+            run('gh', 'release', 'upload', tag, str(root / 'compose.caddy.yaml'),
+                '--repo', RELEASE_REPO)
         (root / 'GHCR.md').write_text((legacy / 'GHCR.md').read_text().replace('compose.yaml', 'compose.caddy.yaml'))
         checksums = []
         for line in (legacy / 'GHCR_SHA256SUMS.txt').read_text().splitlines():
@@ -148,7 +149,9 @@ docker compose up -d
     with tempfile.TemporaryDirectory(prefix='studytool-release-') as temporary:
         notes_file = Path(temporary) / 'notes.md'
         notes_file.write_text(body)
-        files = [str(p) for p in sorted(root.iterdir()) if p.is_file()]
+        # The original archived Compose is uploaded once above, never deleted/replaced.
+        files = [str(p) for p in sorted(root.iterdir())
+                 if p.is_file() and p.name != 'compose.caddy.yaml']
         if old is None:
             run('gh', 'release', 'create', tag, *files, '--repo', RELEASE_REPO,
                 '--title', f'学习助手 联网版 {version}（预览版）', '--notes-file', str(notes_file),
