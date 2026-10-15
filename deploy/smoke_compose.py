@@ -7,7 +7,6 @@ import json
 import os
 import subprocess
 import tempfile
-import time
 import uuid
 from pathlib import Path
 
@@ -27,7 +26,13 @@ def main() -> None:
         root = Path(temporary)
         anonymous = root / 'anonymous-docker'
         anonymous.mkdir()
-        (anonymous / 'config.json').write_text('{"auths": {}}\n')
+        # Docker Desktop installs Compose in the user's CLI plugin directory.
+        # Preserve plugin discovery without copying auths or a credential helper.
+        plugin_directory = Path(os.environ.get('DOCKER_CONFIG', str(Path.home() / '.docker'))) / 'cli-plugins'
+        docker_config = {'auths': {}}
+        if plugin_directory.is_dir():
+            docker_config['cliPluginsExtraDirs'] = [str(plugin_directory.resolve())]
+        (anonymous / 'config.json').write_text(json.dumps(docker_config) + '\n')
         docker = ['docker', '--config', str(anonymous), '--host', host]
         data = root / 'data'
         data.mkdir(mode=0o777)

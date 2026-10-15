@@ -66,7 +66,9 @@ def main() -> None:
         example = example.replace(old, image['digest'])
     (target / 'compose.yaml').write_text(compose)
     (target / 'ghcr.env.example').write_text(example)
-    (target / 'GHCR.md').write_text((ROOT / 'deploy/GHCR.md').read_text())
+    instructions = (ROOT / 'deploy/GHCR.md').read_text().replace(
+        '/releases/download/connected-v0.1.0', f'/releases/download/connected-v{args.version}')
+    (target / 'GHCR.md').write_text(instructions)
     manifest = {'version': args.version, 'source_revision': revision,
                 'platform': metadata['platform'], 'registry_pushed': True,
                 'images': images, 'server_smoke': smoke}
