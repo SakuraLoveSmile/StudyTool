@@ -1,4 +1,6 @@
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { resolveProfile } = require('./profile');
 
 // Enabled only by the bounded CI smoke profile argument. It does not create that
@@ -9,9 +11,13 @@ function createStartupTrace(app, options = {}) {
   const noop = () => {};
   if (!argv.some(value => value.startsWith('--smoke-test-profile='))) return noop;
   let filename;
+  let pathDetails;
   try {
     // Validate location/name even when diagnosing an unexpectedly existing profile.
     const profile = resolveProfile(app, argv, {}, options.tempRoot, () => false);
+    const nodeTemp = options.tempRoot || os.tmpdir();
+    const requested = argv.find(value => value.startsWith('--smoke-test-profile=')).slice('--smoke-test-profile='.length);
+    pathDetails = { requested, requestedParent: path.dirname(path.resolve(requested)), canonicalParent: path.dirname(profile), nodeTemp, canonicalNodeTemp: fs.realpathSync.native(nodeTemp) };
     filename = `${profile}.startup.jsonl`;
     fs.closeSync(fs.openSync(filename, 'ax', 0o600));
   } catch (error) {
@@ -30,6 +36,7 @@ function createStartupTrace(app, options = {}) {
     processLike.stderr.write(`${error.stack || error.message}\n`);
   });
   record.file = filename;
+  record('smoke-paths', pathDetails);
   return record;
 }
 

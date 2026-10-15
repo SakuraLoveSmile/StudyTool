@@ -207,7 +207,7 @@ try {
   Start-SmokeStage 'preflight'
   if ($env:CI -ne 'true' -and $env:GITHUB_ACTIONS -ne 'true') { throw 'Installer smoke is restricted to a disposable CI environment.' }
   Initialize-WindowProbe
-  $summary.runtime_context = @{ powershell = $PSVersionTable.PSVersion.ToString(); session_id = (Get-Process -Id $PID).SessionId; interactive = [Environment]::UserInteractive }
+  $summary.runtime_context = @{ powershell = $PSVersionTable.PSVersion.ToString(); session_id = (Get-Process -Id $PID).SessionId; interactive = [Environment]::UserInteractive; dotnet_temp = [IO.Path]::GetTempPath(); env_temp = $env:TEMP; env_tmp = $env:TMP; runner_temp = $env:RUNNER_TEMP }
   $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
   $summary.installer_path = $installer
   if (@(Get-ConnectedRegistrations).Count) { throw 'An existing Connected installation was found. Refusing to install or uninstall it.' }

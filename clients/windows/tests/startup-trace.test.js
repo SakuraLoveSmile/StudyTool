@@ -20,7 +20,9 @@ test('smoke startup trace preserves a new profile and observes errors without re
   assert.equal(fakeProcess.listenerCount('uncaughtException'), 0);
   assert.equal(fakeProcess.listenerCount('unhandledRejection'), 0);
   const lines = fs.readFileSync(trace.file, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(lines.map(line => line.event), ['main-entered', 'uncaught-main-exception']);
+  assert.deepEqual(lines.map(line => line.event), ['smoke-paths', 'main-entered', 'uncaught-main-exception']);
+  assert.equal(lines[0].canonicalNodeTemp, fs.realpathSync.native(root));
+  assert.equal(lines[0].canonicalParent, fs.realpathSync.native(root));
   assert.match(stderr, /startup failure/);
   const original = fs.readFileSync(trace.file, 'utf8');
   const duplicate = createStartupTrace({}, { argv: [`--smoke-test-profile=${profile}`], tempRoot: root, processLike: fakeProcess });
