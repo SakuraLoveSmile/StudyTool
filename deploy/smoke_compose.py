@@ -68,7 +68,12 @@ def main() -> None:
         # Explicit pull still resolves the public registry with an empty auth config,
         # even if the daemon already has matching layers cached.
         print('Pulling production Compose images anonymously...', flush=True)
-        run(*compose, 'pull')
+        try:
+            run(*compose, 'pull')
+        except subprocess.CalledProcessError as error:
+            print(error.stdout or '')
+            print(error.stderr or '')
+            raise
         for name in ('backend', 'frontend'):
             reference = manifest['images'][name]['digest']
             inspected = json.loads(run(*docker, 'image', 'inspect', reference).stdout)[0]

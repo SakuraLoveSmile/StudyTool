@@ -7,7 +7,11 @@ on:
     inputs:
       version:
         description: 'Container version (for example 0.1.0)'
-        required: true
+        required: false
+        type: string
+      verify_run_id:
+        description: 'Only verify an existing publication run (leave empty to build and publish)'
+        required: false
         type: string
 
 permissions:
@@ -19,6 +23,7 @@ concurrency:
 
 jobs:
   publish:
+    if: ${{ !inputs.verify_run_id }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
@@ -58,5 +63,32 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: studytool-ghcr-deployment
+          if-no-files-found: error
+          path: artifacts/ghcr-deployment/
+
+  verify:
+    needs: publish
+    if: ${{ always() && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.verify_run_id != '')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: studytool-ghcr-deployment
+          path: artifacts/ghcr-deployment
+          run-id: ${{ inputs.verify_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify anonymous pull and isolated Compose deployment
+        run: python deploy/smoke_compose.py --deployment artifacts/ghcr-deployment
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studytool-ghcr-verified-deployment
           if-no-files-found: error
           path: artifacts/ghcr-deployment/
