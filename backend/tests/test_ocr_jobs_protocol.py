@@ -487,6 +487,89 @@ async def test_client_error_on_submit_fails_without_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status,payload", [
+    (400, {"errorCode": "INVALID_TOKEN", "errorMsg": "凭证不可用"}),
+    (200, {"code": 1001, "error": {"message": "凭证不可用"}}),
+    (200, {"code": 1001, "data": {"errorMsg": "凭证不可用", "image": "private-image-output"}}),
+])
+async def test_submit_reports_safe_provider_error_without_retry(monkeypatch, caplog, status, payload):
+    _configure(monkeypatch)
+    caplog.set_level(logging.DEBUG)
+    submit = lambda r: httpx.Response(status, json=payload, headers={"X-Request-Id": "ocr-request-123"})
+
+    with _fast_sleep(monkeypatch) as delays:
+        with _patched_client(monkeypatch, _make_handler(submit=submit)) as requests:
+            with pytest.raises(OCRServiceError) as exc:
+                await OCRService.extract_text_from_image_bytes(b"private-image-bytes", "png")
+
+    assert str(exc.value).startswith(f"百度 OCR 任务提交失败（HTTP {status}）")
+    assert "凭证不可用" in str(exc.value)
+    assert "code=" in str(exc.value)
+    assert len(requests) == 1 and requests[0].method == "POST"
+    assert delays == []
+    failures = [record for record in caplog.records if getattr(record, "event", None) == "request_failed"]
+    assert len(failures) == 1
+    record = failures[0]
+    assert record.levelno == logging.WARNING
+    assert record.status_code == status
+    assert record.provider_request_id == "ocr-request-123"
+    assert record.stage == record.failed_stage == "submit"
+    assert record.call_id.startswith("ocr-baidu-job-")
+    assert "private-image-bytes" not in caplog.text
+    assert "private-image-output" not in str(exc.value) + caplog.text
+
+
+@pytest.mark.asyncio
+async def test_submit_redacts_exact_token_from_message_code_and_logs(monkeypatch, caplog):
+    token = "plainOpaqueCredential_Z9"
+    _configure(monkeypatch, token=token)
+    caplog.set_level(logging.DEBUG)
+    submit = lambda r: httpx.Response(400, json={
+        "errorCode": f"invalid-{token}",
+        "errorMsg": f"凭证 {token} 无效\n\x00请重新配置",
+        "private": "do-not-echo-this-field",
+    })
+
+    with _patched_client(monkeypatch, _make_handler(submit=submit)) as requests:
+        with pytest.raises(OCRServiceError) as exc:
+            await OCRService.extract_text_from_image_bytes(b"private-image-bytes", "png")
+
+    assert len(requests) == 1
+    assert token not in str(exc.value)
+    assert token not in caplog.text
+    assert token not in str([record.__dict__ for record in caplog.records])
+    assert "do-not-echo-this-field" not in str(exc.value) + caplog.text
+    assert "[REDACTED]" in str(exc.value)
+    assert "\n" not in str(exc.value) and "\x00" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_submit_does_not_echo_non_json_error_body(monkeypatch, caplog):
+    _configure(monkeypatch)
+    caplog.set_level(logging.DEBUG)
+    submit = lambda r: httpx.Response(400, text=f"<html>private error {TOKEN}</html>")
+
+    with _patched_client(monkeypatch, _make_handler(submit=submit)) as requests:
+        with pytest.raises(OCRServiceError) as exc:
+            await OCRService.extract_text_from_image_bytes(b"img", "png")
+
+    assert len(requests) == 1
+    assert str(exc.value) == "百度 OCR 任务提交失败（HTTP 400）"
+    assert "private error" not in caplog.text and TOKEN not in caplog.text
+
+
+def test_submit_error_summary_is_bounded_and_only_reads_error_fields():
+    summary = OCRService._jobs_safe_error_summary(json.dumps({
+        "code": "c" * 100,
+        "msg": "m" * 500,
+        "data": {"image": "private-content"},
+    }).encode(), "opaque-token")
+    assert len(summary["reason_code"]) == 80
+    assert len(summary["detail"]) == 300
+    assert "private-content" not in str(summary)
+
+
+@pytest.mark.asyncio
 async def test_429_raises_quota_error_without_retry(monkeypatch):
     _configure(monkeypatch)
 
@@ -675,7 +758,11 @@ async def test_token_signed_url_and_text_are_never_logged(monkeypatch, caplog):
 
 def test_public_api_surface_is_unchanged():
     signature = inspect.signature(OCRService.extract_text_from_image_bytes)
-    assert list(signature.parameters) == ["image_bytes", "image_format", "on_event"]
+    assert list(signature.parameters) == ["image_bytes", "image_format", "on_event", "max_attempts"]
+    for name in ("image_bytes", "image_format", "on_event"):
+        assert signature.parameters[name].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert signature.parameters["max_attempts"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["max_attempts"].default == 3
     assert signature.parameters["image_format"].default == "png"
     assert signature.parameters["on_event"].default is None
     assert inspect.iscoroutinefunction(OCRService.extract_text_from_image_bytes)
@@ -727,7 +814,7 @@ async def test_submit_rejection_and_non_json_body_raise(monkeypatch):
             with pytest.raises(OCRServiceError) as exc:
                 await OCRService.extract_text_from_image_bytes(b"img", "png")
     assert "code=1001" in str(exc.value)
-    assert "参数非法" not in str(exc.value)  # raw provider payload is not echoed
+    assert "参数非法" in str(exc.value)  # only the sanitized error field is summarized
 
     html = lambda r: httpx.Response(200, text="<html>gateway</html>")
     with _fast_sleep(monkeypatch):

@@ -3,9 +3,10 @@
     <!-- Header -->
     <div class="mb-8">
       <h1 class="font-display text-2xl font-bold tracking-tight text-ink sm:text-3xl">模型与系统设置</h1>
-      <p class="mt-2 text-sm text-sub">
+      <p v-if="isDesktop" class="mt-2 text-sm text-sub">
         配置大语言模型、向量服务与百度 OCR 凭据。凭据通过系统本地安全存储加密保存，备份与安装包不会包含您的密钥。
       </p>
+      <p v-else class="mt-2 text-sm text-sub">安卓和 Windows 网页共用服务端的模型与 OCR 配置，无需在每台设备重复保存。</p>
     </div>
 
     <!-- 外观：独立区域，选择立即生效，不随模型配置一起保存 -->
@@ -35,7 +36,7 @@
 
     <!-- First-run Onboarding Wizard Banner -->
     <div
-      v-if="showWizard"
+      v-if="isDesktop && showWizard"
       class="mb-8 rounded-xl border border-accent/30 bg-accent/10 p-5 shadow-xs"
     >
       <div class="flex items-start justify-between gap-4">
@@ -122,7 +123,84 @@
       {{ successMessage }}
     </div>
 
-    <form @submit.prevent="handleSave" class="space-y-8">
+    <section v-if="!isDesktop" class="space-y-5" aria-labelledby="server-config-heading" :aria-busy="loading">
+      <div class="surface p-5">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 id="server-config-heading" class="text-base font-semibold text-ink">服务端统一配置</h2>
+            <p class="mt-1 text-sm text-sub">此处显示当前服务端状态。修改地址、模型或密钥，请更新服务端配置并重启服务，再刷新本页。</p>
+            <p class="mt-2 text-xs text-faint">“已配置”表示服务端已填写所需配置，不代表已验证连通性。刷新仅查询状态，不调用模型或 OCR。</p>
+            <p class="mt-2 text-xs text-sub">点击测试将实际调用对应服务，可能产生少量费用。OCR 仅发送内置测试图片。</p>
+          </div>
+          <button type="button" class="btn btn-sm btn-secondary gap-1.5" :disabled="loading || serverTesting !== null" @click="refreshServerStatus">
+            <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': loading }" />
+            {{ loading ? '读取中...' : '刷新状态' }}
+          </button>
+        </div>
+      </div>
+      <section v-for="service in serverServices" :key="service.id" class="surface p-5" :aria-busy="serverTesting === service.id">
+        <div class="flex items-start justify-between gap-3 border-b border-line pb-4">
+          <div class="flex items-center gap-2">
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+              <component :is="service.icon" class="h-4 w-4" />
+            </div>
+            <h3 class="text-base font-semibold text-ink">{{ service.name }}</h3>
+          </div>
+          <span class="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium" :class="!service.available ? 'bg-raised text-sub' : service.configured ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'">
+            {{ !service.available ? (loading ? '读取中' : '未获取') : service.configured ? '已配置' : '待配置' }}
+          </span>
+        </div>
+        <dl class="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+          <div v-if="service.isOcr" class="sm:col-span-2">
+            <dt class="text-xs text-sub">当前识别方式</dt>
+            <dd class="mt-1 break-all text-ink">{{ service.provider || '未获取' }}</dd>
+          </div>
+          <div :class="{ 'sm:col-span-2': !service.model }">
+            <dt class="text-xs text-sub">{{ service.urlLabel }}</dt>
+            <dd class="mt-1 break-all text-ink">{{ service.url || '未提供' }}</dd>
+          </div>
+          <div v-if="service.model">
+            <dt class="text-xs text-sub">模型名称</dt>
+            <dd class="mt-1 break-all text-ink">{{ service.model }}</dd>
+          </div>
+        </dl>
+        <template v-if="service.isOcr">
+          <p v-if="service.message && (!service.configured || (!serverTestResults[service.id] && serverTesting !== service.id))" class="mt-3 text-xs" :class="service.configured ? 'text-sub' : 'text-warn'">{{ service.message }}</p>
+          <p class="mt-3 text-xs text-faint">支持 OpenAI 兼容视觉接口或百度 OCR，按服务端配置选择。</p>
+        </template>
+        <div class="mt-4 border-t border-line pt-4">
+          <button
+            type="button"
+            class="btn btn-sm btn-secondary gap-1.5"
+            :aria-label="`${service.name}测试连通性`"
+            :disabled="loading || serverTesting !== null || !service.available || !service.configured"
+            @click="testServerService(service)"
+          >
+            <Loader2 v-if="serverTesting === service.id" class="h-3.5 w-3.5 animate-spin" />
+            <RefreshCw v-else class="h-3.5 w-3.5" />
+            {{ serverTesting === service.id ? '测试中...' : '测试连通性' }}
+          </button>
+          <div class="mt-3 text-sm" role="status" aria-live="polite">
+            <p v-if="serverTesting === service.id" class="text-sub">正在使用服务端配置测试，请稍候…</p>
+            <template v-else-if="serverTestResults[service.id]">
+              <p class="font-medium" :class="serverTestResults[service.id]!.ok ? 'text-ok' : 'text-err'">
+                {{ serverTestResults[service.id]!.ok ? '测试通过' : '测试未通过' }}
+              </p>
+              <p class="mt-1 break-words text-sub">{{ serverTestResults[service.id]!.message }}</p>
+              <p class="mt-1 text-xs text-faint">
+                耗时 {{ serverTestResults[service.id]!.duration }} 秒
+                <span v-if="serverTestResults[service.id]!.callId" class="break-all"> · 诊断编号 {{ serverTestResults[service.id]!.callId }}</span>
+              </p>
+            </template>
+          </div>
+        </div>
+      </section>
+      <p v-if="status?.vector_locked" class="rounded-lg border border-warn/30 bg-warn/10 p-4 text-xs text-warn">
+        向量索引已锁定：{{ status.vector_lock_reason || '模型来源不一致或信息缺失' }}。请联系服务端管理员核对配置与索引。
+      </p>
+    </section>
+
+    <form v-if="isDesktop" @submit.prevent="handleSave" class="space-y-8">
       <!-- 1. LLM Settings -->
       <section class="surface p-6">
         <div class="flex items-center justify-between border-b border-line pb-4">
@@ -434,7 +512,7 @@
     </form>
 
     <!-- 4. Backup & Restore Section -->
-    <div class="mt-12 border-t border-line pt-8">
+    <div v-if="isDesktop" class="mt-12 border-t border-line pt-8">
       <div class="mb-4">
         <h2 class="text-lg font-bold text-ink">数据备份与恢复</h2>
         <p class="text-xs text-sub">
@@ -572,6 +650,96 @@ const {
   installUpdate,
 } = useDesktop();
 
+type ServerServiceId = 'llm' | 'embedding' | 'ocr';
+
+interface ServerServiceCard {
+  id: ServerServiceId;
+  name: string;
+  icon: Component;
+  available: boolean;
+  configured?: boolean;
+  urlLabel: string;
+  url?: string;
+  model?: string;
+  isOcr?: boolean;
+  provider?: string;
+  message?: string;
+}
+
+const serverServices = computed<ServerServiceCard[]>(() => [
+  {
+    id: 'llm',
+    name: '大语言模型 (LLM)',
+    icon: Bot,
+    available: Boolean(credentialsStatus.value),
+    configured: credentialsStatus.value?.llm.configured,
+    urlLabel: 'API 服务地址',
+    url: credentialsStatus.value?.llm.base_url,
+    model: credentialsStatus.value?.llm.model,
+  },
+  {
+    id: 'embedding',
+    name: '向量检索服务 (Embedding)',
+    icon: Network,
+    available: Boolean(credentialsStatus.value),
+    configured: credentialsStatus.value?.embedding.configured,
+    urlLabel: 'API 服务地址',
+    url: credentialsStatus.value?.embedding.base_url,
+    model: credentialsStatus.value?.embedding.model,
+  },
+  {
+    id: 'ocr',
+    name: '文字识别 (OCR)',
+    icon: ScanText,
+    available: Boolean(credentialsStatus.value?.ocr),
+    configured: credentialsStatus.value?.ocr?.configured,
+    urlLabel: 'OCR 接口地址',
+    url: credentialsStatus.value?.ocr?.base_url,
+    model: credentialsStatus.value?.ocr?.model,
+    isOcr: true,
+    provider: credentialsStatus.value?.ocr?.provider,
+    message: credentialsStatus.value?.ocr?.message || (!credentialsStatus.value?.ocr ? '未获取 OCR 配置状态，请确认服务端已更新后刷新。' : ''),
+  },
+]);
+
+const serverTesting = ref<ServerServiceId | null>(null);
+const serverTestResults = ref<Partial<Record<ServerServiceId, {
+  ok: boolean;
+  message: string;
+  duration: string;
+  callId?: string;
+}>>>({});
+
+const refreshServerStatus = async () => {
+  if (serverTesting.value !== null || loading.value) return;
+  serverTestResults.value = {};
+  await fetchStatus();
+};
+
+const testServerService = async (service: ServerServiceCard) => {
+  if (serverTesting.value !== null || loading.value || !service.available || !service.configured) return;
+  serverTesting.value = service.id;
+  delete serverTestResults.value[service.id];
+  const started = performance.now();
+  try {
+    const res = await testConnection(service.id);
+    serverTestResults.value[service.id] = {
+      ok: res?.ok === true,
+      message: res?.message || '服务未返回测试结果，请检查服务端日志。',
+      duration: ((performance.now() - started) / 1000).toFixed(1),
+      callId: res?.call_id,
+    };
+  } catch (err: any) {
+    serverTestResults.value[service.id] = {
+      ok: false,
+      message: err?.message || '测试请求失败，请检查网络连接。',
+      duration: ((performance.now() - started) / 1000).toFixed(1),
+    };
+  } finally {
+    serverTesting.value = null;
+  }
+};
+
 const reindexing = ref(false);
 
 const handleCheckUpdates = async () => {
@@ -651,6 +819,7 @@ const savedOcrUrlIsLegacy = computed(() =>
 
 onMounted(async () => {
   await fetchStatus();
+  if (!isDesktop.value) return;
   if (credentialsStatus.value) {
     form.llm_base_url = credentialsStatus.value.llm.base_url || 'https://api.openai.com/v1';
     form.llm_model = credentialsStatus.value.llm.model || 'gpt-4o-mini';

@@ -26,6 +26,9 @@ services:
       OCR_BASE_URL: ${OCR_BASE_URL:-}
       OCR_API_KEY: ${OCR_API_KEY:-}
       OCR_VISION_MODEL: ${OCR_VISION_MODEL:-gpt-4o-mini}
+      OCR_TIMEOUT: ${OCR_TIMEOUT:-120}
+      BAIDU_OCR_API_URL: ${BAIDU_OCR_API_URL:-}
+      BAIDU_OCR_TOKEN: ${BAIDU_OCR_TOKEN:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}

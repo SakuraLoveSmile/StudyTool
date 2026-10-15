@@ -151,7 +151,7 @@ try:
     from app.services.http_client import HttpClientProvider
     _importing("app.routers")
     from app.routers import materials, questions, analysis, cards, practice, learning
-    from app.routers import auth
+    from app.routers import auth, library
     _importing("app.auth")
     from app.auth import init_auth_db, enabled_user_ids
     _importing("app.access")
@@ -297,6 +297,7 @@ app.include_router(cards.router)
 app.include_router(practice.router)
 app.include_router(learning.router)
 app.include_router(auth.router)
+app.include_router(library.router)
 app.include_router(desktop_router)
 
 @app.get("/health")

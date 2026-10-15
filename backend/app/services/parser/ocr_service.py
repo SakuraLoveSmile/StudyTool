@@ -5,6 +5,8 @@ import logging
 import httpx
 import os
 import time
+import unicodedata
+from urllib.parse import urlsplit
 from typing import Optional, Callable, Dict, Any
 from app.config import settings
 from app.services.http_client import HttpClientProvider, GlobalRateLimiter
@@ -28,6 +30,117 @@ class OCRQuotaExhaustedError(OCRServiceError):
     """Raised when OCR quota or rate limit is exhausted (HTTP 429)."""
 
 class OCRService:
+    @staticmethod
+    def _valid_base_url(value: str) -> bool:
+        try:
+            parsed = urlsplit(value)
+            # Access port too: malformed/out-of-range ports must fail before HTTP.
+            parsed.port
+            return bool(
+                parsed.scheme in {"http", "https"}
+                and parsed.hostname
+                and not parsed.username
+                and not parsed.password
+                and not parsed.query
+                and not parsed.fragment
+                and "\\" not in value
+                and not any(ch.isspace() or unicodedata.category(ch).startswith("C") for ch in value)
+            )
+        except ValueError:
+            return False
+
+    @classmethod
+    def _vision_configuration(cls) -> Dict[str, str]:
+        """Resolve credentials as a pair; never send a shared secret to a dedicated host."""
+        ocr_url = settings.OCR_BASE_URL.strip()
+        ocr_key = settings.OCR_API_KEY.strip()
+        dedicated = bool(ocr_url or ocr_key)
+        base_url = ocr_url if dedicated else settings.LLM_BASE_URL.strip()
+        api_key = ocr_key if dedicated else settings.LLM_API_KEY.strip()
+        model = settings.OCR_VISION_MODEL.strip()
+        message = ""
+        if dedicated and (not ocr_url or not ocr_key):
+            message = "通用 OCR 独立配置不完整，请同时设置 OCR_BASE_URL 和 OCR_API_KEY"
+        elif not base_url or not cls._valid_base_url(base_url):
+            message = "通用 OCR 的 Base URL 必须为有效 HTTP/HTTPS 地址，不能包含账号、查询参数或片段"
+        elif not api_key or any(not 33 <= ord(ch) <= 126 for ch in api_key):
+            message = "通用 OCR 未配置有效 API Key"
+        elif not model or any(ch.isspace() or unicodedata.category(ch).startswith("C") for ch in model):
+            message = "通用 OCR 未配置有效视觉模型 OCR_VISION_MODEL"
+        elif settings.OCR_TIMEOUT <= 0:
+            message = "通用 OCR 超时 OCR_TIMEOUT 必须大于 0 秒"
+        return {
+            "base_url": base_url.rstrip("/"), "api_key": api_key, "model": model,
+            "source": "dedicated" if dedicated else "llm_shared", "message": message,
+        }
+
+    @classmethod
+    def configuration_status(cls) -> Dict[str, Any]:
+        """Describe configuration completeness without network calls or secret values."""
+        mode = settings.OCR_MODE.lower().strip()
+        status = {
+            "mode": mode, "provider": "", "base_url": "", "model": "",
+            "configured": False, "message": "", "source": "",
+        }
+        if mode == "vision_llm":
+            config = cls._vision_configuration()
+            status.update(
+                provider="OpenAI 兼容视觉接口", base_url=sanitize_endpoint(config["base_url"]),
+                model=config["model"], source=config["source"],
+                configured=not bool(config["message"]),
+                message=config["message"] or "通用 OCR 配置完整，尚未测试实际识别",
+            )
+        elif mode == "paddleocr_api":
+            url = settings.BAIDU_OCR_API_URL.strip()
+            token = settings.BAIDU_OCR_TOKEN.strip()
+            complete = bool(url and token and cls._valid_base_url(url))
+            status.update(
+                provider="百度 PaddleOCR", base_url=sanitize_endpoint(url),
+                model=cls.JOBS_API_MODEL, source="dedicated", configured=complete,
+                message="百度 OCR 配置完整，尚未测试实际识别" if complete else "百度 OCR 未配置有效 HTTP/HTTPS API 地址和 Token",
+            )
+        elif mode == "mock":
+            status["message"] = "当前为演示 OCR，不能用于正式资料识别"
+        else:
+            status["message"] = "OCR 模式不可用，请选择 vision_llm 或 paddleocr_api"
+        # Even a credential accidentally entered in another setting must not appear.
+        for key, value in status.items():
+            if isinstance(value, str):
+                for secret in (settings.OCR_API_KEY, settings.LLM_API_KEY, settings.BAIDU_OCR_TOKEN):
+                    if secret.strip():
+                        value = value.replace(secret.strip(), "[REDACTED]")
+                status[key] = sanitize_text(value)
+        return status
+
+    @staticmethod
+    def _vision_response_text(body: bytes) -> str:
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise OCRServiceError("OCR 服务返回非 JSON 或畸形响应") from exc
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise OCRServiceError("OCR 服务响应缺少有效 choices")
+        choice = choices[0]
+        if choice.get("finish_reason") == "length":
+            raise OCRServiceError("OCR 识别结果被截断，请提高输出限制或缩小单页内容后重试")
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise OCRServiceError("OCR 服务响应缺少有效 message")
+        if message.get("refusal") or choice.get("finish_reason") == "content_filter":
+            raise OCRServiceError("OCR 服务拒绝识别该图片")
+        content = message.get("content")
+        if isinstance(content, list):
+            if any(isinstance(block, dict) and block.get("type") == "refusal" for block in content):
+                raise OCRServiceError("OCR 服务拒绝识别该图片")
+            content = "\n".join(
+                block["text"] for block in content
+                if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+            )
+        if not isinstance(content, str) or not content.strip():
+            raise OCRServiceError("OCR 服务返回空文本或无有效文本内容")
+        return content.strip()
+
     @classmethod
     async def _emit(cls, on_event, event: str, info: Optional[Dict[str, Any]] = None):
         """Invokes the unified lifecycle callback (sync or async), never raising."""
@@ -45,7 +158,9 @@ class OCRService:
         cls,
         image_bytes: bytes,
         image_format: str = "png",
-        on_event: Optional[Callable[[str, Dict[str, Any]], Any]] = None
+        on_event: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        *,
+        max_attempts: int = 3,
     ) -> str:
         """Extract text from image bytes via configured OCR adapter.
 
@@ -55,7 +170,7 @@ class OCRService:
         mode = settings.OCR_MODE.lower().strip()
         
         if mode == "vision_llm":
-            return await cls._extract_via_vision_llm(image_bytes, image_format, on_event)
+            return await cls._extract_via_vision_llm(image_bytes, image_format, on_event, max_attempts=max_attempts)
         elif mode == "paddleocr_api":
             return await cls._extract_via_paddleocr_api(image_bytes, image_format, on_event)
         elif mode == "mock" and (
@@ -74,17 +189,24 @@ class OCRService:
         cls,
         image_bytes: bytes,
         image_format: str,
-        on_event: Optional[Callable[[str, Dict[str, Any]], Any]] = None
+        on_event: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        *,
+        max_attempts: int = 3,
     ) -> str:
-        api_key = settings.OCR_API_KEY or settings.LLM_API_KEY
-        base_url = (settings.OCR_BASE_URL or settings.LLM_BASE_URL).rstrip("/")
-        model = settings.OCR_VISION_MODEL or settings.LLM_MODEL
-        
-        if not api_key:
-            raise OCRServiceError("OCR 未配置 API 密钥")
+        config = cls._vision_configuration()
+        if config["message"]:
+            raise OCRServiceError(config["message"])
+        if not isinstance(max_attempts, int) or max_attempts < 1:
+            raise OCRServiceError("OCR 请求尝试次数必须至少为 1")
+        api_key, base_url, model = config["api_key"], config["base_url"], config["model"]
             
         b64_img = base64.b64encode(image_bytes).decode("utf-8")
-        data_uri = f"data:image/{image_format};base64,{b64_img}"
+        fmt = image_format.lower().lstrip(".")
+        mime = "image/jpeg" if fmt in {"jpg", "jpeg"} else f"image/{fmt}"
+        data_uri = f"data:{mime};base64,{b64_img}"
+        # This model's documented task token selects OCR rather than another
+        # document-recognition task. Other vision models use the general prompt.
+        prompt = "OCR:" if model == "PaddlePaddle/PaddleOCR-VL-1.5" else "请精确识别并按原格式输出该图片/扫描页中的所有文字内容，包括标题、题号、正文。无需添加任何解释。"
         
         payload = {
             "model": model,
@@ -92,7 +214,7 @@ class OCRService:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "请精确识别并按原格式输出该图片/扫描页中的所有文字内容，包括标题、题号、正文。无需添加任何解释。"},
+                        {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {"url": data_uri}}
                     ]
                 }
@@ -109,10 +231,10 @@ class OCRService:
         client = HttpClientProvider.get_client()
         endpoint = sanitize_endpoint(f"{base_url}/chat/completions")
         input_bytes = len(image_bytes)
-        timeout_val = float(settings.LLM_TIMEOUT)
+        timeout_val = float(settings.OCR_TIMEOUT)
 
         with call_context() as base_cid:
-            for attempt in range(3):
+            for attempt in range(max_attempts):
                 attempt_num = attempt + 1
                 with call_context(call_id=base_cid, attempt=attempt_num):
                     t_slot = time.monotonic()
@@ -155,11 +277,13 @@ class OCRService:
                             f"{base_url}/chat/completions",
                             json=payload,
                             headers=headers,
-                            timeout=settings.LLM_TIMEOUT
+                            timeout=timeout_val
                         ) as res:
                             headers_ms = (time.monotonic() - t_req_start) * 1000.0
                             status_code = res.status_code
                             provider_req_id = extract_provider_request_id(res.headers)
+                            if provider_req_id:
+                                provider_req_id = sanitize_text(provider_req_id.replace(api_key, "[REDACTED]"))
                             log_diagnostic(
                                 "response_headers",
                                 level=logging.DEBUG,
@@ -193,11 +317,7 @@ class OCRService:
                             res.raise_for_status()
 
                             current_stage = "parse_response"
-                            t_parse_start = time.monotonic()
-                            data = json.loads(body_bytes.decode("utf-8"))
-                            content = data["choices"][0]["message"]["content"].strip()
-                            if not content:
-                                raise OCRServiceError("OCR 服务返回空文本")
+                            content = cls._vision_response_text(body_bytes)
 
                             total_req_ms = (time.monotonic() - t_req_start) * 1000.0
                             await cls._emit(on_event, "response_received", {})
@@ -233,12 +353,21 @@ class OCRService:
                         failed_stage = "http_status"
                         status_code = exc.response.status_code
                         provider_req_id = extract_provider_request_id(exc.response.headers) or provider_req_id
+                        if provider_req_id:
+                            provider_req_id = sanitize_text(provider_req_id.replace(api_key, "[REDACTED]"))
 
-                        if status_code in {400, 401, 403, 404, 422} or attempt == 2:
+                        if status_code in {400, 401, 403, 404, 422} or attempt_num == max_attempts:
+                            summary = cls._jobs_safe_error_summary(body_bytes, api_key)
+                            error_message = f"OCR 请求失败（HTTP {status_code}）"
+                            reason = summary.get("detail", "")
+                            if summary.get("reason_code"):
+                                reason += f"（code={summary['reason_code']}）"
+                            if reason:
+                                error_message += f"：{reason}"
                             log_diagnostic(
                                 "request_failed",
                                 level=logging.ERROR,
-                                message=f"OCR 请求失败 (HTTP {status_code})",
+                                message=error_message,
                                 service="ocr",
                                 model=model,
                                 endpoint=endpoint,
@@ -248,7 +377,7 @@ class OCRService:
                                 exception_type="HTTPStatusError",
                                 attempt=attempt_num
                             )
-                            raise OCRServiceError(f"OCR 请求失败（HTTP {status_code}）") from exc
+                            raise OCRServiceError(error_message) from exc
 
                         if status_code == 429:
                             await GlobalRateLimiter.report_429(5.0)
@@ -276,7 +405,7 @@ class OCRService:
                             "wait_seconds": 5.0,
                             "reason": reason
                         })
-                        logger.warning("OCR transient HTTP failure, retry %d/2", attempt_num)
+                        logger.warning("OCR transient HTTP failure, retry %d/%d", attempt_num, max_attempts - 1)
                         await asyncio.sleep(5.0)
 
                     except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -286,7 +415,7 @@ class OCRService:
                             failed_stage = current_stage
 
                         exc_name = type(exc).__name__
-                        if attempt == 2:
+                        if attempt_num == max_attempts:
                             log_diagnostic(
                                 "request_failed",
                                 level=logging.ERROR,
@@ -323,7 +452,7 @@ class OCRService:
                             "wait_seconds": 5.0,
                             "reason": reason
                         })
-                        logger.warning("OCR transient network failure, retry %d/2", attempt_num)
+                        logger.warning("OCR transient network failure, retry %d/%d", attempt_num, max_attempts - 1)
                         await asyncio.sleep(5.0)
 
                     except Exception as exc:
@@ -398,6 +527,55 @@ class OCRService:
         if isinstance(data_obj, dict):
             return data_obj
         return payload
+
+    @classmethod
+    def _jobs_safe_error_summary(cls, body: bytes, token: str) -> Dict[str, str]:
+        """Read only short JSON error fields, never raw response content or credentials."""
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+
+        def safe_scalar(value: Any, limit: int) -> str:
+            if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+                return ""
+            text = str(value)
+            # The provider may echo the submitted token without a recognizable key.
+            # Redact before truncating or normalizing so partial tokens cannot escape.
+            if token:
+                text = text.replace(token, "[REDACTED]")
+            text = sanitize_text(text)
+            text = "".join(" " if unicodedata.category(ch).startswith("C") else ch for ch in text)
+            return " ".join(text.split())[:limit]
+
+        summary: Dict[str, str] = {}
+        # Baidu also returns data.errorMsg. Inspect only explicit error fields
+        # there, never the rest of data (which may contain document/image output).
+        roots = [payload]
+        if isinstance(payload.get("data"), dict):
+            roots.append(payload["data"])
+        for current in roots:
+            # Some providers wrap these fields in one or two `error` objects.
+            for _ in range(3):
+                if "reason_code" not in summary:
+                    for key in ("errorCode", "code", "error_code", "type"):
+                        code = safe_scalar(current.get(key), 80)
+                        if code and code != "0":
+                            summary["reason_code"] = code
+                            break
+                if "detail" not in summary:
+                    for key in ("errorMsg", "message", "msg", "error"):
+                        message = safe_scalar(current.get(key), 300)
+                        if message:
+                            summary["detail"] = message
+                            break
+                nested = current.get("error")
+                if not isinstance(nested, dict):
+                    break
+                current = nested
+        return summary
 
     @classmethod
     async def _jobs_single_request(
@@ -607,12 +785,37 @@ class OCRService:
             files=files,
         )
 
-        if status == 429:
-            raise OCRQuotaExhaustedError(f"百度 OCR 每日额度耗尽或触发限流（HTTP {status}）")
-        if not (200 <= status < 300):
-            raise OCRServiceError(f"百度 OCR 任务提交失败（HTTP {status}）")
+        http_ok = 200 <= status < 300
+        payload = cls._jobs_decode_json(body, "提交响应") if http_ok else {}
+        if not http_ok or payload.get("code") not in (0, None):
+            summary = cls._jobs_safe_error_summary(body, token)
+            message = f"百度 OCR 任务提交失败（HTTP {status}）"
+            reason = summary.get("detail", "")
+            if summary.get("reason_code"):
+                reason = f"{reason}（code={summary['reason_code']}）" if reason else f"code={summary['reason_code']}"
+            if reason:
+                message += f"：{reason}"
+            with call_context(call_id=call_id, attempt=1):
+                log_diagnostic(
+                    "request_failed",
+                    level=logging.WARNING,
+                    message=message,
+                    service="ocr",
+                    model=cls.JOBS_API_MODEL,
+                    endpoint=endpoint,
+                    status_code=status,
+                    provider_request_id=sanitize_text((_req_id or "").replace(token, "[REDACTED]")) or None,
+                    failed_stage="submit",
+                    stage="submit",
+                    call_id=call_id,
+                    attempt=1,
+                    **summary,
+                )
+            if status == 429:
+                raise OCRQuotaExhaustedError(f"百度 OCR 每日额度耗尽或触发限流（HTTP {status}）")
+            raise OCRServiceError(message)
 
-        payload = cls._jobs_unwrap_payload(body, "提交响应")
+        payload = payload["data"] if isinstance(payload.get("data"), dict) else payload
         job_id = payload.get("jobId")
         if not isinstance(job_id, str) or not job_id.strip():
             raise OCRServiceError("百度 OCR 提交响应缺少 jobId")

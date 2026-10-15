@@ -1,4 +1,31 @@
-# RAG production deployment
+# StudyTool 联网服务部署
+
+## 服务器配置与镜像交付
+
+少量用户起步建议 Linux **2 核、4 GB 内存、40～60 GB 磁盘**，不需要 GPU。LLM、OCR、向量模型通过远程接口运行；本机负责解析、检索、账号和资料存储。扫描 PDF 解析时会有内存峰值，先用少量页面验证；资料、日志、备份增加后需扩容。这是起步建议，尚未进行并发容量测试。若在服务器上编译镜像，需要额外内存和磁盘；推荐加载已构建镜像。
+
+在有 Docker 的开发机运行（Python 3.10+，不读取本机 `.env`）：
+
+```sh
+python3 deploy/build_bundle.py --platform linux/amd64 --tag connected-candidate
+python3 deploy/smoke_images.py --bundle artifacts/connected-delivery/server
+```
+
+输出 `artifacts/connected-delivery/server/` 包含前后端镜像 `studytool-images.tar.gz`、Compose、部署脚本、空凭据配置示例、构建信息和 SHA-256 校验。ARM 服务器改为 `--platform linux/arm64`，两种架构不能混用。默认不推送镜像仓库。构建脚本不会覆盖非空输出目录；新一轮请指定新的 `--output`。
+
+`.github/workflows/connected-builds.yml` 同时构建安卓候选 APK、Windows x64 安装包及 Linux x64 服务端镜像包，结果保存在 Actions artifacts。它不发布 Release、不推送注册表、不部署。旧的 Windows 本地版仍使用原独立工作流。
+
+下载并解压服务端 artifact 后，把整个目录复制到 `/srv/rag`，先核对校验和并加载镜像：
+
+```sh
+cd /srv/rag
+sha256sum -c SHA256SUMS.txt
+docker image load -i studytool-images.tar.gz
+```
+
+然后按下面步骤创建数据目录、填写配置和人工开户。使用下载的镜像包时，将下面的 `build --pull` 换成 `up -d --no-build --pull never`；镜像包没有业务源码，不能在服务器上执行 build。首次打开安卓/Windows 联网版填写相同 HTTPS origin（例如 `https://learn.example.com`），不填 `/library`。
+
+目前没有服务器和域名，不能直接将 `learn.example.com` 当作可用地址。DNS、HTTPS 配好并启动服务后，客户端才能登录。
 
 The production data directory must be dedicated and outside this source tree. These commands assume the checkout is `/srv/rag`, Docker Compose is installed, and DNS for `DOMAIN` points at the server. Do not copy `backend/data` into production.
 
@@ -18,6 +45,14 @@ Set a real `DOMAIN`, `RAG_DATA_DIR=/srv/rag-data`, and the remote model credenti
 docker compose --env-file deploy/.env config --quiet
 docker compose --env-file deploy/.env build --pull
 docker compose --env-file deploy/.env up -d
+docker compose --env-file deploy/.env ps
+```
+
+使用已加载镜像包的完整启动命令为：
+
+```sh
+docker compose --env-file deploy/.env config --quiet
+docker compose --env-file deploy/.env up -d --no-build --pull never
 docker compose --env-file deploy/.env ps
 ```
 

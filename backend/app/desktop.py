@@ -306,6 +306,7 @@ def check_system_idle() -> tuple[bool, str]:
 @desktop_router.get("/status")
 def get_desktop_status():
     """Returns desktop runtime status, idle state, and embedding constraints."""
+    from app.services.parser.ocr_service import OCRService
     idle, idle_reason = check_system_idle()
     try:
         has_emb = has_existing_embeddings()
@@ -328,12 +329,14 @@ def get_desktop_status():
         "vector_locked": vector_locked,
         "vector_lock_reason": vector_lock_reason or "",
         "llm_model": settings.LLM_MODEL,
-        "llm_base_url": settings.LLM_BASE_URL,
+        "llm_base_url": sanitize_endpoint(settings.LLM_BASE_URL),
         "llm_configured": bool(settings.LLM_API_KEY),
         "embedding_model": settings.EMBEDDING_MODEL,
-        "embedding_base_url": settings.EMBEDDING_BASE_URL,
+        "embedding_base_url": sanitize_endpoint(settings.EMBEDDING_BASE_URL),
         "embedding_configured": bool(settings.EMBEDDING_API_KEY),
         "ocr_mode": settings.OCR_MODE,
+        "ocr": OCRService.configuration_status(),
+        "baidu_ocr_api_url": sanitize_endpoint(settings.BAIDU_OCR_API_URL),
         "baidu_ocr_configured": bool(settings.BAIDU_OCR_API_URL and settings.BAIDU_OCR_TOKEN),
     }
 
@@ -588,7 +591,7 @@ async def api_shutdown(body: Optional[ShutdownRequest] = None):
 
 
 class ConnectionTestRequest(BaseModel):
-    service_type: str = Field(..., description="llm | embedding | baidu_ocr")
+    service_type: str = Field(..., description="llm | embedding | ocr (selected server provider) | baidu_ocr")
     base_url: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
@@ -977,7 +980,32 @@ async def test_service_connection(body: ConnectionTestRequest):
         except Exception as exc:
             return {"ok": False, "service": "embedding", "message": f"Embedding 连接失败: {type(exc).__name__}"}
 
-    elif service in {"baidu_ocr", "ocr"}:
+    elif service == "ocr":
+        from app.services.parser.ocr_service import OCRService, OCRServiceError
+
+        config = OCRService.configuration_status()
+        if not config["configured"]:
+            raise HTTPException(status_code=400, detail=config["message"] or "OCR 服务未配置")
+
+        doc = fitz.open()
+        try:
+            page = doc.new_page(width=320, height=80)
+            page.insert_text((20, 50), "TEST_OCR_PROBE_2026", fontsize=22)
+            png_bytes = page.get_pixmap(dpi=150).tobytes("png")
+        finally:
+            doc.close()
+
+        try:
+            recognized = await OCRService.extract_text_from_image_bytes(png_bytes, "png", max_attempts=1)
+            if "TEST_OCR_PROBE_2026" not in recognized:
+                return {"ok": False, "service": "ocr", "message": "OCR 返回内容未识别出测试文字，请检查模型是否支持图片文字识别"}
+            return {"ok": True, "service": "ocr", "message": "OCR 识别测试成功，已识别出测试图片文字"}
+        except OCRServiceError as exc:
+            return {"ok": False, "service": "ocr", "message": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "service": "ocr", "message": f"OCR 连接失败: {type(exc).__name__}"}
+
+    elif service == "baidu_ocr":
         api_url = (body.baidu_ocr_url or settings.BAIDU_OCR_API_URL).strip()
         token = (body.baidu_ocr_token or settings.BAIDU_OCR_TOKEN).strip()
         if not api_url or not token:

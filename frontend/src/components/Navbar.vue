@@ -2,17 +2,20 @@
   <header class="sticky top-0 z-30 border-b border-line/80 bg-surface/80 shadow-xs backdrop-blur-md">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
       <div class="flex h-16 items-center justify-between gap-3">
-        <router-link to="/today" class="flex min-w-0 items-center space-x-3" aria-label="返回今日学习">
+        <router-link to="/today" class="flex w-40 shrink-0 items-center space-x-3" aria-label="返回今日学习">
           <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-md shadow-brand-600/25">
             <BookOpen class="h-5 w-5" />
           </div>
           <div class="min-w-0">
             <h1 class="truncate font-display text-base font-bold tracking-tight text-ink sm:text-lg">学习助手</h1>
-            <p class="hidden text-xs text-faint sm:block">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
+            <p class="hidden truncate text-xs text-faint sm:block">真题追溯 · 主动回忆 · 考点频次 · 智能批改</p>
           </div>
         </router-link>
 
-        <nav class="hidden items-center space-x-1 sm:space-x-1.5 xl:flex" aria-label="主导航">
+        <nav class="hidden items-center space-x-1 2xl:flex" aria-label="主导航">
+          <router-link to="/library" class="nav-tab" :class="{ 'nav-tab-active': $route.path === '/library' }">
+            <BookOpen class="mr-1.5 inline h-4 w-4" />知识库
+          </router-link>
           <router-link to="/today" class="nav-tab" :class="{ 'nav-tab-active': $route.path === '/today' }">
             <CalendarDays class="mr-1.5 inline h-4 w-4" />今日学习
           </router-link>
@@ -47,7 +50,8 @@
         </nav>
 
         <div class="flex shrink-0 items-center space-x-2">
-          <ThemeToggle class="hidden xl:block" />
+          <InstallAppButton class="hidden sm:block" />
+          <ThemeToggle class="hidden 2xl:block" />
           <button
             type="button"
             class="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
@@ -71,14 +75,15 @@
             <span v-if="auth.user.value" class="hidden text-xs text-sub sm:inline">{{ auth.user.value.username }}</span>
             <button v-if="auth.authRequired.value" type="button" class="rounded-lg px-2 py-1.5 text-xs text-sub hover:bg-raised" @click="logout">退出</button>
           </span>
-          <button type="button" class="rounded-lg p-2 text-sub hover:bg-raised xl:hidden" aria-label="打开导航菜单" @click="mobileMenuOpen = !mobileMenuOpen">
+          <button type="button" class="rounded-lg p-2 text-sub hover:bg-raised 2xl:hidden" aria-label="打开导航菜单" @click="mobileMenuOpen = !mobileMenuOpen">
             <Menu v-if="!mobileMenuOpen" class="h-5 w-5" />
             <X v-else class="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      <nav v-if="mobileMenuOpen" class="space-y-1 border-t border-line py-3 xl:hidden" aria-label="移动端主导航">
+      <nav v-if="mobileMenuOpen" class="space-y-1 border-t border-line py-3 2xl:hidden" aria-label="移动端主导航">
+        <InstallAppButton variant="menu" class="sm:hidden" />
         <router-link
           v-for="item in mobileLinks"
           :key="item.to"
@@ -105,6 +110,7 @@ import { useTaskManager } from '../composables/useTaskManager';
 import { useAuth } from '../composables/useAuth';
 import { beginLogNavigation } from '../composables/useLogNavigation';
 import ThemeToggle from './ThemeToggle.vue';
+import InstallAppButton from './InstallAppButton.vue';
 
 const { activeCount, toggleDrawer } = useTaskManager();
 const auth = useAuth();
@@ -123,6 +129,7 @@ function noteLogNavClick(): void {
 }
 
 const mobileLinks = computed<Array<{ to: string; label: string; icon: Component }>>(() => [
+  { to: '/library', label: '知识库', icon: BookOpen },
   { to: '/today', label: '今日学习', icon: CalendarDays },
   { to: '/recall', label: '回忆卡库', icon: BrainCircuit },
   { to: '/materials', label: '资料与真题', icon: FolderArchive },
@@ -136,7 +143,7 @@ const mobileLinks = computed<Array<{ to: string; label: string; icon: Component 
 
 <style scoped>
 .nav-tab {
-  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-3.5 py-2 text-sm font-medium text-sub transition-colors hover:bg-raised hover:text-ink;
+  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-2 text-xs font-medium text-sub transition-colors hover:bg-raised hover:text-ink;
 }
 .nav-tab-active {
   @apply bg-accent/10 font-semibold text-accent hover:bg-accent/15 hover:text-accent;

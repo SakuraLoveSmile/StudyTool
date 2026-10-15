@@ -4,10 +4,12 @@ import App from './App.vue';
 import router from './router';
 import { installFrontendDiagnostics, setDiagnosticsContext } from './utils/diagnostics';
 import { useTheme } from './composables/useTheme';
+import { initializeInstallApp } from './composables/useInstallApp';
 
 // 挂载前初始化主题：data-theme 已由 index.html 内联脚本/桌面 preload 写入，
 // 这里接管后续的偏好变更、系统跟随与多标签同步。
 useTheme();
+initializeInstallApp();
 
 const app = createApp(App);
 app.use(router);

@@ -10,6 +10,15 @@ logger = logging.getLogger(__name__)
 
 CURRENT_SCHEMA_VERSION = 6
 STUDENT_FLOW_MIGRATION = "student_flow_v1"
+LIBRARY_MIGRATION = "library_v1"
+
+
+def _needs_library_migration() -> bool:
+    with sqlite3.connect(settings.db_path, timeout=30.0) as conn:
+        try:
+            return conn.execute("SELECT value FROM schema_meta WHERE key = ?", (LIBRARY_MIGRATION,)).fetchone() is None
+        except sqlite3.OperationalError:
+            return True
 
 
 def _needs_student_flow_migration() -> bool:
@@ -694,7 +703,7 @@ def init_db() -> None:
         raise RuntimeError(
             f"数据库 schema_version={previous_version} 高于当前支持版本 {CURRENT_SCHEMA_VERSION}，拒绝降级"
         )
-    if existing_database and (previous_version < CURRENT_SCHEMA_VERSION or _needs_student_flow_migration()):
+    if existing_database and (previous_version < CURRENT_SCHEMA_VERSION or _needs_student_flow_migration() or _needs_library_migration()):
         # Do not catch this exception: backup failure must abort the upgrade.
         backup_database()
 
@@ -1025,6 +1034,23 @@ def init_db() -> None:
               AND publication_status IN ('published', 'approved')
         """)
         cursor.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, '1')", (STUDENT_FLOW_MIGRATION,))
+
+        # No source foreign keys: saved learning history survives source deletion
+        # and is explicitly marked stale when its persisted snapshot diverges.
+        for table in ("library_guides", "library_answers"):
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    id TEXT PRIMARY KEY,
+                    doc_id TEXT,
+                    chapter_id TEXT,
+                    payload_json TEXT NOT NULL,
+                    source_snapshot_json TEXT NOT NULL,
+                    source_stale INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_scope ON {table}(doc_id, chapter_id)")
+        cursor.execute("INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, '1')", (LIBRARY_MIGRATION,))
 
         cursor.execute(
             "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?) "

@@ -20,3 +20,10 @@ frontend/dist
 *.log
 deploy/backups
 artifacts
+clients
+desktop
+e2e
+.agent-teams
+.feedback-work
+.mimosa
+.integration-backup-*

@@ -1,0 +1,21 @@
+{
+  "name": "studytool-connected",
+  "version": "0.1.0",
+  "description": "StudyTool 联网学习客户端",
+  "author": "StudyTool",
+  "private": true,
+  "main": "src/main.js",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build": "node scripts/check.js",
+    "test": "node --test tests/*.test.js",
+    "setup:runtime": "install-electron",
+    "start": "npm run setup:runtime && electron .",
+    "pack": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "pack:dir": "npm run build && electron-builder --win --x64 --dir --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "25.1.8"
+  }
+}

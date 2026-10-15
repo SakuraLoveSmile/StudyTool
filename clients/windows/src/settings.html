@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>连接学习服务 · StudyTool Connected</title>
+  <link rel="stylesheet" href="settings.css">
+  <script defer src="settings.js"></script>
+</head>
+<body>
+  <main>
+    <p class="brand">STUDYTOOL CONNECTED</p>
+    <h1>连接学习服务</h1>
+    <p class="intro">在 Windows 和安卓上，使用同一个服务地址访问教材、知识库与 AI 问答。</p>
+    <section class="card" aria-label="服务连接设置">
+      <form id="connection-form">
+        <label for="origin">服务地址</label>
+        <input id="origin" name="origin" type="url" placeholder="https://learn.example.com" required autocomplete="url" spellcheck="false" maxlength="2048">
+        <p class="hint">填写 HTTPS 域名，可带端口，无需填写 /library。</p>
+        <p class="error" id="error" role="alert" hidden></p>
+        <p class="status" id="status" role="status" hidden></p>
+        <button type="submit" id="save">保存并连接</button>
+        <button type="button" class="secondary" id="retry" hidden>重试已保存的服务</button>
+      </form>
+      <p class="switch-note">切换地址会清除本客户端原服务的登录状态与缓存；服务端的教材和学习记录仍保留在原服务中。</p>
+    </section>
+    <p class="server-note">还没有服务器？请先部署 StudyTool 服务端并配置 HTTPS 域名，再将地址填在这里。此客户端需要联网使用。</p>
+  </main>
+</body>
+</html>

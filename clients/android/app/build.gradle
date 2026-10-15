@@ -1,0 +1,44 @@
+plugins { id 'com.android.application' }
+
+def signingEnvironment = ['ANDROID_KEYSTORE_PATH', 'ANDROID_KEYSTORE_PASSWORD',
+                          'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']
+def hasReleaseSigning = signingEnvironment.every { System.getenv(it) }
+if (signingEnvironment.any { System.getenv(it) } && !hasReleaseSigning) {
+    throw new GradleException('Release signing requires all four ANDROID_KEYSTORE_* / ANDROID_KEY_* variables.')
+}
+
+android {
+    namespace 'com.studytool.connected'
+    compileSdk 35
+    buildFeatures { buildConfig true }
+    defaultConfig {
+        applicationId 'com.studytool.connected'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+    }
+    if (hasReleaseSigning) {
+        signingConfigs {
+            release {
+                storeFile file(System.getenv('ANDROID_KEYSTORE_PATH'))
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug { applicationIdSuffix '.debug'; versionNameSuffix '-debug' }
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) signingConfig signingConfigs.release
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies { testImplementation 'junit:junit:4.13.2' }

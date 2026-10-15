@@ -41,7 +41,7 @@ import {
   unwrapLearningPayload
 } from '../types/learning';
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: '/api',
   timeout: 60000,
   withCredentials: true,

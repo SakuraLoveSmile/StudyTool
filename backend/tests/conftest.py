@@ -30,5 +30,8 @@ def isolate_test_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "LLM_API_KEY", "")
     monkeypatch.setattr(settings, "EMBEDDING_API_KEY", "")
     monkeypatch.setattr(settings, "OCR_API_KEY", "")
+    monkeypatch.setattr(settings, "OCR_BASE_URL", "")
+    monkeypatch.setattr(settings, "OCR_VISION_MODEL", "gpt-4o-mini")
+    monkeypatch.setattr(settings, "BAIDU_OCR_TOKEN", "")
     init_db()
     yield

@@ -5,7 +5,7 @@ WORKDIR /app
 
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid 10001 --no-create-home app
 COPY backend/requirements.lock /tmp/requirements.lock
-RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock
+RUN pip install --no-cache-dir --timeout 60 --require-hashes -r /tmp/requirements.lock
 COPY backend/app /app/app
 RUN mkdir -p /data/logs && chown -R app:app /app /data
 

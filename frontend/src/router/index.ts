@@ -13,6 +13,12 @@ import { installLogNavigation } from '../composables/useLogNavigation';
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/library',
+      name: 'library',
+      component: () => import('../views/KnowledgeLibraryView.vue'),
+      meta: { requiresAuth: true },
+    },
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     { path: '/change-password', name: 'change-password', component: ChangePasswordView, meta: { public: true } },
     {

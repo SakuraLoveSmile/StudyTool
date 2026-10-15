@@ -157,6 +157,7 @@ async def test_ocr_unit_reports_request_state_with_page_scope(monkeypatch):
     _enable_real_llm(monkeypatch)
     monkeypatch.setattr(settings, "OCR_MODE", "vision_llm")
     monkeypatch.setattr(settings, "OCR_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "OCR_BASE_URL", "https://ocr.example.test/v1")
     # 测试聚焦事件契约，不让 429 全局退避拖慢或污染用例
     monkeypatch.setattr(GlobalRateLimiter, "report_429", AsyncMock())
 
@@ -205,6 +206,7 @@ async def test_pdf_parser_maps_ocr_units_to_real_page_numbers(tmp_path, monkeypa
     _enable_real_llm(monkeypatch)
     monkeypatch.setattr(settings, "OCR_MODE", "vision_llm")
     monkeypatch.setattr(settings, "OCR_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "OCR_BASE_URL", "https://ocr.example.test/v1")
 
     pdf_path = tmp_path / "scan.pdf"
     doc = fitz.open()

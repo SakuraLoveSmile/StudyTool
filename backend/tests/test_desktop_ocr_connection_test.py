@@ -153,6 +153,23 @@ def test_connection_probe_maps_quota_exhaustion(isolated_desktop_env, monkeypatc
     assert "额度" in body["message"]
 
 
+def test_connection_probe_exposes_safe_submit_reason(isolated_desktop_env, monkeypatch):
+    submit = lambda r: httpx.Response(400, json={
+        "errorCode": "INVALID_ARGUMENT",
+        "errorMsg": f"当前凭证 {TOKEN} 不支持所请求的模型",
+    })
+    with _patched_jobs_transport(monkeypatch, submit=submit) as requests:
+        res = _probe()
+
+    body = res.json()
+    assert body["ok"] is False
+    assert body["message"].startswith("百度 OCR 任务提交失败（HTTP 400）")
+    assert "不支持所请求的模型" in body["message"]
+    assert "INVALID_ARGUMENT" in body["message"]
+    assert TOKEN not in body["message"]
+    assert len(requests) == 1
+
+
 def test_connection_probe_rejects_unknown_job_state(isolated_desktop_env, monkeypatch):
     weird = lambda r: httpx.Response(200, json={"code": 0, "data": {"state": "paused"}})  # noqa: E731
     with _patched_jobs_transport(monkeypatch, poll=weird):

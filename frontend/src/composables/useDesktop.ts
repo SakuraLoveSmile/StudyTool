@@ -1,5 +1,6 @@
 import { ref, computed, onBeforeUnmount } from 'vue';
 import axios from 'axios';
+import { api } from '../api/client';
 
 /** PP-OCRv6 异步 jobs 识别接口地址：新配置（未保存过任何地址）时的默认值。 */
 export const PP_OCR_V6_JOBS_URL = 'https://paddleocr.aistudio-app.com/api/v2/ocr/jobs';
@@ -37,6 +38,15 @@ export interface DesktopCredentialsStatus {
   baidu_ocr: {
     api_url: string;
     configured: boolean;
+  };
+  ocr?: {
+    mode: string;
+    provider: string;
+    base_url: string;
+    model: string;
+    configured: boolean;
+    message: string;
+    source: string;
   };
 }
 
@@ -270,12 +280,14 @@ export function useDesktop() {
             locked: data.has_existing_embeddings || Boolean(data.vector_locked),
           },
           baidu_ocr: {
-            api_url: '',
+            api_url: data.baidu_ocr_api_url || '',
             configured: data.baidu_ocr_configured,
           },
+          ocr: data.ocr,
         };
       }
     } catch (err: any) {
+      if (!isDesktop.value) credentialsStatus.value = null;
       errorMessage.value = err.message || '获取配置状态失败';
     } finally {
       loading.value = false;
@@ -294,15 +306,7 @@ export function useDesktop() {
         await fetchStatus();
         return res;
       } else {
-        // In web fallback, check validate endpoint
-        const valRes = await axios.post('/api/desktop/config/validate', {
-          new_embedding_base_url: creds.embedding_base_url,
-          new_embedding_model: creds.embedding_model,
-        });
-        if (valRes.data.allowed) {
-          return { ok: true, message: '配置已校验' };
-        }
-        throw new Error(valRes.data.message || '配置未通过校验');
+        throw new Error('网页使用服务端统一配置，请在服务端修改配置后重启服务。');
       }
     } catch (err: any) {
       errorMessage.value = err.response?.data?.detail || err.message;
@@ -317,10 +321,10 @@ export function useDesktop() {
       return await window.desktopAPI.testConnection(serviceType, customConfig);
     } else {
       try {
-        const res = await axios.post('/api/desktop/test-connection', {
+        const res = await api.post('/desktop/test-connection', {
           service_type: serviceType,
           ...customConfig,
-        });
+        }, { timeout: 180000 });
         return res.data;
       } catch (err: any) {
         // Surface the backend's own reason (e.g. HTTPException `detail`) instead of the
@@ -330,7 +334,7 @@ export function useDesktop() {
           ok: false,
           service: serviceType,
           error_type: 'backend_error',
-          message: typeof detail === 'string' ? detail : err.message,
+          message: typeof detail === 'string' ? detail : detail?.message || err.message || '测试请求失败',
         };
       }
     }

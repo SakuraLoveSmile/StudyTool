@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     OCR_VISION_MODEL: str = "gpt-4o-mini"
     OCR_API_KEY: str = ""
     OCR_BASE_URL: str = ""
+    OCR_TIMEOUT: int = 120
     BAIDU_OCR_API_URL: str = ""
     BAIDU_OCR_TOKEN: str = ""
     
