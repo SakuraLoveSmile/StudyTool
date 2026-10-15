@@ -93,3 +93,13 @@
 修正 SDK 包清单并补齐 Windows 阶段日志后，提交 `df857bb` 的第二轮 `38760798954`：Android 和 server 均通过。下载 APK 的 SHA-256 与 CI 一致且 APK v2 签名验证成功；服务端包全部校验和通过，BUILD.json 记录该提交、干净工作区与 linux/amd64。SMOKE.json 确认隔离 HTTPS 账号/CSRF/上传/章节/租户及重启持久化检查通过；模型仍使用明确的本地协议替身。
 
 Windows 第二轮安装退出 0、文件和卸载登记存在，但首窗检查 120 秒超时；进程仍存在且普通启动日志为空。当前没有 Windows 首窗通过证据，不能称双端验收完成。后续仅针对该新证据补充诊断和修复，保留安装/正常退出/卸载门禁。
+
+第三轮 `38762562817` 补充原生窗口和启动证据后，stderr 明确显示 smoke profile 父目录校验拒绝；原生错误框存在，首次设置尚未显示。安装与卸载均成功，清理误报已解决。提交 `9e2cfd1` 改为规范实际父目录后比较，保留全新子目录、名称和边界限制；真实目录别名、已有目录、穿越及链接回归通过，本地 Windows 客户端 21 项测试与源码检查通过。具体 Windows 临时路径差异由下一轮 CI 的 `smoke-paths` 记录核实。
+
+最终运行：[38764036705](https://github.com/SakuraLoveSmile/StudyTool/actions/runs/38764036705)，构建提交 `9e2cfd1cd7dee9b2a8df168b5f6ab037673cbe16`，Android、Windows、server 全部成功。
+
+- T5 待体验：Actions 已交付调试签名 APK、未签名 Windows x64 安装包。Windows 2022 runner 实际安装成功，3.343 秒内检测到“连接学习服务 · StudyTool Connected”窗口，正常退出码 0、无残留进程，卸载码 0、程序和卸载登记均移除。此检查未连接实际服务，也不代表用户设备全流程验收。安卓 APK 下载后 SHA-256 与 CI 一致，APK v2 签名验证通过，安卓设备流程仍未执行。
+- Windows 根因已由最终 `smoke-paths` 实录确认：.NET 返回 `C:\Users\runneradmin\AppData\Local\Temp`，Node 返回 `C:\Users\RUNNER~1\AppData\Local\Temp`；两者规范化后相同。原字符串比较误拒绝，修复后通过。
+- T6 待体验：最终 Linux amd64 镜像包已下载，所有文件校验和通过；BUILD.json 指向上述提交且工作区干净。真实隔离容器检查和重启持久化均通过，远程模型未调用。三个产品产物和 Windows 冒烟证据保存在该次 Actions artifacts，未发布正式 Release、推送注册表或部署。
+
+本轮构建与交付已完成；整体仍为实现中：生产服务器/HTTPS 未提供，用户设备流程与真实 AI 内容质量未验证，OCR 排查暂停、扫描卷未确认、管理学资料未齐，全书真实内容尚未生成。用户尚未确认体验结果，不标已验收。
