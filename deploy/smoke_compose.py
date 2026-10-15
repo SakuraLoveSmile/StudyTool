@@ -35,8 +35,7 @@ def main() -> None:
         (anonymous / 'config.json').write_text(json.dumps(docker_config) + '\n')
         docker = ['docker', '--config', str(anonymous), '--host', host]
         data = root / 'data'
-        data.mkdir(mode=0o777)
-        data.chmod(0o777)  # Disposable synthetic fixture only; production keeps UID 10001.
+        data.mkdir()
         values = {}
         for line in (deployment / 'ghcr.env.example').read_text().splitlines():
             if line and not line.startswith('#') and '=' in line:
@@ -89,6 +88,11 @@ def main() -> None:
         config['services']['frontend']['volumes'].append(
             {'type': 'bind', 'source': str(caddy), 'target': '/etc/caddy/Caddyfile', 'read_only': True})
         config['services']['backend']['environment']['PUBLIC_ORIGIN'] = 'https://studytool-smoke:8443'
+        # Use a project-owned disposable volume for synthetic data. Linux hosts
+        # cannot recursively delete bind files created by the image's UID 10001.
+        config['services']['backend']['volumes'] = [
+            {'type': 'volume', 'source': 'smoke_data', 'target': '/data'}]
+        config['volumes']['smoke_data'] = {}
         config['services']['model-fixture'] = {
             'image': manifest['images']['backend']['digest'], 'platform': 'linux/amd64',
             'entrypoint': ['python', '-u', '-c', EMBEDDING_FIXTURE],
@@ -110,7 +114,7 @@ def main() -> None:
                         'source_revision': manifest['source_revision'], 'images': manifest['images'],
                         'initial': json.loads(result.stdout.strip().splitlines()[-1]),
                         'restart': json.loads(restarted.stdout.strip().splitlines()[-1]),
-                        'isolation': 'temporary bind/volumes, internal network, no host ports, probe-only CA trust',
+                        'isolation': 'temporary named data volume and Caddyfile bind, internal network, no host ports, probe-only CA trust',
                         'production_deployed': False}
             (deployment / 'GHCR_SMOKE.json').write_text(json.dumps(evidence, indent=2) + '\n')
             print(json.dumps(evidence, indent=2))
