@@ -1,0 +1,72 @@
+services:
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/sakuralovesmile/studytool-connected-backend:0.1.0}
+    platform: linux/amd64
+    restart: unless-stopped
+    expose:
+      - "8000"
+    networks:
+      - rag_private
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      PUBLIC_MODE: "true"
+      PUBLIC_ORIGIN: https://${DOMAIN}
+      AUTH_COOKIE_SECURE: "true"
+      DATA_DIR: /data
+      LOG_DIR: /data/logs
+      DEMO_MODE: "false"
+      OCR_MODE: ${OCR_MODE:-vision_llm}
+      EMBEDDING_MODE: ${EMBEDDING_MODE:-remote}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:?LLM_API_KEY is required}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      OCR_BASE_URL: ${OCR_BASE_URL:-}
+      OCR_API_KEY: ${OCR_API_KEY:-}
+      OCR_VISION_MODEL: ${OCR_VISION_MODEL:-gpt-4o-mini}
+      OCR_TIMEOUT: ${OCR_TIMEOUT:-120}
+      BAIDU_OCR_API_URL: ${BAIDU_OCR_API_URL:-}
+      BAIDU_OCR_TOKEN: ${BAIDU_OCR_TOKEN:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    volumes:
+      - type: bind
+        source: ${RAG_DATA_DIR:?RAG_DATA_DIR must point to a dedicated production data directory}
+        target: /data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/sakuralovesmile/studytool-connected-frontend:0.1.0}
+    platform: linux/amd64
+    restart: unless-stopped
+    networks:
+      - rag_private
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required}
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  rag_private:

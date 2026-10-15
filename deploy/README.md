@@ -1,5 +1,9 @@
 # StudyTool 联网服务部署
 
+## 直接从 GHCR 拉取
+
+推荐直接部署方式见 [GHCR.md](GHCR.md)：从联网版 Release 下载 `compose.yaml` 和 `ghcr.env.example`，配置 `.env` 和专属数据目录后执行 `docker compose pull`、`docker compose up -d`。无需下载离线镜像包或编译源码。Release 的两个镜像固定 digest；平台为 Linux x64。离线镜像部署方式保留如下。
+
 ## 服务器配置与镜像交付
 
 少量用户起步建议 Linux **2 核、4 GB 内存、40～60 GB 磁盘**，不需要 GPU。LLM、OCR、向量模型通过远程接口运行；本机负责解析、检索、账号和资料存储。扫描 PDF 解析时会有内存峰值，先用少量页面验证；资料、日志、备份增加后需扩容。这是起步建议，尚未进行并发容量测试。若在服务器上编译镜像，需要额外内存和磁盘；推荐加载已构建镜像。

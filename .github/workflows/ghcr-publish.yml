@@ -1,0 +1,62 @@
+name: Publish connected server to GHCR
+
+on:
+  push:
+    tags: ['connected-server-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Container version (for example 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connected-ghcr-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: docker/setup-buildx-action@v3
+      - name: Resolve release version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python - <<'PY'
+          import os, re
+          version = os.environ['INPUT_VERSION'] if os.environ['EVENT_NAME'] == 'workflow_dispatch' else os.environ['REF_NAME'].removeprefix('connected-server-v')
+          if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[a-z0-9][a-z0-9.-]*)?', version):
+              raise SystemExit('Invalid release version')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('IMAGE_VERSION=' + version + '\n')
+          PY
+      - name: Build Linux x64 images
+        run: python deploy/build_bundle.py --platform linux/amd64 --tag connected-${{ github.sha }}
+      - name: Verify isolated server before publishing
+        run: python deploy/smoke_images.py --bundle artifacts/connected-delivery/server
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified images and prepare deployment files
+        run: python deploy/publish_ghcr.py --bundle artifacts/connected-delivery/server --version "$IMAGE_VERSION" --output artifacts/ghcr-deployment
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studytool-ghcr-deployment
+          if-no-files-found: error
+          path: artifacts/ghcr-deployment/

@@ -31,10 +31,14 @@ def main() -> None:
     if any(target.iterdir()):
         parser.error('output must be empty; existing delivery files are never overwritten')
     suffix = args.platform.split('/')[1]
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     tags = {name: f'studytool-{name}:{args.tag}-{suffix}' for name in ('backend', 'frontend')}
     for name, tag in tags.items():
         run('docker', 'buildx', 'build', '--platform', args.platform, '--load',
-            '--provenance=false', '-f', f'{name}/Dockerfile', '-t', tag, '.')
+            '--provenance=false',
+            '--label', 'org.opencontainers.image.source=https://github.com/SakuraLoveSmile/StudyTool',
+            '--label', f'org.opencontainers.image.revision={revision}',
+            '-f', f'{name}/Dockerfile', '-t', tag, '.')
     archive = target / 'studytool-images.tar.gz'
     with gzip.open(archive, 'wb', compresslevel=1) as output:
         process = subprocess.Popen(['docker', 'image', 'save', *tags.values()], stdout=subprocess.PIPE)
@@ -79,7 +83,7 @@ docker compose --env-file deploy/.env exec backend python -m app.manage_users cr
 备份、恢复及完整说明见 deploy/README.md。当前尚未完成公网部署或真机验收。
 ''')
     metadata = {'platform': args.platform, 'images': tags,
-                'revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                'revision': revision,
                 'working_tree_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT)),
                 'published': False}
     (target / 'BUILD.json').write_text(json.dumps(metadata, indent=2) + '\n')
