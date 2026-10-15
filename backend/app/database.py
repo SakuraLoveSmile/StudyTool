@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Generator, Any, Optional
@@ -1115,47 +1116,74 @@ def set_system_metadata(key: str, value: str) -> None:
         )
 
 
-def is_vector_locked() -> tuple[bool, Optional[str]]:
-    """Check if vector operations (retrieval & append) are locked.
-    Returns (is_locked: bool, reason: Optional[str]).
-    """
-    locked_val = get_system_metadata("vector_locked")
-    if locked_val and locked_val.lower() in {"true", "1", "yes"}:
-        reason = get_system_metadata("vector_lock_reason", "向量索引已锁定，请在设置中重建索引")
-        return True, reason
+@dataclass(frozen=True)
+class EmbeddingSource:
+    mode: str
+    model: str
+    base_url: str
 
-    # Check if vectors exist in document_chunks
+
+def current_embedding_source() -> EmbeddingSource:
+    mode = settings.EMBEDDING_MODE.strip().lower()
+    if mode != "remote":
+        return EmbeddingSource("mock", "mock", "")
+    return EmbeddingSource(
+        "remote", settings.EMBEDDING_MODEL.strip(),
+        (settings.EMBEDDING_BASE_URL or settings.LLM_BASE_URL or "").strip().rstrip("/"),
+    )
+
+
+def _vector_lock_reason(conn: sqlite3.Connection, source: EmbeddingSource) -> Optional[str]:
+    meta = dict(conn.execute("SELECT key, value FROM system_metadata"))
+    if meta.get("vector_locked", "").lower() in {"true", "1", "yes"}:
+        return meta.get("vector_lock_reason") or "向量索引已锁定，请在设置中重建索引"
+    if not conn.execute("SELECT 1 FROM document_chunks WHERE embedding IS NOT NULL LIMIT 1").fetchone():
+        return None
+    model = meta.get("embedding_model", "").strip()
+    base_url = meta.get("embedding_base_url", "").strip().rstrip("/")
+    mode = meta.get("embedding_mode") or ("mock" if model == "mock" else "remote")
+    if not model or (mode == "remote" and not base_url):
+        return "已有向量但来源信息缺失，已锁定向量检索与追加，要求在设置中重建索引后才能恢复使用"
+    if mode != source.mode:
+        return "当前配置向量模式与历史向量模式不一致，已锁定检索与追加"
+    if model != source.model:
+        return f"当前配置向量模型 ({source.model}) 与历史向量模型 ({model}) 不一致，已锁定检索与追加"
+    if base_url != source.base_url:
+        return "当前配置向量服务地址与历史向量服务地址不一致，已锁定检索与追加"
+    return None
+
+
+def assert_embedding_source(conn: sqlite3.Connection, source: EmbeddingSource, *, check_existing: bool = True) -> None:
+    """Serialize source checks with the vector write; caller owns commit/rollback."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    if current_embedding_source() != source:
+        raise RuntimeError("向量配置在生成期间发生变化，请按当前配置重新建立索引")
+    if check_existing:
+        reason = _vector_lock_reason(conn, source)
+        if reason:
+            raise RuntimeError(f"向量索引已锁定，禁止追加向量: {reason}")
+
+
+def record_embedding_source(conn: sqlite3.Connection, source: EmbeddingSource, *, unlock: bool = False) -> None:
+    """Record only alongside successfully written vectors (or a full rebuild)."""
+    values = {"embedding_mode": source.mode, "embedding_model": source.model,
+              "embedding_base_url": source.base_url}
+    if unlock:
+        values.update(vector_locked="false", vector_lock_reason="")
+    conn.executemany(
+        "INSERT INTO system_metadata(key,value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",
+        values.items(),
+    )
+
+
+def is_vector_locked() -> tuple[bool, Optional[str]]:
+    """Unknown and mismatched old vectors remain protected until a real rebuild."""
     try:
         with db_session() as conn:
-            cursor = conn.cursor()
-            has_chunks = cursor.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_chunks'"
-            ).fetchone()
-            if not has_chunks:
-                return False, None
-            row = cursor.execute(
-                "SELECT 1 FROM document_chunks WHERE embedding IS NOT NULL LIMIT 1"
-            ).fetchone()
-            if row:
-                meta_model = get_system_metadata("embedding_model")
-                meta_url = get_system_metadata("embedding_base_url")
-                if not (meta_model or "").strip():
-                    reason = "已有向量但来源信息缺失，已锁定向量检索与追加，要求在设置中重建索引后才能恢复使用"
-                    set_system_metadata("vector_locked", "true")
-                    set_system_metadata("vector_lock_reason", reason)
-                    return True, reason
-                # If current settings differ from persisted metadata, enforce lock
-                if settings.EMBEDDING_MODEL and meta_model and settings.EMBEDDING_MODEL != meta_model:
-                    reason = f"当前配置向量模型 ({settings.EMBEDDING_MODEL}) 与历史向量模型 ({meta_model}) 不一致，已锁定检索与追加"
-                    return True, reason
-                if (
-                    settings.EMBEDDING_BASE_URL
-                    and meta_url
-                    and settings.EMBEDDING_BASE_URL.rstrip("/").lower() != meta_url.rstrip("/").lower()
-                ):
-                    reason = "当前配置向量服务地址与历史向量服务地址不一致，已锁定检索与追加"
-                    return True, reason
+            reason = _vector_lock_reason(conn, current_embedding_source())
+            return bool(reason), reason
     except Exception as exc:
-        logger.warning("Error checking vector lock status: %s", exc)
-
-    return False, None
+        logger.warning("Error checking vector lock status: %s", type(exc).__name__)
+        return True, "无法核验向量索引来源，请稍后重试或在设置中重建索引"

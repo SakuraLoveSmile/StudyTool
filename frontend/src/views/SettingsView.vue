@@ -195,9 +195,37 @@
           </div>
         </div>
       </section>
-      <p v-if="status?.vector_locked" class="rounded-lg border border-warn/30 bg-warn/10 p-4 text-xs text-warn">
-        向量索引已锁定：{{ status.vector_lock_reason || '模型来源不一致或信息缺失' }}。请联系服务端管理员核对配置与索引。
-      </p>
+      <section class="surface p-5" aria-labelledby="vector-index-heading" :aria-busy="rebuildSubmitting || rebuildActive">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 id="vector-index-heading" class="text-base font-semibold text-ink">向量索引</h2>
+            <p class="mt-1 text-sm text-sub">使用服务端当前向量模型重建本账号资料的语义索引，保留教材原文件与已解析正文，无需重新 OCR。</p>
+            <p class="mt-2 text-xs text-faint">重建会调用向量 API，可能产生费用。任务在后台执行，离开页面后仍会继续。</p>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary gap-1.5" :disabled="!canStartRebuild" @click="showRebuildConfirm = true">
+            <Loader2 v-if="rebuildSubmitting || rebuildActive" class="h-3.5 w-3.5 animate-spin" />
+            <RefreshCw v-else class="h-3.5 w-3.5" />
+            {{ rebuildSubmitting ? '提交中...' : rebuildActive ? '正在重建索引...' : '重建向量索引' }}
+          </button>
+        </div>
+        <p v-if="status?.vector_locked" class="mt-4 rounded-lg border border-warn/30 bg-warn/10 p-3 text-xs text-warn">
+          向量索引已锁定：{{ status.vector_lock_reason || '模型来源不一致或信息缺失' }}。成功重建后恢复语义检索与向量追加。
+        </p>
+        <p v-else-if="status" class="mt-3 text-xs text-sub">{{ status.has_existing_embeddings ? '当前索引可用。更换向量模型后，需要重新建立索引。' : '当前还没有已生成的向量。' }}</p>
+        <p v-if="rebuildDisabledReason" class="mt-3 text-xs text-sub">{{ rebuildDisabledReason }}</p>
+        <div v-if="latestRebuildTask" class="mt-4 rounded-lg border border-line bg-raised/50 p-4" role="status" aria-live="polite">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <p class="text-sm font-medium" :class="['failed', 'partial'].includes(latestRebuildTask.status) ? 'text-err' : latestRebuildTask.status === 'completed' ? 'text-ok' : 'text-ink'">
+              最近重建：{{ rebuildStatusLabel }}<span v-if="rebuildActive"> · {{ Math.round(latestRebuildTask.progress) }}%</span>
+            </p>
+            <button type="button" class="btn btn-sm btn-secondary gap-1.5" @click="openTaskDetail(latestRebuildTask.id)"><ScrollText class="h-3.5 w-3.5" />查看任务日志</button>
+          </div>
+          <p class="mt-2 break-words text-xs text-sub">{{ latestRebuildTask.error_msg || latestRebuildTask.message || '等待后台任务更新' }}</p>
+          <p v-if="['failed', 'partial', 'cancelled'].includes(latestRebuildTask.status)" class="mt-2 text-xs text-sub">本次未完成索引替换，原文与原有索引保留。可查看日志排查，再次点击重建。</p>
+        </div>
+        <p v-if="rebuildError" role="alert" class="mt-3 break-words text-sm text-err">{{ rebuildError }}</p>
+        <button v-if="rebuildHistoryFailed" type="button" class="btn btn-sm btn-secondary mt-3" :disabled="rebuildHistoryLoading" @click="refreshRebuildTasks">重新读取任务状态</button>
+      </section>
     </section>
 
     <form v-if="isDesktop" @submit.prevent="handleSave" class="space-y-8">
@@ -511,6 +539,20 @@
       </div>
     </form>
 
+    <BaseModal :show="showRebuildConfirm" title="确认重建向量索引" max-width="lg" @close="showRebuildConfirm = false">
+      <div class="space-y-3 text-sm text-sub">
+        <p>将使用服务端当前模型 <strong class="break-all text-ink">{{ credentialsStatus?.embedding.model || '未配置' }}</strong>，重新计算本账号全部已解析正文切片的向量。</p>
+        <p>教材原文件和已解析正文会保留，无需重新 OCR；全部向量计算成功后才替换现有索引，失败时保留原索引及保护锁。</p>
+        <p class="rounded-lg border border-warn/30 bg-warn/10 p-3 text-warn">此操作会调用向量 API，可能产生费用。重建期间请暂停本账号的资料处理；若资料被修改，重建将保留原索引并提示重试。</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn btn-sm btn-secondary" :disabled="rebuildSubmitting" @click="showRebuildConfirm = false">暂不重建</button>
+        <button type="button" class="btn btn-sm btn-primary gap-1.5" :disabled="!canStartRebuild" @click="submitRebuildTask">
+          <Loader2 v-if="rebuildSubmitting" class="h-3.5 w-3.5 animate-spin" />{{ rebuildSubmitting ? '提交中...' : '确认费用并开始重建' }}
+        </button>
+      </template>
+    </BaseModal>
+
     <!-- 4. Backup & Restore Section -->
     <div v-if="isDesktop" class="mt-12 border-t border-line pt-8">
       <div class="mb-4">
@@ -600,7 +642,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, type Component } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, type Component } from 'vue';
 import {
   Bot,
   Network,
@@ -619,6 +661,10 @@ import {
 } from 'lucide-vue-next';
 import { useDesktop, PP_OCR_V6_JOBS_URL, isLegacyOcrApiUrl } from '../composables/useDesktop';
 import { useTheme, type ThemePreference } from '../composables/useTheme';
+import { useTaskManager } from '../composables/useTaskManager';
+import { sessionTransport } from '../api/client';
+import type { TaskStatus } from '../types';
+import BaseModal from '../components/BaseModal.vue';
 
 const theme = useTheme();
 const themeOptions: Array<{ value: ThemePreference; label: string; icon: Component }> = [
@@ -643,6 +689,8 @@ const {
   restoreBackup,
   openLogDirectory,
   reindex,
+  getReindexTasks,
+  startReindexTask,
   updateStatus,
   checkForUpdates,
   downloadUpdate,
@@ -710,10 +758,120 @@ const serverTestResults = ref<Partial<Record<ServerServiceId, {
   callId?: string;
 }>>>({});
 
+const { tasks, fetchTasks, openTaskDetail, pollFailed } = useTaskManager();
+const rebuildTasks = ref<TaskStatus[]>([]);
+const rebuildSubmitting = ref(false);
+const rebuildHistoryLoading = ref(false);
+const rebuildHistoryFailed = ref(false);
+const rebuildHistoryLoaded = ref(false);
+const rebuildError = ref('');
+const showRebuildConfirm = ref(false);
+let disposed = false;
+const activeRebuildStatuses = ['pending', 'processing', 'cancel_requested'];
+const latestRebuildTask = computed(() => rebuildTasks.value[0] || null);
+const rebuildActive = computed(() => rebuildTasks.value.some(task => activeRebuildStatuses.includes(task.status)));
+const rebuildStatusLabel = computed(() => ({
+  pending: '排队等待', processing: '正在重建', cancel_requested: '正在取消',
+  completed: '已完成', failed: '失败', partial: '未完成', cancelled: '已取消',
+}[latestRebuildTask.value?.status || 'pending']));
+const canStartRebuild = computed(() => !loading.value && Boolean(status.value?.idle)
+  && Boolean(credentialsStatus.value?.embedding.configured) && rebuildHistoryLoaded.value
+  && !rebuildHistoryLoading.value && !rebuildHistoryFailed.value && !rebuildSubmitting.value
+  && !rebuildActive.value && serverTesting.value === null);
+const rebuildDisabledReason = computed(() => {
+  if (rebuildHistoryLoading.value) return '正在读取最近的重建任务…';
+  if (rebuildHistoryFailed.value) return '任务状态尚未确认，读取成功后才能发起重建。';
+  if (rebuildActive.value) return pollFailed.value ? '任务状态更新中断，可刷新状态或查看任务日志；请勿重复提交。' : '重建任务已在后台执行，可查看任务进度与日志。';
+  if (!credentialsStatus.value?.embedding.configured) return '请先在服务端配置向量模型与密钥，重启服务后刷新状态。';
+  if (status.value && !status.value.idle) return status.value.idle_reason || '当前有资料处理任务或维护操作，请等待空闲后再重建。';
+  return '';
+});
+
+const mergeRebuildTasks = (incoming: TaskStatus[]) => {
+  const merged = new Map(rebuildTasks.value.map(task => [task.id, task]));
+  for (const task of incoming) {
+    if (task.task_type !== 'rebuild_vector_index') continue;
+    const previous = merged.get(task.id);
+    if (previous && !activeRebuildStatuses.includes(previous.status) && activeRebuildStatuses.includes(task.status)) continue;
+    if (!previous || task.updated_at >= previous.updated_at) merged.set(task.id, task);
+  }
+  // SQLite timestamps can share a second. Keep the API's newest-first order
+  // (or the just-submitted task) as the tie-breaker when dates are equal.
+  const orderedIds = [...new Set([...incoming.filter(task => task.task_type === 'rebuild_vector_index').map(task => task.id), ...merged.keys()])];
+  rebuildTasks.value = orderedIds.map(id => merged.get(id)!)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 10);
+};
+
+const refreshRebuildTasks = async (): Promise<TaskStatus[] | null> => {
+  const epoch = sessionTransport.epoch;
+  rebuildHistoryLoading.value = true;
+  try {
+    const result = await getReindexTasks();
+    if (disposed || epoch !== sessionTransport.epoch) return null;
+    mergeRebuildTasks(result);
+    rebuildHistoryLoaded.value = true;
+    rebuildHistoryFailed.value = false;
+    rebuildError.value = '';
+    return result;
+  } catch (err: any) {
+    if (disposed || epoch !== sessionTransport.epoch || sessionTransport.isCancelled(err)) return null;
+    rebuildHistoryFailed.value = true;
+    rebuildError.value = err?.response?.data?.detail || err?.message || '读取重建任务失败，请刷新后重试。';
+    return null;
+  } finally {
+    if (!disposed && epoch === sessionTransport.epoch) rebuildHistoryLoading.value = false;
+  }
+};
+
+const submitRebuildTask = async () => {
+  if (!canStartRebuild.value) return;
+  const epoch = sessionTransport.epoch;
+  const previousIds = new Set(rebuildTasks.value.map(task => task.id));
+  rebuildSubmitting.value = true;
+  rebuildError.value = '';
+  try {
+    const task = await startReindexTask();
+    if (disposed || epoch !== sessionTransport.epoch) return;
+    mergeRebuildTasks([task]);
+    showRebuildConfirm.value = false;
+    await openTaskDetail(task.id);
+    await fetchStatus();
+  } catch (err: any) {
+    if (disposed || epoch !== sessionTransport.epoch || sessionTransport.isCancelled(err)) return;
+    // A lost POST response may already have created a paid task. Read its state
+    // before allowing another user-confirmed attempt.
+    const recovered = await refreshRebuildTasks();
+    if (disposed || epoch !== sessionTransport.epoch) return;
+    const task = recovered?.find(item => !previousIds.has(item.id) || activeRebuildStatuses.includes(item.status));
+    if (task) {
+      showRebuildConfirm.value = false;
+      await openTaskDetail(task.id);
+      await fetchStatus();
+    } else if (recovered) {
+      rebuildError.value = err?.response?.data?.detail || err?.message || '提交重建任务失败，请检查后重试。';
+    } else {
+      rebuildError.value = '提交结果尚未确认，请重新读取任务状态后再操作，避免重复调用向量 API。';
+    }
+  } finally {
+    if (!disposed && epoch === sessionTransport.epoch) rebuildSubmitting.value = false;
+  }
+};
+
+watch(tasks, incoming => {
+  if (!isDesktop.value) mergeRebuildTasks(incoming);
+});
+watch(() => latestRebuildTask.value?.status, (next, previous) => {
+  if (previous && activeRebuildStatuses.includes(previous) && next && !activeRebuildStatuses.includes(next)) {
+    void fetchStatus();
+  }
+});
+
 const refreshServerStatus = async () => {
   if (serverTesting.value !== null || loading.value) return;
   serverTestResults.value = {};
   await fetchStatus();
+  await refreshRebuildTasks();
+  await fetchTasks();
 };
 
 const testServerService = async (service: ServerServiceCard) => {
@@ -819,7 +977,11 @@ const savedOcrUrlIsLegacy = computed(() =>
 
 onMounted(async () => {
   await fetchStatus();
-  if (!isDesktop.value) return;
+  if (!isDesktop.value) {
+    await refreshRebuildTasks();
+    if (!disposed) await fetchTasks();
+    return;
+  }
   if (credentialsStatus.value) {
     form.llm_base_url = credentialsStatus.value.llm.base_url || 'https://api.openai.com/v1';
     form.llm_model = credentialsStatus.value.llm.model || 'gpt-4o-mini';
@@ -838,6 +1000,7 @@ onMounted(async () => {
     }
   }
 });
+onBeforeUnmount(() => { disposed = true; });
 
 const dismissWizard = () => {
   showWizard.value = false;

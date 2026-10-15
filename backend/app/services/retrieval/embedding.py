@@ -8,6 +8,7 @@ import httpx
 import numpy as np
 
 from app.config import settings
+from app.database import EmbeddingSource, current_embedding_source
 from app.services.http_client import HttpClientProvider, GlobalRateLimiter
 from app.diagnostics import (
     call_context,
@@ -37,14 +38,21 @@ def _cache_tenant_id() -> str:
 class EmbeddingService:
     DIMENSION = 256
     _compatibility_cache: Optional[Dict[str, Any]] = None
+    _compatibility_source: Optional[EmbeddingSource] = None
     _vector_cache: Dict[str, np.ndarray] = {}
     _MAX_CACHE_ITEMS = 5000
 
     @classmethod
-    def _cache_key(cls, text: str) -> str:
-        model = settings.EMBEDDING_MODEL if settings.EMBEDDING_MODE == "remote" else "mock"
+    def _cache_key(cls, text: str, source: Optional[EmbeddingSource] = None) -> str:
+        source = source or current_embedding_source()
         tenant_id = _cache_tenant_id()
-        return hashlib.sha256(f"{tenant_id}:{model}:{text}".encode("utf-8")).hexdigest()
+        identity = [tenant_id, source.mode, source.model, source.base_url, text]
+        return hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _assert_source(source: EmbeddingSource) -> None:
+        if current_embedding_source() != source:
+            raise RuntimeError("向量配置在生成期间发生变化，请按当前配置重新建立索引")
 
     @classmethod
     async def verify_remote_compatibility(cls) -> Dict[str, Any]:
@@ -53,17 +61,19 @@ class EmbeddingService:
         Tests whether provider supports array input or single string only.
         Fails fast if credentials, URL, or model are invalid.
         """
-        if cls._compatibility_cache is not None:
+        source = current_embedding_source()
+        if cls._compatibility_cache is not None and cls._compatibility_source == source:
             return cls._compatibility_cache
 
-        if settings.EMBEDDING_MODE.lower() != "remote":
+        if source.mode != "remote":
+            cls._compatibility_source = source
             cls._compatibility_cache = {"mode": "mock", "supports_batch": True, "dimension": cls.DIMENSION}
             return cls._compatibility_cache
 
         if not settings.EMBEDDING_API_KEY:
             raise RuntimeError("Embedding 未配置 API 密钥；正式 remote 模式禁止退回伪向量")
 
-        base_url = (settings.EMBEDDING_BASE_URL or settings.LLM_BASE_URL).rstrip("/")
+        base_url = source.base_url
         endpoint = sanitize_endpoint(f"{base_url}/embeddings")
         client = HttpClientProvider.get_client()
         headers = {
@@ -72,7 +82,7 @@ class EmbeddingService:
         }
 
         # Probe 1: Array input test with minimal synthetic token
-        probe_array = {"input": ["ping"], "model": settings.EMBEDDING_MODEL}
+        probe_array = {"input": ["ping"], "model": source.model}
         supports_batch = False
         detected_dim = cls.DIMENSION
 
@@ -141,7 +151,7 @@ class EmbeddingService:
 
             # Probe 2: If array failed or returned non-200, test single string input
             if not supports_batch:
-                probe_str = {"input": "ping", "model": settings.EMBEDDING_MODEL}
+                probe_str = {"input": "ping", "model": source.model}
                 await GlobalRateLimiter.acquire()
                 t_req = time.monotonic()
                 current_stage = "request_send"
@@ -206,6 +216,8 @@ class EmbeddingService:
                 finally:
                     GlobalRateLimiter.release()
 
+        cls._assert_source(source)
+        cls._compatibility_source = source
         cls._compatibility_cache = {
             "mode": "remote",
             "supports_batch": supports_batch,
@@ -219,16 +231,18 @@ class EmbeddingService:
         if not text or not text.strip():
             return np.zeros(cls.DIMENSION, dtype=np.float32)
 
-        cache_key = cls._cache_key(text)
+        source = current_embedding_source()
+        cache_key = cls._cache_key(text, source)
         if cache_key in cls._vector_cache:
             return cls._vector_cache[cache_key]
 
-        if settings.EMBEDDING_MODE.lower() == "remote":
+        if source.mode == "remote":
             # STRICT: never silently fall back to mock hash!
-            vec = await cls._get_remote_embedding(text)
+            vec = await cls._get_remote_embedding(text, source=source)
         else:
             vec = cls._get_mock_embedding(text)
 
+        cls._assert_source(source)
         if len(cls._vector_cache) < cls._MAX_CACHE_ITEMS:
             cls._vector_cache[cache_key] = vec
         return vec
@@ -243,7 +257,8 @@ class EmbeddingService:
         if not texts:
             return []
 
-        if settings.EMBEDDING_MODE.lower() != "remote":
+        source = current_embedding_source()
+        if source.mode != "remote":
             results = []
             for text in texts:
                 key = cls._cache_key(text) if text and text.strip() else None
@@ -257,6 +272,7 @@ class EmbeddingService:
             return results
 
         compat = await cls.verify_remote_compatibility()
+        cls._assert_source(source)
         supports_batch = compat.get("supports_batch", False)
 
         # Check cache first
@@ -299,10 +315,12 @@ class EmbeddingService:
                     await GlobalRateLimiter.acquire()
                     try:
                         batch_texts = [texts[idx] for idx in batch_idxs]
-                        vectors = await cls._fetch_remote_batch(batch_texts)
+                        cls._assert_source(source)
+                        vectors = await cls._fetch_remote_batch(batch_texts, source=source)
+                        cls._assert_source(source)
                         for idx, vec in zip(batch_idxs, vectors):
                             results[idx] = vec
-                            cls._vector_cache[cls._cache_key(texts[idx])] = vec
+                            cls._vector_cache[cls._cache_key(texts[idx], source)] = vec
                     finally:
                         GlobalRateLimiter.release()
 
@@ -313,23 +331,28 @@ class EmbeddingService:
                 async with concurrency_limiter:
                     await GlobalRateLimiter.acquire()
                     try:
-                        vec = await cls._get_remote_embedding(texts[idx])
+                        cls._assert_source(source)
+                        vec = await cls._get_remote_embedding(texts[idx], source=source)
+                        cls._assert_source(source)
                         results[idx] = vec
-                        cls._vector_cache[cls._cache_key(texts[idx])] = vec
+                        cls._vector_cache[cls._cache_key(texts[idx], source)] = vec
                     finally:
                         GlobalRateLimiter.release()
 
             await asyncio.gather(*[_process_single(idx) for idx in missing_indices])
 
+        cls._assert_source(source)
         return [r if r is not None else np.zeros(compat.get("dimension", cls.DIMENSION), dtype=np.float32) for r in results]
 
     @classmethod
-    async def _fetch_remote_batch(cls, batch_texts: List[str]) -> List[np.ndarray]:
-        base_url = (settings.EMBEDDING_BASE_URL or settings.LLM_BASE_URL).rstrip("/")
+    async def _fetch_remote_batch(cls, batch_texts: List[str], *, source: Optional[EmbeddingSource] = None) -> List[np.ndarray]:
+        source = source or current_embedding_source()
+        cls._assert_source(source)
+        base_url = source.base_url
         endpoint = sanitize_endpoint(f"{base_url}/embeddings")
         payload = {
             "input": batch_texts,
-            "model": settings.EMBEDDING_MODEL
+            "model": source.model
         }
         headers = {
             "Authorization": f"Bearer {settings.EMBEDDING_API_KEY}",
@@ -432,14 +455,16 @@ class EmbeddingService:
                 raise RuntimeError(f"远程向量服务请求失败: {safe_info['exception_type']}") from e
 
     @classmethod
-    async def _get_remote_embedding(cls, text: str) -> np.ndarray:
+    async def _get_remote_embedding(cls, text: str, *, source: Optional[EmbeddingSource] = None) -> np.ndarray:
+        source = source or current_embedding_source()
+        cls._assert_source(source)
         if not settings.EMBEDDING_API_KEY:
             raise RuntimeError("Embedding 未配置 API 密钥")
-        base_url = (settings.EMBEDDING_BASE_URL or settings.LLM_BASE_URL).rstrip("/")
+        base_url = source.base_url
         endpoint = sanitize_endpoint(f"{base_url}/embeddings")
         payload = {
             "input": text,
-            "model": settings.EMBEDDING_MODEL
+            "model": source.model
         }
         headers = {
             "Authorization": f"Bearer {settings.EMBEDDING_API_KEY}",

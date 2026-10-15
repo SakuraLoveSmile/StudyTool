@@ -1158,6 +1158,9 @@ def retry_task(task_id: str):
         if row["status"] not in ("failed", "partial"):
             raise HTTPException(status_code=400, detail="只有失败或部分失败的任务可以重试")
 
+        if row["task_type"] == "rebuild_vector_index":
+            raise HTTPException(409, "请到设置中核对当前向量模型并确认费用后重新重建索引")
+
         # A second click while the first retry is queued/running returns the
         # same task.  For extraction batches, task_id is the generation guard
         # that also prevents a late old worker from changing batch state.

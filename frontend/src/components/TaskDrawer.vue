@@ -487,7 +487,16 @@
                     </span>
                   </div>
                   <div class="flex items-center gap-1">
+                    <router-link
+                      v-if="task.task_type === 'rebuild_vector_index'"
+                      to="/settings"
+                      class="px-2.5 py-1 text-xs font-medium bg-surface text-accent hover:bg-accent/10 border border-accent/30 rounded-lg transition-colors cursor-pointer"
+                      @click="closeDrawer"
+                    >
+                      到设置确认费用
+                    </router-link>
                     <button
+                      v-else
                       type="button"
                       class="px-2.5 py-1 text-xs font-medium bg-surface text-accent hover:bg-accent/10 border border-accent/30 rounded-lg transition-colors cursor-pointer"
                       @click="retry(task.id)"
@@ -509,6 +518,9 @@
 
                 <p class="text-xs text-err bg-surface/80 p-2.5 rounded-lg border border-err/30 font-mono leading-relaxed break-all">
                   {{ task.error_msg || task.message || '未知错误' }}
+                </p>
+                <p v-if="task.task_type === 'rebuild_vector_index'" class="text-xs text-sub">
+                  向量索引重建会调用向量 API，可能产生费用，请到设置页核对当前模型并重新确认。
                 </p>
 
                 <!-- Units diagnostic -->
@@ -978,6 +990,12 @@ const formatTimingCategory = (cat: string): string => {
 // Task pipeline stages
 const getStagesForTask = (type: string) => {
   switch (type) {
+    case 'rebuild_vector_index':
+      return [
+        { key: 'read_chunks', label: '读取正文切片' },
+        { key: 'generate_embeddings', label: '重新计算向量' },
+        { key: 'save_index', label: '校验与替换索引' }
+      ];
     case 'generate_library_guide':
       return [
         { key: 'read_sources', label: '读取章节资料' },

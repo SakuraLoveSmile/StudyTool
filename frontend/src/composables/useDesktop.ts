@@ -1,6 +1,7 @@
 import { ref, computed, onBeforeUnmount } from 'vue';
 import axios from 'axios';
 import { api } from '../api/client';
+import type { TaskStatus } from '../types';
 
 /** PP-OCRv6 异步 jobs 识别接口地址：新配置（未保存过任何地址）时的默认值。 */
 export const PP_OCR_V6_JOBS_URL = 'https://paddleocr.aistudio-app.com/api/v2/ocr/jobs';
@@ -409,7 +410,7 @@ export function useDesktop() {
         await fetchStatus();
         return res;
       } else {
-        const res = await axios.post('/api/desktop/reindex');
+        const res = await api.post('/desktop/reindex');
         await fetchStatus();
         return res.data;
       }
@@ -420,6 +421,16 @@ export function useDesktop() {
     } finally {
       loading.value = false;
     }
+  };
+
+  const getReindexTasks = async (): Promise<TaskStatus[]> => {
+    const res = await api.get<TaskStatus[]>('/desktop/reindex/tasks');
+    return res.data;
+  };
+
+  const startReindexTask = async (): Promise<TaskStatus> => {
+    const res = await api.post<TaskStatus>('/desktop/reindex/tasks');
+    return res.data;
   };
 
   const checkForUpdates = async () => {
@@ -468,6 +479,8 @@ export function useDesktop() {
     restoreBackup,
     openLogDirectory,
     reindex,
+    getReindexTasks,
+    startReindexTask,
     updateStatus,
     checkForUpdates,
     downloadUpdate,

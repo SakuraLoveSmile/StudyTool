@@ -360,107 +360,170 @@ async def api_reindex(body: Optional[ReindexRequest] = None):
 
     try:
         return await _run_reindex()
-    except asyncio.CancelledError:
-        with db_session() as conn:
-            conn.execute("DROP TABLE IF EXISTS document_chunks_staging")
-        raise
     finally:
         if auto_lease and owned_lease_id:
             MaintenanceManager.release(owned_lease_id)
 
 
-async def _run_reindex():
-    """Rebuilds vector index for all existing document chunks using current embedding model in an isolated staging table."""
-    import numpy as np
-    from app.services.retrieval.embedding import EmbeddingService
-    from app.database import set_system_metadata
-
-    # 1. Check if model is configured
-    if not settings.EMBEDDING_API_KEY:
-        raise HTTPException(status_code=400, detail="未配置向量模型 API Key，无法重建索引")
-
-    # 2. Get all valid text chunks
+@desktop_router.get("/reindex/tasks")
+def list_reindex_tasks():
+    from app.routers.materials import _task_row_to_response
     with db_session() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, content FROM document_chunks WHERE content IS NOT NULL AND TRIM(content) != '' AND parse_error IS NULL ORDER BY doc_id, chunk_index"
-        )
-        chunks = cursor.fetchall()
+        rows = conn.execute("""SELECT * FROM tasks WHERE task_type='rebuild_vector_index'
+            ORDER BY created_at DESC, rowid DESC LIMIT 10""").fetchall()
+        return [_task_row_to_response(row) for row in rows]
 
-    if not chunks:
-        # No chunks to reindex, release lock immediately
-        set_system_metadata("embedding_model", settings.EMBEDDING_MODEL or "text-embedding-3-small")
-        set_system_metadata("embedding_base_url", settings.EMBEDDING_BASE_URL or "https://api.openai.com/v1")
-        set_system_metadata("vector_locked", "false")
-        set_system_metadata("vector_lock_reason", "")
-        return {"ok": True, "reindexed_count": 0, "message": "无切片数据，向量锁已解除"}
 
-    # 3. Create staging table
+@desktop_router.post("/reindex/tasks", status_code=202)
+def enqueue_reindex():
+    """Queue a tenant-local rebuild; submission never calls the embedding API."""
+    from dataclasses import asdict
+    from app.database import current_embedding_source
+    from app.routers.materials import _task_row_to_response
+    from app.services.task_worker import TaskWorker
+    if MaintenanceManager.is_active():
+        raise HTTPException(409, "系统正在维护，请稍后重试")
+    source = current_embedding_source()
+    if source.mode == "remote" and not settings.EMBEDDING_API_KEY:
+        raise HTTPException(400, "未配置向量模型 API Key，无法重建索引")
     with db_session() as conn:
-        conn.execute("DROP TABLE IF EXISTS document_chunks_staging")
-        conn.execute("CREATE TABLE document_chunks_staging (id TEXT PRIMARY KEY, embedding BLOB)")
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute("""SELECT * FROM tasks WHERE task_type='rebuild_vector_index'
+            AND status IN ('pending','processing','cancel_requested')
+            ORDER BY created_at DESC, rowid DESC LIMIT 1""").fetchone()
+        if active:
+            return _task_row_to_response(active)
+        task_id = TaskWorker.create_task("rebuild_vector_index", json.dumps(asdict(source)),
+                                        "向量索引重建已排队（无需重新 OCR）", conn=conn)
+        return _task_row_to_response(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
 
-    batch_size = 10
-    vector_dimension: Optional[int] = None
+
+async def execute_reindex_task(task_id: str, target_id: str):
+    from app.database import EmbeddingSource
+    from app.services.task_worker import TaskWorker
     try:
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i : i + batch_size]
-            batch_ids = [c["id"] for c in batch]
-            batch_texts = [c["content"] for c in batch]
-
-            vectors = await EmbeddingService.get_embeddings_batch(batch_texts)
-            if len(vectors) != len(batch):
-                raise ValueError(f"向量服务返回数量不匹配：期望 {len(batch)}，实际 {len(vectors)}")
-            with db_session() as conn:
-                for cid, vec in zip(batch_ids, vectors):
-                    vec_np = np.array(vec, dtype=np.float32) if not isinstance(vec, np.ndarray) else vec
-                    if vec_np.ndim != 1 or vec_np.size == 0:
-                        raise ValueError("向量服务返回了空向量或非一维向量")
-                    if vector_dimension is None:
-                        vector_dimension = int(vec_np.size)
-                    elif int(vec_np.size) != vector_dimension:
-                        raise ValueError("向量服务返回的维度不一致")
-                    blob = EmbeddingService.serialize_embedding(vec_np)
-                    conn.execute(
-                        "INSERT INTO document_chunks_staging (id, embedding) VALUES (?, ?)",
-                        (cid, blob),
-                    )
+        source = EmbeddingSource(**json.loads(target_id))
+        await _run_reindex(task_id=task_id, source=source)
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
-        logger.error("Reindex staging failed: %s; rolling back", exc)
-        with db_session() as conn:
-            conn.execute("DROP TABLE IF EXISTS document_chunks_staging")
-        raise HTTPException(status_code=500, detail=f"重建索引失败（生成向量错误: {exc}），已保留原切片与锁定状态")
+        # Never persist a provider body, source text, or credentials in task errors.
+        message = exc.detail if isinstance(exc, HTTPException) else f"重建索引失败（{type(exc).__name__}），原索引与锁定状态已保留"
+        TaskWorker.finish_all_active_units(task_id, state="failed")
+        TaskWorker.update_progress_detail(task_id, failed=1, force=True)
+        TaskWorker.mark_task_failed(task_id, message)
 
-    # 4. Atomic transaction to replace live embeddings from staging
+
+def _index_snapshot(conn):
+    return [tuple(row) for row in conn.execute("""SELECT id,doc_id,chunk_index,content,parse_error,
+        embedding,embedding_status FROM document_chunks ORDER BY id""")]
+
+
+async def _run_reindex(*, task_id=None, source=None):
+    """Stage vectors, then atomically replace only the unchanged tenant snapshot."""
+    import numpy as np
+    from app.database import current_embedding_source, assert_embedding_source, record_embedding_source
+    from app.services.retrieval.embedding import EmbeddingService
+    from app.services.task_worker import TaskWorker
+
+    source = source or current_embedding_source()
+    if source.mode == "remote" and not settings.EMBEDDING_API_KEY:
+        raise HTTPException(400, "未配置向量模型 API Key，无法重建索引")
+    if current_embedding_source() != source:
+        raise HTTPException(409, "向量模型配置已变化，请核对当前模型后重新确认重建")
+
+    def progress(stage, pct, message, *, done=0, total=None):
+        if not task_id:
+            return
+        if TaskWorker.is_cancelled(task_id):
+            raise asyncio.CancelledError()
+        TaskWorker.update_progress_detail(task_id, stage=stage, progressMode="explicit",
+                                         unit="chunk", total=total, succeeded=done,
+                                         currentAction=message, force=True)
+        TaskWorker.update_task_progress(task_id, pct, message)
+        TaskWorker.log_event(task_id, "stage_change", message, stage=stage)
+
+    progress("read_chunks", 5, "读取当前账号的正文切片，保留原文件与解析结果")
     with db_session() as conn:
-        conn.execute(
-            """UPDATE document_chunks
-               SET embedding = (SELECT embedding FROM document_chunks_staging WHERE document_chunks_staging.id = document_chunks.id),
-                   embedding_status = 'completed',
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE id IN (SELECT id FROM document_chunks_staging)"""
-        )
-        conn.execute("DROP TABLE IF EXISTS document_chunks_staging")
-        conn.execute(
-            """INSERT INTO system_metadata (key, value, updated_at) VALUES ('embedding_model', ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
-            (settings.EMBEDDING_MODEL or "text-embedding-3-small",)
-        )
-        conn.execute(
-            """INSERT INTO system_metadata (key, value, updated_at) VALUES ('embedding_base_url', ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
-            (settings.EMBEDDING_BASE_URL or "https://api.openai.com/v1",)
-        )
-        conn.execute(
-            """INSERT INTO system_metadata (key, value, updated_at) VALUES ('vector_locked', 'false', CURRENT_TIMESTAMP)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"""
-        )
-        conn.execute(
-            """INSERT INTO system_metadata (key, value, updated_at) VALUES ('vector_lock_reason', '', CURRENT_TIMESTAMP)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"""
-        )
-
-    return {"ok": True, "reindexed_count": len(chunks), "message": f"成功重建 {len(chunks)} 条切片向量，已解除锁定"}
+        conn.execute("BEGIN")
+        snapshot = _index_snapshot(conn)
+        chunks = conn.execute("""SELECT id, content FROM document_chunks
+            WHERE content IS NOT NULL AND TRIM(content)!='' AND parse_error IS NULL
+            ORDER BY doc_id,chunk_index,id""").fetchall()
+    # Unique per-run staging prevents overlap with desktop rebuilds/other workers.
+    stage = "vector_rebuild_" + uuid.uuid4().hex
+    with db_session() as conn:
+        conn.execute(f"CREATE TABLE {stage} (id TEXT PRIMARY KEY, embedding BLOB)")
+    dimension = None
+    try:
+        for i in range(0, len(chunks), 10):
+            if current_embedding_source() != source:
+                raise HTTPException(409, "重建期间向量模型配置发生变化，已保留原索引，请重新确认模型")
+            batch = chunks[i:i + 10]
+            progress("generate_embeddings", 10 + int(75 * i / len(chunks)),
+                     f"正在生成切片向量 {i + 1}–{i + len(batch)} / {len(chunks)}",
+                     done=i, total=len(chunks))
+            if task_id:
+                TaskWorker.upsert_exec_unit(task_id, "index-batch", index=i // 10 + 1,
+                    state="awaiting_response", action="等待向量服务返回", request_started=True, force=True)
+            vectors = await EmbeddingService.get_embeddings_batch([row["content"] for row in batch])
+            if len(vectors) != len(batch):
+                raise ValueError("向量服务返回数量不匹配")
+            with db_session() as conn:
+                for row, vector in zip(batch, vectors):
+                    vec = np.asarray(vector, dtype=np.float32)
+                    if vec.ndim != 1 or vec.size == 0 or not np.all(np.isfinite(vec)):
+                        raise ValueError("向量服务返回无效向量")
+                    if dimension is None:
+                        dimension = vec.size
+                    elif dimension != vec.size:
+                        raise ValueError("向量维度不一致")
+                    conn.execute(f"INSERT INTO {stage} VALUES(?,?)",
+                                 (row["id"], EmbeddingService.serialize_embedding(vec)))
+            if task_id:
+                TaskWorker.finish_exec_unit(task_id, "index-batch", state="succeeded", force=True)
+                TaskWorker.update_progress_detail(task_id, succeeded=i + len(batch), force=True)
+        progress("save_index", 95, "校验来源并原子替换索引", done=len(chunks), total=len(chunks))
+        message = f"成功重建 {len(chunks)} 条切片向量，已解除锁定"
+        with db_session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            assert_embedding_source(conn, source, check_existing=False)
+            if _index_snapshot(conn) != snapshot:
+                raise HTTPException(409, "重建期间资料或索引发生变化，已保留原索引，请停止编辑后重新重建")
+            if task_id:
+                row = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+                if not row or row["status"] not in {"pending", "processing"}:
+                    raise asyncio.CancelledError()
+            # Invalid/empty chunks must not retain old-model vectors after unlock.
+            conn.execute("""UPDATE document_chunks SET embedding=NULL,
+                embedding_status=CASE WHEN parse_error IS NOT NULL THEN 'failed' ELSE 'pending' END""")
+            conn.execute(f"""UPDATE document_chunks SET embedding=(SELECT embedding FROM {stage}
+                WHERE {stage}.id=document_chunks.id), embedding_status='completed', updated_at=CURRENT_TIMESTAMP
+                WHERE id IN (SELECT id FROM {stage})""")
+            record_embedding_source(conn, source, unlock=True)
+            # A prior lock/embedding failure must not leave readable textbooks
+            # permanently blocked by the library's document-ready check.
+            conn.execute("""UPDATE documents SET status='completed', error_msg=NULL
+                WHERE status='failed' AND
+                (error_msg LIKE '向量索引已锁定:%' OR error_msg LIKE '向量化失败：%'
+                 OR error_msg LIKE '向量服务不可用:%')
+                AND EXISTS(SELECT 1 FROM document_chunks c WHERE c.doc_id=documents.id)
+                AND NOT EXISTS(SELECT 1 FROM document_chunks c WHERE c.doc_id=documents.id
+                    AND (c.parse_error IS NOT NULL OR TRIM(COALESCE(c.content,''))=''
+                         OR c.embedding IS NULL OR c.embedding_status<>'completed'))""")
+            if task_id and not TaskWorker.mark_task_completed(task_id, message, conn=conn):
+                raise asyncio.CancelledError()
+        return {"ok": True, "reindexed_count": len(chunks), "message": message}
+    except asyncio.CancelledError:
+        raise
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Reindex failed (%s); original vectors preserved", type(exc).__name__)
+        raise HTTPException(500, f"重建索引失败（{type(exc).__name__}），原索引与锁定状态已保留") from exc
+    finally:
+        with db_session() as conn:
+            conn.execute(f"DROP TABLE IF EXISTS {stage}")
 
 
 class MaintenanceRequest(BaseModel):

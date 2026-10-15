@@ -7,7 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 from app.config import settings
-from app.database import db_session
+from app.database import (db_session, current_embedding_source, assert_embedding_source,
+                          record_embedding_source)
 from app.services.parser.pdf_parser import PDFParser
 from app.services.parser.docx_parser import DocxParser
 from app.services.parser.image_parser import ImageParser
@@ -1100,6 +1101,9 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             await cls._execute_extract_questions(task_id, target_id)
         elif task_type == "generate_card":
             await cls._execute_generate_card(task_id, target_id)
+        elif task_type == "rebuild_vector_index":
+            from app.desktop import execute_reindex_task
+            await execute_reindex_task(task_id, target_id)
         elif task_type == "reindex_chunk":
             await cls._execute_reindex_chunk(task_id, target_id)
         elif task_type == "extract_knowledge_points":
@@ -1164,6 +1168,7 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             cls.mark_task_failed(task_id, f"向量索引已锁定，禁止追加向量: {lock_reason}")
             return
 
+        source = current_embedding_source()
         try:
             vector = await EmbeddingService.get_embedding(row["content"])
             blob = EmbeddingService.serialize_embedding(vector)
@@ -1171,14 +1176,21 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             cls.mark_task_failed(task_id, f"语义向量更新失败: {type(exc).__name__}")
             return
         content_changed = False
-        with db_session() as conn:
-            updated = conn.execute(
-                "UPDATE document_chunks SET embedding = ?, embedding_status = 'completed', updated_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND content = ? AND parse_error IS NULL",
-                (blob, chunk_id, row["content"]),
-            ).rowcount
-            if updated == 0:
-                content_changed = True
+        try:
+            with db_session() as conn:
+                assert_embedding_source(conn, source)
+                updated = conn.execute(
+                    "UPDATE document_chunks SET embedding = ?, embedding_status = 'completed', updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND content = ? AND parse_error IS NULL",
+                    (blob, chunk_id, row["content"]),
+                ).rowcount
+                if updated:
+                    record_embedding_source(conn, source)
+                else:
+                    content_changed = True
+        except Exception as exc:
+            cls.mark_task_failed(task_id, f"语义向量写入失败: {exc}")
+            return
         if content_changed:
             cls.mark_task_completed(task_id, "切片内容在向量化期间发生变化，已保留新的待处理索引")
             return
@@ -1529,6 +1541,7 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
                 )
             return
 
+        source = current_embedding_source()
         try:
             cls.upsert_exec_unit(
                 task_id, "embedding-batch",
@@ -1564,6 +1577,8 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
                 request_started=True, attempt=1, force=True
             )
             vectors = await EmbeddingService.get_embeddings_batch(chunk_contents)
+            if len(vectors) != len(chunk_contents):
+                raise RuntimeError("向量服务返回条目数与切片数不一致，未写入索引")
             cls.record_timing(task_id, "embedding_request", (time.monotonic() - t_emb) * 1000.0)
             cls.upsert_exec_unit(
                 task_id, "embedding-batch",
@@ -1572,13 +1587,17 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
 
             t_write_emb = time.monotonic()
             with db_session() as conn:
+                assert_embedding_source(conn, source)
+                written = 0
                 for c_id, content, vec in zip(chunk_ids, chunk_contents, vectors):
                     blob = EmbeddingService.serialize_embedding(vec)
-                    conn.execute(
+                    written += conn.execute(
                         "UPDATE document_chunks SET embedding = ?, embedding_status = 'completed', updated_at = CURRENT_TIMESTAMP "
                         "WHERE id = ? AND content = ? AND parse_error IS NULL",
                         (blob, c_id, content),
-                    )
+                    ).rowcount
+                if written:
+                    record_embedding_source(conn, source)
             cls.record_timing(task_id, "db_write", (time.monotonic() - t_write_emb) * 1000.0)
             cls.finish_exec_unit(task_id, "embedding-batch", state="succeeded", force=True)
             cls.update_progress_detail(
