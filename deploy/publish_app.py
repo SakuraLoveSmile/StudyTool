@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY = 'ghcr.io/sakuralovesmile/studytool-connected-app'
+REPOSITORY = 'ghcr.io/sakuralovesmile/studytool'
 
 
 def run(*command):
@@ -52,14 +52,17 @@ def main():
     digest = digests[0]
     for name in ('compose.app.yaml', 'app.env.example'):
         template = (ROOT / 'deploy' / name).read_text()
-        old = REPOSITORY + ':0.1.0'
-        if template.count(old) != 1:
+        if template.count(REPOSITORY + ':latest') != 1:
             raise RuntimeError(f'unexpected image template in {name}')
-        (args.output / name).write_text(template.replace(old, digest))
+        destination = 'compose.yaml' if name == 'compose.app.yaml' else name
+        (args.output / destination).write_text(template)
     (args.output / 'NGINX.md').write_bytes((ROOT / 'deploy/NGINX.md').read_bytes())
     (args.output / 'APP_BUILD_SMOKE.json').write_bytes(args.smoke.read_bytes())
     manifest = {'version': args.version, 'source_revision': revision, 'platform': 'linux/amd64',
-                'image': {'tag': tag, 'source_tag': sha_tag, 'digest': digest},
+                'image': {'tag': tag, 'source_tag': sha_tag, 'digest': digest,
+                          'latest': REPOSITORY + ':latest'},
+                'release_tag': 'connected-v' + args.version,
+                'latest_promoted': False,
                 'registry_pushed': True, 'production_deployed': False, 'contains_caddy': False}
     (args.output / 'APP_MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (args.output / 'APP_SHA256SUMS.txt').write_text(''.join(

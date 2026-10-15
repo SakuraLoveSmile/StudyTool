@@ -1,6 +1,6 @@
 services:
   app:
-    image: ${APP_IMAGE:-ghcr.io/sakuralovesmile/studytool-connected-app:0.1.0}
+    image: ${APP_IMAGE:-ghcr.io/sakuralovesmile/studytool:latest}
     platform: linux/amd64
     restart: unless-stopped
     env_file:

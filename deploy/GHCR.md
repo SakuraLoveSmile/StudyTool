@@ -1,4 +1,6 @@
-# 使用 GHCR 镜像部署
+> 当前推荐使用 [NGINX.md](NGINX.md) 的单应用镜像 `ghcr.io/sakuralovesmile/studytool:latest`。以下仅保留旧版双容器部署记录；公开 Release 的 `compose.yaml` 已更新为单应用方案，旧版 Compose 请使用源码 `deploy/compose.ghcr.yaml`。
+
+# 旧版双镜像 GHCR 部署
 
 **已有 Nginx 的新部署请用 [单应用精简方案](NGINX.md)**：一个应用镜像同时提供网页与 API，Compose 不含 Caddy，也不管理证书。下文保留旧版双镜像部署步骤供已有实例使用。
 

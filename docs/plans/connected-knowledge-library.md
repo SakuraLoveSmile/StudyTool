@@ -124,3 +124,11 @@ T6 待体验：用户授权补齐 GHCR 发布和自动拉取部署文件后，�
 - 现有公开预览 Release 新增 `compose.yaml`、`ghcr.env.example`、`GHCR.md`、`GHCR_MANIFEST.json`、`GHCR_SMOKE.json`、`GHCR_SHA256SUMS.txt`；部署不再依赖离线导入或源码构建。填写服务器域名与模型参数，准备数据目录，执行 compose pull/up，再创建账号。
 
 本轮仅完成镜像、部署入口及隔离验证；尚未部署用户生产服务器，真实 AI/OCR、全书内容、资料缺口与用户设备验收维持前述状态，不标已验收。
+
+## 2026-10-16 单应用与按版本发布修订
+
+T6 实现中：按用户现有 Nginx 和版本更新要求，将推荐部署改为一个无 Caddy 的应用容器，网页与 API 同端口；镜像改为 `ghcr.io/sakuralovesmile/studytool:<版本>`，默认 Compose 与环境模板使用 `:latest`，`APP_IMAGE` 可固定版本。摘要仅保留在构建证据与精确回滚中。新增公开 Release 发布步骤，复用 `RELEASE_REPO_TOKEN` 向 `StudyTool-Releases` 的 `connected-v<版本>` 上传部署附件；先隔离验证版本与匿名拉取，再推广 latest，避免未验证构建覆盖默认入口。
+
+无 Caddy 应用的既有本地验证：51 项静态授权/账号/隔离/桌面 OCR 回归通过；本地镜像在临时 Nginx HTTPS 后完成账号、CSRF、合成 DOCX、章节、隔离与重启持久化检查，真实浏览器可显示登录页面。此处未重新运行后端检查，业务实现未变化。本轮新增的默认/latest 和固定版本 Compose 渲染、Python 语法、workflow job 依赖检查通过；发布编排以隔离替身核对旧客户端正文保留、旧部署改名和校验修正、失败验证阻止发布。远端新标准镜像与自动 Release 流程尚待 Actions 实际完成，之后补记结果。
+
+旧版双镜像的 Compose 将保留为 `compose.caddy.yaml`，其部署说明与校验同步改名，避免新单应用 `compose.yaml` 覆盖后破坏旧证据；原 APK、Windows、离线包与其构建来源保持。未部署用户服务器，真实模型与设备验收状态不变。

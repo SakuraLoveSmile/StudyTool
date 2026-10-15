@@ -4,12 +4,14 @@
 
 ## 下载并配置
 
-从公开的 [联网版 Release](https://github.com/SakuraLoveSmile/StudyTool-Releases/releases/tag/connected-v0.1.0) 下载 `compose.app.yaml` 和 `app.env.example`，放进服务器部署目录，例如 `/srv/studytool`：
+从公开的 [StudyTool-Releases](https://github.com/SakuraLoveSmile/StudyTool-Releases/releases) 选择联网版 Release，在附件中下载 `compose.yaml` 和 `app.env.example`，放进服务器部署目录。也可以在服务器直接下载，例如 `connected-v0.1.0`：
 
 ```bash
 mkdir -p /srv/studytool
 cd /srv/studytool
-cp compose.app.yaml compose.yaml
+RELEASE=https://github.com/SakuraLoveSmile/StudyTool-Releases/releases/download/connected-v0.1.0
+curl -fL "$RELEASE/compose.yaml" -o compose.yaml
+curl -fL "$RELEASE/app.env.example" -o app.env.example
 cp app.env.example .env
 chmod 600 .env
 nano .env
@@ -34,7 +36,7 @@ docker compose --env-file .env -f compose.yaml up -d
 docker compose --env-file .env -f compose.yaml ps
 ```
 
-Compose 会拉取 `ghcr.io/sakuralovesmile/studytool-connected-app:0.1.0`。镜像只提供 `linux/amd64`。本机健康与日志可这样查看：
+Compose 默认拉取 `ghcr.io/sakuralovesmile/studytool:latest`。镜像只提供 `linux/amd64`。要固定版本，可在 `.env` 中设置 `APP_IMAGE=ghcr.io/sakuralovesmile/studytool:0.1.0`；`APP_IMAGE` 会覆盖 Compose 默认值。本机健康与日志可这样查看：
 
 ```bash
 curl -fsS http://127.0.0.1:8088/health
@@ -51,7 +53,7 @@ client_max_body_size 105m;
 location / {
     proxy_pass http://127.0.0.1:8088;
     proxy_http_version 1.1;
-    proxy_set_header Host $host;
+    proxy_set_header Host $http_host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -77,6 +79,25 @@ docker compose --env-file .env -f compose.yaml exec app \
 ```
 
 按提示设置密码。浏览器访问 `https://你的域名/library`；Android 和 Windows 客户端填写同一个 HTTPS origin，例如 `https://learn.example.com`。
+
+## 日常更新与回滚
+
+`latest` 跟随发布流程更新。更新前记录当前镜像 digest，便于精确回滚：
+
+```bash
+docker image inspect ghcr.io/sakuralovesmile/studytool:latest \
+  --format '{{index .RepoDigests 0}}'
+```
+
+再拉取并重建容器：
+
+```bash
+docker compose --env-file .env -f compose.yaml pull
+docker compose --env-file .env -f compose.yaml up -d
+docker compose --env-file .env -f compose.yaml ps
+```
+
+若需固定版本，在 `.env` 设置 `APP_IMAGE=ghcr.io/sakuralovesmile/studytool:0.1.0`（替换为需要的版本标签），再运行 `pull` 和 `up -d`。回滚时把 `APP_IMAGE` 改为更新前记录的 `ghcr.io/sakuralovesmile/studytool@sha256:...` digest 或旧版本标签，执行同样的 `pull`、`up -d`。先确认旧版本与当前数据格式兼容；不要删除或替换 `RAG_DATA_DIR`。升级前备份数据，回滚镜像不会自动回滚数据库内容。
 
 ## 从旧双容器部署升级
 

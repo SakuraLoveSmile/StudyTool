@@ -2,11 +2,11 @@
 
 ## 推荐：已有宿主机 Nginx 部署
 
-优先参考 [NGINX.md](NGINX.md)：从联网版 Release 下载 `compose.app.yaml` 和 `app.env.example`，分别复制为 `compose.yaml` 与 `.env`，再由 Docker Compose 拉取单应用 GHCR 镜像。升级旧的 backend/frontend+Caddy 部署时，先备份并停止旧容器，沿用原 `RAG_DATA_DIR`；不删除旧数据或证书卷。旧版双容器说明与离线镜像流程保留在下文供兼容使用。
+优先参考 [NGINX.md](NGINX.md)：从联网版 Release 下载 `compose.yaml` 和 `app.env.example`，复制环境变量模板为 `.env`，再由 Docker Compose 拉取默认 `latest` 单应用 GHCR 镜像。固定版本时通过 `APP_IMAGE` 指定版本标签。升级旧的 backend/frontend+Caddy 部署时，先备份并停止旧容器，沿用原 `RAG_DATA_DIR`；不删除旧数据或证书卷。旧版双容器说明与离线镜像流程保留在下文供兼容使用。
 
 ## 旧版双镜像 GHCR 部署
 
-旧版独立 HTTPS 部署方式见 [GHCR.md](GHCR.md)：从联网版 Release 下载 `compose.yaml` 和 `ghcr.env.example`，配置 `.env` 和专属数据目录后执行 `docker compose pull`、`docker compose up -d`。无需下载离线镜像包或编译源码。Release 的两个镜像固定 digest；平台为 Linux x64。离线镜像部署方式保留如下。
+旧版双镜像 Caddy 部署说明见 [GHCR.md](GHCR.md)，仅用于兼容已有实例。当前单应用部署附件及其更新、回滚步骤见 [NGINX.md](NGINX.md)。离线镜像部署方式保留如下。
 
 ## 服务器配置与镜像交付
 
@@ -165,4 +165,4 @@ docker compose --env-file deploy/.env build frontend
 uv pip compile backend/requirements.release.in --python-version 3.12 --generate-hashes -o backend/requirements.lock
 ```
 
-改动锁后，须在 Python 3.12 隔离环境及目标镜像重新跑测试。记录固定的 BACKEND_IMAGE / FRONTEND_IMAGE 标签，回滚时不使用浮动 latest。
+改动锁后，须在 Python 3.12 隔离环境及目标镜像重新跑测试。新单应用部署以 `APP_IMAGE` 选择固定版本或 digest；旧双镜像部署分别记录 `BACKEND_IMAGE` / `FRONTEND_IMAGE` 标签。

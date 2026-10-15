@@ -50,6 +50,9 @@ def main():
             run(*docker, 'pull', '--platform', 'linux/amd64', reference)
             inspected = json.loads(run(*docker, 'image', 'inspect', reference).stdout)[0]
             assert reference in inspected['RepoDigests'] and inspected['Architecture'] == 'amd64'
+            run(*docker, 'pull', '--platform', 'linux/amd64', manifest['image']['tag'])
+            tagged = json.loads(run(*docker, 'image', 'inspect', manifest['image']['tag']).stdout)[0]
+            assert reference in tagged['RepoDigests'] and tagged['Id'] == inspected['Id']
         # This proxy exists only in the disposable test network, not in the delivered Compose.
         nginx_image = 'nginx:1.28-alpine'
         run(*docker, 'pull', nginx_image)
@@ -88,15 +91,22 @@ http {
         if manifest:
             # Render the exact delivered service, then replace only test data and network boundaries.
             (root / '.env').write_text('PUBLIC_ORIGIN=https://studytool-smoke:8443\nRAG_DATA_DIR=/unused-smoke-data\n')
-            (root / 'source.yaml').write_bytes((args.deployment / 'compose.app.yaml').read_bytes())
+            (root / 'source.yaml').write_bytes((args.deployment / 'compose.yaml').read_bytes())
             clean_env = {k: v for k, v in os.environ.items()
                          if k not in {'APP_IMAGE', 'PUBLIC_ORIGIN', 'APP_PORT', 'RAG_DATA_DIR'}}
             rendered = json.loads(run(*docker, 'compose', '-f', str(root / 'source.yaml'),
                                      'config', '--format', 'json', env=clean_env).stdout)
             assert set(rendered['services']) == {'app'}
             app = rendered['services']['app']
-            assert app['image'] == reference and 'build' not in app
+            assert app['image'] == manifest['image']['latest'] and 'build' not in app
             assert app['ports'][0]['host_ip'] == '127.0.0.1'
+            # The default latest alias is promoted only after this version passes.
+            # Also render the supported fixed-version override and run that exact tag.
+            version_env = dict(clean_env, APP_IMAGE=manifest['image']['tag'])
+            fixed = json.loads(run(*docker, 'compose', '-f', str(root / 'source.yaml'),
+                                  'config', '--format', 'json', env=version_env).stdout)
+            app = fixed['services']['app']
+            assert app['image'] == manifest['image']['tag']
             app['environment'] = environment
             app['ports'] = []
             app['volumes'] = ['data:/data']
@@ -139,6 +149,8 @@ print('Non-root, no Caddy binary, anonymous JavaScript assets and hidden API doc
             restarted = run(*compose, 'exec', '-T', 'app', 'python', '-', input=RESTART_PROBE)
             evidence = {'result': 'passed', 'image': reference,
                         'anonymous_pull_verified': bool(manifest),
+                        'version_tag_verified': manifest['image']['tag'] if manifest else None,
+                        'default_image': manifest['image']['latest'] if manifest else None,
                         'initial': json.loads(initial.stdout.strip().splitlines()[-1]),
                         'restart': json.loads(restarted.stdout.strip().splitlines()[-1]),
                         'production_deployed': False,
