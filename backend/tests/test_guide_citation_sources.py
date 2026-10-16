@@ -72,7 +72,7 @@ def _reply(prompt):
     management = data["management_excerpts"][0]["passages"][0]["citation_id"]
     return {"summary": "会计基本理论", "concepts": [{"name": "会计", "explanation": "经济管理活动",
         "recitation": "会计是经济管理活动。", "keywords": ["管理"], "citations": [{"citation_id": accounting}]}],
-        "mind_map": {"title": "会计", "children": [{"title": "管理活动"}]},
+        "mind_map": {"title": "会计", "children": [{"title": "会计"}]},
         "connections": [{"accounting_concept": "会计", "management_concept": "预算控制",
                          "explanation": "共同支持经营计划", "application": "通过预算控制经营活动",
                          "evidence_level": "textbook_supported",

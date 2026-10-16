@@ -47,6 +47,8 @@ jobs:
       - name: Build application without Caddy
         run: >-
           docker buildx build --platform linux/amd64 --load --provenance=false
+          --build-arg VITE_FEEDBACK_API_BASE=https://feedback.xn--fhqths51enha.cn
+          --build-arg VITE_FEEDBACK_APP_ID=studytool
           --label org.opencontainers.image.source=https://github.com/SakuraLoveSmile/StudyTool
           --label org.opencontainers.image.revision=${{ github.sha }}
           --label org.opencontainers.image.version=$APP_VERSION

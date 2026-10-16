@@ -146,15 +146,19 @@
               <p v-if="!activeGuide.concepts.length" class="text-sm text-faint">本次结果未整理出独立概念，请结合总结核对原文。</p>
             </template>
             <template v-else-if="activeTab === 'map'">
-              <KnowledgeMindMap :key="activeGuide.id" :map="activeGuide.mind_map" :exam-concepts="examConcepts" :management-concepts="managementConcepts" :selected-title="selectedMapNode" :source-dialog-open="!!sourceCitation" @select="selectMapNode">
+              <KnowledgeMindMap :key="activeGuide.id" :map="activeGuide.mind_map" :exam-concepts="examConcepts" :management-concepts="managementConcepts" :selected-title="selectedMapNode" :selected-node-path="selectedMapPath" :source-dialog-open="!!sourceCitation" @select="selectMapNode">
                 <template #detail>
                   <div v-if="selectedMapNode" class="space-y-4">
                     <div class="flex items-start justify-between gap-3">
                       <h3 class="font-semibold text-ink break-words min-w-0">{{ selectedMapNode }}</h3>
-                      <button type="button" class="text-xs text-sub shrink-0 hover:text-accent" @click="selectedMapNode = ''">收起详情</button>
+                      <button type="button" class="text-xs text-sub shrink-0 hover:text-accent" @click="selectMapNode('', '')">收起详情</button>
                     </div>
-                    <p class="reading-content whitespace-pre-wrap">{{ selectedMapConcept?.explanation || '此节点为章节结构主题。可展开分支查看具体概念，或在章节总结中阅读完整说明。' }}</p>
-                    <template v-if="selectedMapConcept">
+                    <template v-if="selectedMapPath === 'root'">
+                      <p class="text-xs font-medium text-sub">章节概览</p>
+                      <p class="reading-content whitespace-pre-wrap">{{ activeGuide.summary }}</p>
+                    </template>
+                    <template v-else-if="selectedMapConcept">
+                      <p class="reading-content whitespace-pre-wrap">{{ selectedMapConcept.explanation }}</p>
                       <p v-if="selectedMapConcept.keywords.length" class="text-xs text-accent">{{ selectedMapConcept.keywords.join(' · ') }}</p>
                       <details v-if="selectedMapConcept.recitation" class="border-t border-line pt-3">
                         <summary class="text-sm font-medium text-ink cursor-pointer">背诵短段</summary>
@@ -164,6 +168,17 @@
                         <button v-for="(citation, index) in selectedMapConcept.citations" :key="index" type="button" class="citation-button" :disabled="!guideSourcesVerified || activeGuide.source_stale" @click="openCitation(citation)">查看原文 {{ index + 1 }}</button>
                       </div>
                     </template>
+                    <div v-else-if="!selectedMapChildren.length" class="space-y-3">
+                      <p class="text-sm text-warn leading-relaxed" role="status">这份已保存资料未提供此末级知识点的独立解读，当前没有更多分支。请重新生成章节资料，补齐说明、背诵短段和原文依据。</p>
+                      <button type="button" class="btn-sm btn-secondary" @click="activeTab = 'summary'">查看章节总结</button>
+                    </div>
+                    <section v-if="selectedMapChildren.length" class="border-t border-line pt-3 space-y-2">
+                      <h4 class="text-sm font-medium text-ink">{{ selectedMapPath === 'root' ? '章节主题' : '下级知识点' }}</h4>
+                      <p v-if="!selectedMapConcept && selectedMapPath !== 'root'" class="text-sm text-sub leading-relaxed">这是分组主题，选择下方知识点查看具体内容。</p>
+                      <div class="flex flex-col gap-2">
+                        <button v-for="child in selectedMapChildren" :key="child.path" type="button" class="map-detail-link" @click="selectMapNode(child.title, child.path)">{{ child.title }}<span aria-hidden="true">›</span></button>
+                      </div>
+                    </section>
                     <section v-if="selectedMapExamPoints.length" class="border-t border-line pt-3 space-y-2">
                       <h4 class="text-sm font-medium text-warn">真题已考</h4>
                       <article v-for="(point, index) in selectedMapExamPoints" :key="`${point.question_id}-${index}`" class="text-sm text-sub">
@@ -270,16 +285,23 @@
             <button class="btn btn-primary w-full" :disabled="asking || !question.trim() || !effectiveQaDocIds.length">{{ asking ? '正在查找依据并回答…' : '发送问题' }}</button>
           </form>
           <p v-if="askError" class="notice text-err bg-err/5 mt-4" role="alert">{{ askError }}</p>
-          <article v-if="activeAnswer" class="mt-5 pt-5 border-t border-line space-y-4" aria-live="polite">
+          <article v-if="activeAnswer" class="answer-card mt-5 pt-5 border-t border-line space-y-4" aria-label="问答内容" aria-live="polite">
             <p class="text-xs text-faint">{{ formatTime(activeAnswer.created_at) }} · 已保存到问答历史</p>
-            <h3 class="font-semibold text-ink">{{ activeAnswer.question }}</h3>
+            <h3 class="text-lg font-semibold text-ink leading-relaxed">{{ activeAnswer.question }}</h3>
             <p v-if="activeAnswer.source_stale" class="notice text-warn bg-warn/10" role="alert">来源已修改或删除，此历史回答的引用已停用。请重新提问核对。</p>
             <p v-else-if="!answerSourcesVerified" class="notice text-warn bg-warn/10" role="alert">{{ answersLoading ? '正在核对当前回答的来源，引用和追问暂不可用。' : '当前回答的来源状态尚未核实，引用和追问已暂停。请刷新问答历史后再使用。' }}</p>
             <ul v-if="activeAnswer.warnings.length" class="notice bg-warn/5 text-warn space-y-1"><li v-for="(warning, index) in activeAnswer.warnings" :key="index">{{ warning }}</li></ul>
-            <div class="reading-content whitespace-pre-wrap">{{ activeAnswer.answer }}</div>
-            <div class="flex flex-wrap gap-2">
-              <button v-for="(citation, index) in activeAnswer.citations" :key="index" class="citation-button" :disabled="!answerSourcesVerified || activeAnswer.source_stale" @click="openCitation(citation, 'answer')">依据 {{ index + 1 }} · {{ citation.doc_name }} · {{ citation.location }}</button>
-            </div>
+            <AnswerText :content="activeAnswer.answer" />
+            <section v-if="activeAnswer.citations.length" class="answer-sources" aria-label="回答依据">
+              <h4 class="text-xs font-semibold text-sub">回答依据 · {{ activeAnswer.citations.length }} 处</h4>
+              <div class="mt-3 flex flex-col gap-2">
+                <button v-for="(citation, index) in activeAnswer.citations" :key="index" class="answer-citation" :disabled="!answerSourcesVerified || activeAnswer.source_stale" @click="openCitation(citation, 'answer')">
+                  <span class="answer-citation-number">{{ index + 1 }}</span>
+                  <span class="min-w-0 flex-1"><span class="block">{{ citation.doc_name }}</span><span class="block text-xs text-sub mt-0.5">{{ citation.location }}</span></span>
+                  <span class="text-xs shrink-0">查看原文</span>
+                </button>
+              </div>
+            </section>
             <p v-if="!activeAnswer.citations.length" class="text-xs text-warn">本次回答没有可核对的原文引用，请勿作为教材结论使用。</p>
           </article>
           <p v-else class="text-sm text-faint mt-5 border-t border-line pt-4">还没有回答。选好资料，提出你的第一个问题。</p>
@@ -315,6 +337,7 @@ import { BookOpen, ChevronDown, Focus, MessageCircle } from 'lucide-vue-next';
 import { apiClient, sessionTransport } from '../api/client';
 import { libraryApi } from '../api/library';
 import SourceQuoteModal from '../components/SourceQuoteModal.vue';
+import AnswerText from '../components/AnswerText.vue';
 import KnowledgeMindMap from '../components/KnowledgeMindMap.vue';
 import { useTaskManager } from '../composables/useTaskManager';
 import { isAndroidApp } from '../utils/clientPlatform';
@@ -346,6 +369,7 @@ const guideError = ref('');
 const activeTab = ref('summary');
 const tabs = [ { id: 'summary', label: '章节总结' }, { id: 'map', label: '思维导图' }, { id: 'recitation', label: '背诵短段' }, { id: 'connections', label: '真题与管理学' } ];
 const selectedMapNode = ref('');
+const selectedMapPath = ref('');
 const sourceCitation = ref<LibraryCitation | null>(null);
 const sourceCitationOwner = ref<'guide' | 'answer'>('guide');
 const qaDocIds = ref<string[]>([]);
@@ -386,9 +410,24 @@ const managementConcepts = computed(() => activeGuide.value?.connections.map(con
 const effectiveQaDocIds = computed(() => qaChapterId.value ? qaDocIds.value.filter(id => id === selectedDocId.value) : qaDocIds.value);
 const qaScope = computed(() => JSON.stringify([effectiveQaDocIds.value.slice().sort(), qaChapterId.value]));
 const followUpAvailable = computed(() => answerSourcesVerified.value && !!activeAnswer.value && !activeAnswer.value.source_stale && JSON.stringify([activeAnswer.value.doc_ids.slice().sort(), activeAnswer.value.chapter_id || '']) === qaScope.value);
-const selectedMapConcept = computed(() => activeGuide.value?.concepts.find(concept => concept.name === selectedMapNode.value));
-const selectedMapExamPoints = computed(() => activeGuide.value?.exam_points.filter(point => point.concept === selectedMapNode.value) || []);
-const selectedMapConnections = computed(() => activeGuide.value?.connections.filter(connection => connection.accounting_concept === selectedMapNode.value) || []);
+const mapBranches = computed(() => activeGuide.value?.mind_map.children.map((branch, index) => ({
+  path: `b${index}`, title: branch.title,
+  children: branch.children.map((leaf, leafIndex) => ({ path: `b${index}-l${leafIndex}`, title: leaf.title })),
+})) || []);
+const selectedMapChildren = computed(() => selectedMapPath.value === 'root' ? mapBranches.value : mapBranches.value.find(branch => branch.path === selectedMapPath.value)?.children || []);
+function conceptLabel(value: string) { return value.normalize('NFKC').replace(/\s+/g, ''); }
+const selectedMapConcept = computed(() => {
+  if (selectedMapPath.value === 'root') return undefined;
+  const concepts = activeGuide.value?.concepts || [];
+  const exact = concepts.filter(concept => concept.name === selectedMapNode.value);
+  if (exact.length) return exact.length === 1 ? exact[0] : undefined;
+  // Tolerate spacing/full-width differences in saved guides, never infer semantic aliases.
+  const matches = concepts.filter(concept => conceptLabel(concept.name) === conceptLabel(selectedMapNode.value));
+  return matches.length === 1 ? matches[0] : undefined;
+});
+const selectedConceptName = computed(() => selectedMapConcept.value?.name || selectedMapNode.value);
+const selectedMapExamPoints = computed(() => activeGuide.value?.exam_points.filter(point => point.concept === selectedConceptName.value) || []);
+const selectedMapConnections = computed(() => activeGuide.value?.connections.filter(connection => connection.accounting_concept === selectedConceptName.value) || []);
 
 function toggleReaderSelection() {
   readerSelectionOpen.value = !readerSelectionOpen.value;
@@ -643,7 +682,7 @@ function openAnswer(answer: LibraryAnswer) {
   question.value = '';
 }
 
-function selectMapNode(title: string) { selectedMapNode.value = title; }
+function selectMapNode(title: string, path: string) { selectedMapNode.value = title; selectedMapPath.value = path; }
 function openCitation(citation: LibraryCitation, owner: 'guide' | 'answer' = 'guide') {
   if (owner === 'answer' ? !answerSourcesVerified.value || activeAnswer.value?.source_stale : !guideSourcesVerified.value || activeGuide.value?.source_stale) return;
   sourceCitationOwner.value = owner;
@@ -682,7 +721,7 @@ watch(taskManager.tasks, tasks => {
     void applyGenerationTask(retry, sequence);
   }
 });
-watch(selectedGuideId, () => { selectedMapNode.value = ''; sourceCitation.value = null; });
+watch(selectedGuideId, () => { selectMapNode('', ''); sourceCitation.value = null; });
 watch(qaScope, () => { ++askSequence; startNewQuestion(); }, { flush: 'sync' });
 watch(qaDocIds, () => { if (qaDocIds.value.length !== 1 || !qaDocIds.value.includes(selectedDocId.value)) qaChapterId.value = ''; }, { deep: true, flush: 'sync' });
 onMounted(() => { void loadMaterials(); void loadAnswers(); });
@@ -696,6 +735,15 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(generationTimer); ++genera
 .notice { border-radius: .75rem; padding: .85rem 1rem; font-size: .8rem; line-height: 1.7; overflow-wrap: anywhere; }
 .empty-panel { padding: 2rem 1.25rem; text-align: center; color: rgb(var(--c-sub)); line-height: 1.7; }
 .content-card { padding: 1rem; border: 1px solid rgb(var(--c-line)); border-radius: .85rem; background: rgb(var(--c-raised) / .4); }
+.answer-sources { padding-top: 1rem; border-top: 1px solid rgb(var(--c-line)); }
+.answer-citation { display: flex; align-items: center; gap: .75rem; width: 100%; padding: .75rem; border: 1px solid rgb(var(--c-line)); border-radius: .75rem; text-align: left; color: rgb(var(--c-accent)); background: rgb(var(--c-raised) / .35); font-size: .8rem; line-height: 1.6; overflow-wrap: anywhere; }
+.answer-citation:hover { background: rgb(var(--c-accent) / .06); }
+.answer-citation:focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; }
+.answer-citation:disabled { color: rgb(var(--c-faint)); cursor: not-allowed; }
+.answer-citation-number { display: grid; place-items: center; flex-shrink: 0; width: 1.5rem; height: 1.5rem; border-radius: .45rem; font-size: .7rem; background: rgb(var(--c-accent) / .08); }
+.map-detail-link { display: flex; align-items: center; justify-content: space-between; gap: .75rem; width: 100%; text-align: left; padding: .6rem .75rem; border: 1px solid rgb(var(--c-line)); border-radius: .65rem; color: rgb(var(--c-accent)); background: rgb(var(--c-surface)); font-size: .85rem; line-height: 1.6; }
+.map-detail-link:hover { background: rgb(var(--c-raised)); }
+.map-detail-link:focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; }
 .check-row { display: flex; align-items: start; gap: .6rem; padding: .5rem 0; color: rgb(var(--c-sub)); font-size: .8rem; line-height: 1.6; cursor: pointer; }
 .check-row input { flex-shrink: 0; margin-top: .25rem; }
 .tabs-scroll { display: flex; gap: 1.2rem; overflow-x: auto; max-width: 100%; }

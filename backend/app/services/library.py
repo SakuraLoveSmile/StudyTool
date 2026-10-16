@@ -34,6 +34,8 @@ _VALIDATION_REASONS = {
     "schema_field_type": "字段类型不正确",
     "schema_field_empty": "字段内容为空或数量不足",
     "schema_field_invalid": "字段内容不符合章节资料要求",
+    "mind_map_concept_missing": "导图末级节点缺少同名概念详情",
+    "mind_map_concept_ambiguous": "导图末级节点对应多个同名概念，无法确定详情",
     "citation_missing": "缺少必要的原文引用",
     "citation_format": "原文引用格式不正确",
     "citation_chunk_invalid": "引用的 chunk_id 缺失或类型不正确",
@@ -95,6 +97,32 @@ def _log_guide_validation_failure(task_id, exc):
         TaskWorker.log_event(task_id, "validation_failed", exc.detail, stage="validation",
                              data={"reason_code": exc.reason_code, "field": exc.field,
                                    "error_count": exc.error_count})
+
+
+def _validate_mind_map_concepts(guide: Guide):
+    # Validate only newly generated guides, after the fixed wire schema has
+    # parsed them. Historical guides may legitimately lack these details.
+    concept_counts = {}
+    for concept in guide.concepts:
+        concept_counts[concept.name] = concept_counts.get(concept.name, 0) + 1
+    first_error, error_count = None, 0
+    for branch_index, branch in enumerate(guide.mind_map.children):
+        branch_field = ("mind_map", "children", branch_index)
+        if branch.children:
+            terminals = ((leaf, (*branch_field, "children", index, "title"))
+                         for index, leaf in enumerate(branch.children))
+        else:
+            terminals = ((branch, (*branch_field, "title")),)
+        for terminal, field in terminals:
+            matches = concept_counts.get(terminal.title, 0)
+            if matches == 1:
+                continue
+            error_count += 1
+            if first_error is None:
+                code = "mind_map_concept_missing" if matches == 0 else "mind_map_concept_ambiguous"
+                first_error = (code, field)
+    if first_error is not None:
+        raise GuideValidationError(*first_error, error_count=error_count)
 
 
 def _json(value):
@@ -519,6 +547,9 @@ async def generate_guide(req: GuideRequest, *, task_id=None, expected_snapshot=N
             "summary（字符串）；concepts（非空数组，每项 name, explanation, recitation（可背诵短段）, keywords（字符串数组）, "
             "citations（非空数组，每项仅 citation_id，选择支持该概念的原文片段编号））；"
             "mind_map（title, children 数组，每项 title, children 数组，每项 title）；"
+            "每个导图末级节点（有子节点时为最末层节点，没有子节点时为该分支本身）的 title 必须精确等于唯一一个 concepts.name。"
+            "concepts.name 不得重名；若末级主题尚无对应概念，必须补齐该概念的 explanation、recitation、keywords 和教材 citations。"
+            "章节根节点和有子节点的分组可以有自己的概念，但不强制要求。"
             "connections（数组，每项 accounting_concept, management_concept, explanation, application, "
             "evidence_level（suggestion 或 textbook_supported）, citations）。"
             "summary 和每个概念必须有会计教材引用，顶层 citations 为非空引用数组。"
@@ -577,6 +608,7 @@ async def generate_guide(req: GuideRequest, *, task_id=None, expected_snapshot=N
                       **model_fields, concepts=concepts,
                       connections=connections, exam_points=points, citations=raw["citations"], warnings=warnings,
                       created_at=datetime.now(timezone.utc).isoformat())
+        _validate_mind_map_concepts(guide)
     except GuideValidationError as exc:
         _log_guide_validation_failure(task_id, exc)
         raise
@@ -646,6 +678,8 @@ async def ask(req: AskRequest):
             "历史仅用于理解追问，不是事实依据。只根据当前提供的资料片段回答，资料不足明确说明。"
             "管理学关联建议明确标注，不声称真题已考。输出 JSON：answer（非空字符串）, "
             "citations（数组，每项 chunk_id, quote，quote 必须是当前片段的精确原文子串）。"
+            "answer 字符串使用简洁 Markdown 排版，按需使用小标题、段落和列表；多个定义或要点逐项独立换行，使用有序或无序列表；"
+            "关键术语可适度加粗，不输出 HTML；短回答不强制拆分标题。"
             "有教材依据的回答必须引用；没有依据则只说明资料不足。",
             {"question": req.question, "history_context_only": history, "source_excerpts": _context(bounded)})
         text = raw.get("answer")

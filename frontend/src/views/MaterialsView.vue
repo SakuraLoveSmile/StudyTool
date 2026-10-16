@@ -473,22 +473,22 @@
         <div v-else-if="docChunks.length === 0" class="text-center py-8 text-faint text-sm">
           该文档尚未生成切片或正在解析中。
         </div>
-        <div v-for="c in docChunks" :key="c.id" class="p-3.5 rounded-xl border border-line bg-raised/50 space-y-2 text-sm">
-          <div class="flex items-center justify-between text-xs text-sub font-medium">
+        <div v-for="c in docChunks" :key="c.id" class="rounded-xl border border-line bg-surface overflow-hidden text-sm">
+          <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line bg-raised/50 px-4 py-3 text-xs text-sub font-medium">
             <span class="px-2 py-0.5 rounded bg-accent/10 text-accent font-semibold">
               {{ c.page_number ? `第 ${c.page_number} 页` : (c.paragraph_ref || '段落') }}
             </span>
-            <span class="text-faint">{{ c.heading || '正文' }}</span>
+            <span class="min-w-0 flex-1 break-words">{{ c.heading || '正文' }}</span>
             <button type="button" @click="openProofreadModal(c)" class="text-accent hover:underline">
               校对修改原文
             </button>
           </div>
-          <p v-if="c.parse_error" class="text-err leading-relaxed font-mono text-xs">
+          <p v-if="c.parse_error" class="p-4 text-err leading-relaxed font-mono text-xs break-words">
             解析错误: {{ c.parse_error }}
           </p>
-          <p v-else class="text-ink whitespace-pre-wrap leading-relaxed">
-            {{ c.content }}
-          </p>
+          <div v-else class="px-4 py-5 sm:px-6 sm:py-6">
+            <SourceText :content="c.content" />
+          </div>
         </div>
       </div>
     </BaseModal>
@@ -595,6 +595,7 @@ import {
 import { apiClient } from '../api/client';
 import type { AnswerCandidate, DocumentItem, DocumentChunk, QuestionItem, KnowledgePoint } from '../types';
 import SourceQuoteModal from '../components/SourceQuoteModal.vue';
+import SourceText from '../components/SourceText.vue';
 import BaseModal from '../components/BaseModal.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { useTaskManager } from '../composables/useTaskManager';
