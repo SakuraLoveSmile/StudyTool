@@ -62,8 +62,8 @@
             <button type="button" class="rounded-lg p-2 text-faint hover:bg-raised hover:text-ink" title="编辑" @click="startEdit(card)">
               <Pencil class="h-4 w-4" aria-hidden="true" /><span class="sr-only">编辑</span>
             </button>
-            <button v-if="card.lifecycle_status === 'draft' || !card.is_confirmed || hasPendingChanges(card)" type="button" class="rounded-lg px-2 py-1 text-[11px] font-medium text-ok hover:bg-ok/10 disabled:opacity-50" :disabled="busyCardId === card.id" @click="approveAndPublish(card)">审核并发布</button>
-            <button v-if="card.lifecycle_status === 'draft' || !card.is_confirmed || hasPendingChanges(card)" type="button" class="rounded-lg px-2 py-1 text-[11px] font-medium text-err hover:bg-err/10 disabled:opacity-50" :disabled="busyCardId === card.id" @click="rejectCandidate(card)">拒绝修改</button>
+            <button v-if="card.lifecycle_status === 'draft' || !card.is_confirmed || hasPendingChanges(card) || isApprovedForPublication(card)" type="button" class="rounded-lg px-2 py-1 text-[11px] font-medium text-ok hover:bg-ok/10 disabled:opacity-50" :disabled="busyCardId === card.id" @click="approveAndPublish(card)">{{ isApprovedForPublication(card) ? '继续发布' : '审核并发布' }}</button>
+            <button v-if="!isApprovedForPublication(card) && (card.lifecycle_status === 'draft' || !card.is_confirmed || hasPendingChanges(card))" type="button" class="rounded-lg px-2 py-1 text-[11px] font-medium text-err hover:bg-err/10 disabled:opacity-50" :disabled="busyCardId === card.id" @click="rejectCandidate(card)">拒绝修改</button>
             <button v-if="hasPendingChanges(card)" type="button" class="rounded-lg px-2 py-1 text-[11px] font-medium text-accent hover:bg-accent/10" @click="startEdit(card)">预览草稿</button>
             <button v-if="card.lifecycle_status === 'published' || card.lifecycle_status === 'paused'" type="button" class="rounded-lg px-2 py-1 text-[11px] font-medium text-warn hover:bg-warn/10" @click="togglePause(card)">{{ card.is_paused ? '恢复' : '暂停' }}</button>
           </div>
@@ -415,9 +415,15 @@ const handleBatchGenerate = async () => {
   }
 };
 
-const hasPendingChanges = (card: RecallCard): boolean => {
-  return card.has_unpublished_changes === true || Boolean(card.current_revision_id && card.current_revision_status === 'pending');
-};
+const isCurrentRevisionVisible = (card: RecallCard): boolean => !card.current_revision_id || card.revision_id === card.current_revision_id;
+
+const hasPendingChanges = (card: RecallCard): boolean => isCurrentRevisionVisible(card) && (
+  card.has_unpublished_changes === true || Boolean(card.published_revision_id && card.current_revision_id && card.current_revision_id !== card.published_revision_id && ['draft', 'pending', 'approved'].includes(card.current_revision_status || ''))
+);
+
+const isApprovedForPublication = (card: RecallCard): boolean => isCurrentRevisionVisible(card) && (card.current_revision_status
+  ? card.current_revision_status === 'approved'
+  : card.lifecycle_status === 'approved');
 
 const pendingRevisionId = (card: RecallCard): string | undefined => card.current_revision_id || card.revision_id || undefined;
 
@@ -444,18 +450,13 @@ const approveAndPublish = async (card: RecallCard) => {
   pageError.value = '';
   try {
     const revisionId = pendingRevisionId(card);
-    if (revisionId) {
-      await apiClient.reviewCardRevision({
-        revisions: [{ revision_id: revisionId, decision: 'approve' }],
-      } as RevisionReviewPayload);
-    }
-    await apiClient.publishRecallCard(card.id, {
+    await apiClient.reviewAndPublishRecallCard(card.id, {
       revision_id: revisionId,
       expected_version: card.version,
     });
     await loadCards();
   } catch (error) {
-    pageError.value = error instanceof Error ? error.message : '审核发布回忆卡失败，请稍后重试。';
+    pageError.value = batchFailureMessage(error, '审核发布回忆卡失败，请稍后重试。');
   } finally {
     busyCardId.value = '';
   }
@@ -470,13 +471,12 @@ const rejectCandidate = async (card: RecallCard) => {
       await apiClient.reviewCardRevision({
         revisions: [{ revision_id: revisionId, decision: 'reject' }],
       } as RevisionReviewPayload);
-    }
-    if (card.lifecycle_status === 'draft' || !card.is_confirmed) {
+    } else if (card.lifecycle_status === 'draft' || !card.is_confirmed) {
       await apiClient.setRecallCardLifecycle(card.id, 'rejected', card.version);
     }
     await loadCards();
   } catch (error) {
-    pageError.value = error instanceof Error ? error.message : '排除候选失败，请稍后重试。';
+    pageError.value = batchFailureMessage(error, '排除候选失败，请稍后重试。');
   } finally {
     busyCardId.value = '';
   }

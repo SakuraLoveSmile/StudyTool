@@ -395,6 +395,10 @@ export const apiClient = {
     const res = await api.post(`/learning/cards/${encodeURIComponent(cardId)}/publish`, data ?? {});
     return normaliseRecallCard(unwrapLearningPayload<unknown>(res.data));
   },
+  reviewAndPublishRecallCard: async (cardId: string, data: { revision_id?: string; expected_version?: number }): Promise<RecallCard> => {
+    const res = await api.post(`/learning/cards/${encodeURIComponent(cardId)}/review-and-publish`, data);
+    return normaliseRecallCard(unwrapLearningPayload<unknown>(res.data));
+  },
   setRecallCardLifecycle: async (cardId: string, status: string, expected_version?: number): Promise<RecallCard> => {
     const res = await api.post(`/learning/cards/${encodeURIComponent(cardId)}/lifecycle`, { status, expected_version });
     return normaliseRecallCard(unwrapLearningPayload<unknown>(res.data));

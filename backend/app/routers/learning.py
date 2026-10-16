@@ -700,6 +700,13 @@ def get_learning_generation(generation_id: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+@router.post("/cards/{card_id}/review-and-publish")
+def review_and_publish_learning_card(card_id: str, body: Any = Body(default=None)) -> Any:
+    payload = _mapping(body)
+    result = _run(lambda: _content_kwargs(("approve_and_publish_card",), card_id=card_id, revision_id=payload.get("revision_id"), reset_progress=bool(payload.get("reset_progress", False)), expected_version=_first(payload, "expected_version", "version")))
+    return _card_response(result)
+
+
 @router.post("/cards/{card_id}/publish")
 def publish_learning_card(card_id: str, body: Any = Body(default=None)) -> Any:
     payload = _mapping(body)

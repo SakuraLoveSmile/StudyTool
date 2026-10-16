@@ -343,6 +343,10 @@ def _card_payload(conn: sqlite3.Connection, row: Mapping[str, Any], *, include_d
     if revision is None and card.get("published_revision_id"):
         revision = _row(conn.execute("SELECT * FROM recall_card_revisions WHERE id = ?", (card["published_revision_id"],)).fetchone())
     revision_payload = _revision_payload(revision) if revision else {}
+    current_revision = revision if revision and revision.get("id") == card.get("current_revision_id") else _row(
+        conn.execute("SELECT * FROM recall_card_revisions WHERE id = ? AND card_id = ?", (card.get("current_revision_id"), card.get("id"))).fetchone()
+    )
+    current_revision_status = current_revision.get("status") if current_revision else None
     chapter = _row(conn.execute("SELECT title FROM recall_chapters WHERE id = ?", (card.get("chapter_id"),)).fetchone())
     progress = _row(conn.execute("SELECT * FROM learning_progress WHERE card_id = ? AND layer = 'outline' LIMIT 1", (card.get("id"),)).fetchone())
     tags = revision_payload.get("tags") or _loads(card.get("tags_json"), [])
@@ -363,6 +367,8 @@ def _card_payload(conn: sqlite3.Connection, row: Mapping[str, Any], *, include_d
         "last_reviewed_at": progress.get("last_studied_at") if progress else None, "review_count": int(progress.get("review_count") or 0) if progress else 0,
         "interval_days": progress.get("interval_days") if progress else None, "ease_factor": progress.get("ease_factor") if progress else None,
         "revision_id": revision_payload.get("id"), "published_revision_id": card.get("published_revision_id"),
+        "current_revision_id": card.get("current_revision_id"), "current_revision_status": current_revision_status,
+        "has_unpublished_changes": bool(card.get("published_revision_id") and card.get("current_revision_id") != card.get("published_revision_id") and current_revision_status in {"draft", "approved"}),
         "current_revision_no": int(card.get("current_revision_no") or revision_payload.get("revision_number") or 0), "version": int(card.get("lock_version") or card.get("version") or 1),
         "sort_order": int(card.get("sort_order") or 0), "created_at": str(card.get("created_at")), "updated_at": str(card.get("updated_at")),
         "published_at": card.get("published_at"), "archived_at": card.get("archived_at"),
@@ -617,11 +623,39 @@ class RecallCardsService:
                     event = "revision_approved"
                 else:
                     db.execute("UPDATE recall_card_revisions SET status = 'rejected', review_status = 'rejected', reviewed_by = ?, review_note = ?, rejection_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (values.get("reviewed_by", "user"), note, note, row["id"]))
-                    db.execute("UPDATE recall_cards SET publication_status = 'rejected', status = 'draft', version = COALESCE(version,1)+1, lock_version = COALESCE(lock_version,1)+1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (card["id"],))
+                    if card.get("published_revision_id"):
+                        # Reject the proposed change without taking the already
+                        # published card out of its existing learning lifecycle.
+                        db.execute("UPDATE recall_cards SET version = COALESCE(version,1)+1, lock_version = COALESCE(lock_version,1)+1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (card["id"],))
+                    else:
+                        db.execute("UPDATE recall_cards SET publication_status = 'rejected', status = 'draft', version = COALESCE(version,1)+1, lock_version = COALESCE(lock_version,1)+1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (card["id"],))
                     event = "revision_rejected"
                 _log_event(db, event, "revision", row["id"], card_id=card["id"], chapter_id=card.get("chapter_id"), data={"note": note})
                 result.append(_revision_payload(_row(db.execute("SELECT * FROM recall_card_revisions WHERE id = ?", (row["id"],)).fetchone())))
             return result[0] if len(result) == 1 else result
+
+    @staticmethod
+    def approve_and_publish_card(card_id: str, *, revision_id: Optional[str] = None, reset_progress: bool = False, expected_version: Optional[int] = None, conn: Optional[sqlite3.Connection] = None) -> dict[str, Any]:
+        """Review and publish the current revision as one atomic user action."""
+        with _conn_or_session(conn) as db, _tx(db):
+            card = _row(db.execute("SELECT * FROM recall_cards WHERE id = ?", (card_id,)).fetchone())
+            if not card: raise RecallCardsError("CARD_NOT_FOUND", "回忆卡不存在", 404)
+            _check_version(card, _effective_version({"expected_version": expected_version}), field="card version")
+            rid = revision_id or card.get("current_revision_id")
+            revision = _row(db.execute("SELECT * FROM recall_card_revisions WHERE id = ? AND card_id = ?", (rid, card_id)).fetchone())
+            if not revision: raise RecallCardsError("REVISION_NOT_FOUND", "待发布版本不存在", 404)
+            if rid != card.get("current_revision_id"):
+                raise ConflictError("CURRENT_REVISION_CHANGED", "当前草稿已变化，请刷新后重新审核并发布", 409)
+            if revision.get("status") == "published" and rid == card.get("published_revision_id"):
+                return RecallCardsService.get_card(card_id, conn=db)
+            if revision.get("status") in {"draft", "rejected"}:
+                RecallCardsService.review_revisions({"revision_id": rid, "decision": "approve",
+                    "expected_card_version": int(card.get("lock_version") or card.get("version") or 1)}, conn=db)
+            # Reviewing increments the version. Read it inside this same write
+            # transaction rather than reusing the client's pre-review version.
+            current = _row(db.execute("SELECT * FROM recall_cards WHERE id = ?", (card_id,)).fetchone())
+            return RecallCardsService.publish_card(card_id, revision_id=rid, reset_progress=reset_progress,
+                expected_version=int(current.get("lock_version") or current.get("version") or 1), conn=db)
 
     @staticmethod
     def publish_card(card_id: str, *, revision_id: Optional[str] = None, reset_progress: bool = False, expected_version: Optional[int] = None, conn: Optional[sqlite3.Connection] = None) -> dict[str, Any]:
@@ -717,6 +751,7 @@ update_card = RecallCardsService.update_card
 create_revision = RecallCardsService.create_revision
 update_revision = RecallCardsService.update_revision
 review_revisions = RecallCardsService.review_revisions
+approve_and_publish_card = RecallCardsService.approve_and_publish_card
 publish_card = RecallCardsService.publish_card
 set_card_lifecycle = RecallCardsService.set_card_lifecycle
 history = RecallCardsService.history
@@ -727,5 +762,5 @@ __all__ = [
     "normalize_title", "chunk_content_hash", "validate_source_citations",
     "list_chapters", "get_chapter", "create_chapter", "update_chapter", "archive_chapter",
     "list_cards", "get_card", "create_card", "update_card", "create_revision", "update_revision",
-    "review_revisions", "publish_card", "set_card_lifecycle", "history", "list_generations",
+    "review_revisions", "approve_and_publish_card", "publish_card", "set_card_lifecycle", "history", "list_generations",
 ]
