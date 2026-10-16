@@ -53,7 +53,7 @@ def mock_model(monkeypatch):
         calls.append(data)
         if "complete_accounting_chapter" in data:
             chunk = data["complete_accounting_chapter"][0]
-            citation = {"chunk_id": chunk["chunk_id"], "quote": chunk["content"][:12]}
+            citation = {"chunk_id": chunk["chunk_id"], "quote": chunk["passages"][0]["content"][:12]}
             return {"summary": "会计的含义与职能", "concepts": [{"name": "会计", "explanation": "会计反映经济活动",
                 "recitation": "会计是经济管理活动。", "keywords": ["反映", "监督"], "citations": [citation]}],
                 "mind_map": {"title": "会计基本理论", "children": [{"title": "会计", "children": [{"title": "反映"}]}]},
@@ -92,7 +92,7 @@ async def test_guide_persists_complete_chapter_real_citations_no_fake_exam(sourc
     guide = await library.generate_guide(GuideRequest(doc_id="accounting", chapter_id=source))
     supplied = mock_model[0]["complete_accounting_chapter"]
     assert [c["chunk_id"] for c in supplied] == ["a1", "a2"]
-    assert "最后一段" in supplied[-1]["content"]
+    assert "最后一段" in "".join(p["content"] for p in supplied[-1]["passages"])
     assert guide.connections[0].evidence_level == "suggestion"
     assert "尚未提供管理学教材" in guide.warnings[0]
     assert guide.exam_points == []
