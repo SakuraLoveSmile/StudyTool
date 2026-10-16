@@ -123,6 +123,54 @@ async def test_success_persists_pending_candidates_and_snapshot(monkeypatch):
     assert json.loads(persisted_batch["input_snapshot_json"])["units"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("padding", [" \n", "\r\n\t", "\u3000\u00a0"])
+@pytest.mark.parametrize("retry_existing", [False, True])
+async def test_snapshot_preserves_original_whitespace_through_worker(monkeypatch, padding, retry_existing):
+    monkeypatch.setattr(settings, "DEMO_MODE", False)
+    original = padding + "管理是协调资源实现目标的过程" + padding
+    _, rows = _seed(content=original)
+    batch = RecallGenerator.create_generation_batch("ch-1", [_unit(*rows[0])])
+    with db_session() as conn:
+        raw = conn.execute("SELECT input_snapshot_json FROM recall_generation_batches WHERE id=?", (batch["batch_id"],)).fetchone()[0]
+    snapshot = json.loads(raw)
+    chunk = snapshot["units"][0]["chunks"][0]
+    assert chunk["content"] == original
+    assert chunk["content_hash"] == hashlib.sha256(original.encode()).hexdigest()
+    unit = RecallGenerator._load_snapshot_units(snapshot)[0]
+    assert unit.chunks[0].content == original
+
+    task_id = batch["task_id"]
+    if retry_existing:
+        # A pre-fix failed batch already contains the correct original text and
+        # hash. Retrying must consume that snapshot without rewriting it.
+        with db_session() as conn:
+            conn.execute("UPDATE recall_generation_batches SET status='failed' WHERE id=?", (batch["batch_id"],))
+        task_id = TaskWorker.create_task("generate_recall_cards", batch["batch_id"])
+
+    async def model(system, prompt, **kwargs):
+        payload = json.loads(prompt.split("模型输入 JSON：\n", 1)[1])
+        assert payload["source_chunks"][0]["content"] == original
+        return _response("kp-1", "chunk-1", original.strip())
+
+    monkeypatch.setattr(LLMClient, "chat_json", model)
+    result = await RecallGenerator.execute_generation_task(task_id, batch["batch_id"])
+    assert result["status"] == "completed", result
+    with db_session() as conn:
+        assert conn.execute("SELECT count(*) FROM recall_cards").fetchone()[0] == 1
+        assert conn.execute("SELECT input_snapshot_json FROM recall_generation_batches WHERE id=?", (batch["batch_id"],)).fetchone()[0] == raw
+
+
+def test_snapshot_whitespace_tampering_is_still_rejected():
+    _, rows = _seed(content="\n管理是协调资源实现目标的过程\n")
+    batch = RecallGenerator.create_generation_batch("ch-1", [_unit(*rows[0])])
+    with db_session() as conn:
+        snapshot = json.loads(conn.execute("SELECT input_snapshot_json FROM recall_generation_batches WHERE id=?", (batch["batch_id"],)).fetchone()[0])
+    snapshot["units"][0]["chunks"][0]["content"] += " "
+    with pytest.raises(RecallGenerationError, match="哈希不匹配"):
+        RecallGenerator._load_snapshot_units(snapshot)
+
+
 def test_invalid_refs_and_quotes_are_rejected_without_partial_unit():
     _, rows = _seed()
     unit = RecallGenerator._unit_from_snapshot(

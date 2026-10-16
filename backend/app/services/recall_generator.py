@@ -1537,7 +1537,12 @@ class RecallGenerator:
         chunks: List[SnapshotChunk] = []
         for raw_chunk in raw.get("chunks") or raw.get("source_chunks") or []:
             chunk = _as_dict(raw_chunk)
-            content = _text(chunk.get("content"), field="snapshot.chunk.content", required=True)
+            # Source text is hashed and compared verbatim. Generic text-field
+            # trimming changes valid OCR/imported whitespace and invalidates our
+            # own persisted snapshot before the worker can call the model.
+            content = chunk.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise RecallGenerationError("snapshot.chunk.content必须是非空正文字符串")
             chunk_id = _normalize_id(_first(chunk, "id", "chunk_id"), field="snapshot.chunk.id")
             source_hash = _text(
                 _first(chunk, "source_hash", "document_hash", "file_hash"),
