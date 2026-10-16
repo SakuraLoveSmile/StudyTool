@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -13,6 +14,7 @@ import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
@@ -48,9 +50,12 @@ import java.util.concurrent.Executors;
 public final class MainActivity extends Activity {
     private static final int CHOOSE_FILE = 1201;
     private static final int SAVE_FILE = 1202;
-    private static final int BACKGROUND = 0xfff5f4f0;
-    private static final int INK = 0xff292524;
-    private static final int ACCENT = 0xff6b705c;
+    private static final int BACKGROUND = 0xfff6f3ea;
+    private static final int PAPER = 0xfffffdf7;
+    private static final int INK = 0xff25392f;
+    private static final int ACCENT = 0xff285c4b;
+    private static final int SUBTLE = 0xff647268;
+    private static final int LINE = 0xffdce2d7;
     private SharedPreferences preferences;
     private volatile String origin;
     private String retryUrl;
@@ -59,6 +64,9 @@ public final class MainActivity extends Activity {
     private FrameLayout browserFrame;
     private View errorView;
     private ProgressBar progress;
+    private LinearLayout connectionPanel;
+    private LinearLayout connectionOuter;
+    private TextView tabletIntroduction;
     private ValueCallback<Uri[]> fileCallback;
     private boolean clearingSession;
     private PendingDownload pendingDownload;
@@ -105,7 +113,8 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(BACKGROUND);
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                android.graphics.Insets bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
             } else {
                 view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
@@ -146,39 +155,74 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    private GradientDrawable rounded(int color, int radius, boolean border) {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(color);
+        background.setCornerRadius(dp(radius));
+        if (border) background.setStroke(dp(1), LINE);
+        return background;
+    }
+
     private void showSettings() {
         newRoot();
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        LinearLayout outer = new LinearLayout(this);
-        outer.setOrientation(LinearLayout.VERTICAL);
-        outer.setPadding(dp(24), dp(40), dp(24), dp(32));
-        TextView brand = text("知学 · 联网版", 18);
-        outer.addView(brand);
-
+        connectionOuter = new LinearLayout(this);
+        connectionOuter.setOrientation(LinearLayout.VERTICAL);
+        connectionOuter.setGravity(Gravity.CENTER_HORIZONTAL);
+        connectionPanel = new LinearLayout(this);
+        connectionPanel.setOrientation(LinearLayout.VERTICAL);
+        connectionOuter.addView(connectionPanel);
+        connectionOuter.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                                  oldLeft, oldTop, oldRight, oldBottom) -> {
+            int available = right - left - view.getPaddingLeft() - view.getPaddingRight();
+            int contentWidth = Math.min(dp(620), Math.max(0, available));
+            if (connectionPanel != null && connectionPanel.getLayoutParams().width != contentWidth) {
+                connectionPanel.setLayoutParams(new LinearLayout.LayoutParams(contentWidth, -2));
+            }
+        });
+        TextView brand = text("知学  /  学习手账", 15);
+        brand.setTextColor(ACCENT);
+        brand.setTypeface(null, Typeface.BOLD);
+        connectionPanel.addView(brand);
+        TextView heading = text("让每一次学习，\n都有迹可循。", 30);
+        heading.setTypeface(null, Typeface.BOLD);
+        connectionPanel.addView(heading, spaced(20));
+        connectionPanel.addView(text("读懂教材 · 联系真题 · 主动回忆", 15), spaced(12));
+        tabletIntroduction = text("在平板上，一边读教材，一边问本章；\n在手机上，随时复习，把知识记扎实。", 16);
+        tabletIntroduction.setTextColor(SUBTLE);
+        connectionPanel.addView(tabletIntroduction, spaced(18));
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(24), dp(28), dp(24), dp(28));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.WHITE);
-        background.setCornerRadius(dp(16));
-        card.setBackground(background);
-        outer.addView(card, spaced(24));
-        TextView title = text("连接学习服务", 26);
+        card.setPadding(dp(24), dp(24), dp(24), dp(24));
+        card.setBackground(rounded(PAPER, 20, true));
+        connectionPanel.addView(card, spaced(28));
+        TextView title = text("连接你的学习空间", 23);
         title.setTypeface(null, Typeface.BOLD);
         card.addView(title);
-        card.addView(text("安卓与 Windows 连接同一服务后，可共用知识库、学习资料与 AI 问答。", 15), spaced(16));
-        card.addView(text("服务地址", 15), spaced(24));
+        TextView detail = text("使用与 Windows 相同的服务地址，登录后继续学习已有教材与回忆卡。", 15);
+        detail.setTextColor(SUBTLE);
+        card.addView(detail, spaced(12));
+        TextView addressLabel = text("服务地址", 15);
+        card.addView(addressLabel, spaced(24));
         EditText address = new EditText(this);
+        address.setId(View.generateViewId());
+        addressLabel.setLabelFor(address.getId());
         address.setSingleLine(true);
         address.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         address.setHint("https://learn.example.com");
         address.setTextColor(INK);
+        address.setHintTextColor(SUBTLE);
         address.setTextSize(16);
+        address.setMinHeight(dp(52));
+        address.setPadding(dp(14), dp(10), dp(14), dp(10));
+        address.setBackground(rounded(BACKGROUND, 12, true));
         address.setContentDescription("HTTPS 服务地址");
         card.addView(address, spaced(8));
-        card.addView(text("目前尚未部署服务器。部署完成后，填写 HTTPS 域名即可连接；请勿填写账号、密钥或网页路径。", 14), spaced(16));
-        Button connect = button("连接");
+        TextView hint = text("填写 HTTPS 域名即可，不含网页路径、账号或密钥。", 13);
+        hint.setTextColor(SUBTLE);
+        card.addView(hint, spaced(12));
+        Button connect = button("进入学习空间");
         card.addView(connect, spaced(24));
         connect.setOnClickListener(view -> {
             final String selected;
@@ -186,10 +230,39 @@ public final class MainActivity extends Activity {
             catch (IllegalArgumentException e) { address.setError(e.getMessage()); return; }
             origin = selected;
             preferences.edit().putString("origin", origin).apply();
+            connectionPanel = null;
+            connectionOuter = null;
+            tabletIntroduction = null;
             showBrowser();
         });
-        scroll.addView(outer);
+        TextView footer = text("教材和学习记录保存在你的服务端，换设备也能接着学。", 13);
+        footer.setTextColor(SUBTLE);
+        connectionPanel.addView(footer, spaced(20));
+        scroll.addView(connectionOuter);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
+        updateConnectionLayout();
+    }
+
+    private void updateConnectionLayout() {
+        if (connectionPanel == null) return;
+        int width = getResources().getConfiguration().screenWidthDp;
+        boolean tablet = width >= 840;
+        int padding = tablet ? 40 : 24;
+        connectionOuter.setPadding(dp(padding), dp(tablet ? 56 : 28), dp(padding), dp(28));
+        connectionPanel.setLayoutParams(new LinearLayout.LayoutParams(
+                dp(Math.min(620, Math.max(0, width - padding * 2))), -2));
+        tabletIntroduction.setVisibility(tablet ? View.VISIBLE : View.GONE);
+    }
+
+    @Override public void onConfigurationChanged(Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        // Preserve the live Vue state. Loading its URL on rotation could discard
+        // an answer or replay a learning request.
+        updateConnectionLayout();
+        if (root != null) {
+            root.requestApplyInsets();
+            root.requestLayout();
+        }
     }
 
     // The service is a Vue application. JavaScript is required, while origin
@@ -199,17 +272,27 @@ public final class MainActivity extends Activity {
         newRoot();
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(16), dp(6), dp(12), dp(6));
-        TextView title = text("知学 · 联网版", 17);
+        toolbar.setPadding(dp(12), 0, dp(8), 0);
+        TextView title = text("知学 · 学习手账", 14);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
         title.setTypeface(null, Typeface.BOLD);
         toolbar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         Button settings = new Button(this);
-        settings.setText("服务设置");
+        settings.setText("服务");
+        settings.setTextSize(13);
+        settings.setAllCaps(false);
+        settings.setMinHeight(dp(44));
+        settings.setMinimumHeight(dp(44));
+        settings.setMinWidth(dp(64));
+        settings.setMinimumWidth(dp(64));
+        settings.setPadding(dp(12), 0, dp(12), 0);
+        settings.setBackground(rounded(PAPER, 12, true));
         settings.setTextColor(ACCENT);
         settings.setContentDescription("切换服务器并清除本机登录状态");
-        toolbar.addView(settings);
+        toolbar.addView(settings, new LinearLayout.LayoutParams(-2, dp(44)));
         settings.setOnClickListener(view -> confirmSwitch());
-        root.addView(toolbar, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(44)));
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         root.addView(progress, new LinearLayout.LayoutParams(-1, dp(3)));
@@ -218,6 +301,7 @@ public final class MainActivity extends Activity {
         webView = new WebView(this);
         webView.setBackgroundColor(BACKGROUND);
         WebSettings settingsApi = webView.getSettings();
+        settingsApi.setUserAgentString(settingsApi.getUserAgentString() + " StudyToolAndroid/" + BuildConfig.VERSION_NAME);
         settingsApi.setJavaScriptEnabled(true);
         settingsApi.setDomStorageEnabled(true);
         settingsApi.setAllowFileAccess(false);
@@ -297,7 +381,7 @@ public final class MainActivity extends Activity {
             }
         });
         browserFrame.addView(webView, new FrameLayout.LayoutParams(-1, -1));
-        retryUrl = origin + "/library";
+        retryUrl = origin + "/today";
         webView.loadUrl(retryUrl);
     }
 
@@ -325,7 +409,7 @@ public final class MainActivity extends Activity {
         panel.addView(retry, spaced(24));
         retry.setOnClickListener(view -> {
             hideError();
-            if (webView != null) webView.loadUrl(ServerOrigin.contains(origin, retryUrl) ? retryUrl : origin + "/library");
+            if (webView != null) webView.loadUrl(ServerOrigin.contains(origin, retryUrl) ? retryUrl : origin + "/today");
         });
         errorView = panel;
         browserFrame.addView(panel, new FrameLayout.LayoutParams(-1, -1));

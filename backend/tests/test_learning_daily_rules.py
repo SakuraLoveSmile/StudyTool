@@ -342,6 +342,101 @@ def test_daily_attempt_envelope_hides_answer_until_reveal(tmp_path, monkeypatch)
         assert replay.json()["idempotent_replay"] is True
 
 
+
+def test_today_restores_only_current_revealed_answer_after_reload(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "DEMO_MODE", True)
+    init_db()
+    with TestClient(app) as client:
+        client.put("/api/learning/settings", json={"daily_new_limit": 2, "timezone": "Asia/Shanghai"})
+        chapter_id = client.post("/api/learning/chapters", json={"title": "恢复章节"}).json()["id"]
+        for prompt, answer in [("问题甲", "答案甲"), ("问题乙", "答案乙")]:
+            card = client.post("/api/learning/cards", json={"chapter_id": chapter_id, "prompt": prompt, "answer": answer}).json()
+            approved = client.post("/api/learning/revisions/review", json={"revisions": [{"revision_id": card["revision_id"], "decision": "approve"}]})
+            assert approved.status_code == 200
+            assert client.post(f"/api/learning/cards/{card['id']}/publish", json={"reset_progress": False}).status_code == 200
+        opened = client.post("/api/learning/today/open", json={})
+        assert opened.status_code == 200
+        before = client.get("/api/learning/today").json()
+        current = before["current_attempt"]
+        assert current["revealed"] is False
+        assert "answer" not in current
+        attempt_id = current["attempt_id"]
+        unit_id = current["day_unit_id"]
+        revealed = client.post(f"/api/learning/attempts/{attempt_id}/reveal", json={})
+        assert revealed.status_code == 200
+        expected = revealed.json()
+        reloaded = client.get("/api/learning/today").json()
+        restored = reloaded["current_attempt"]
+        assert restored["attempt_id"] == attempt_id
+        assert restored["day_unit_id"] == unit_id
+        assert restored["question"] == current["question"]
+        assert restored["revealed"] is True
+        assert restored["answer"] == expected["answer"]
+        # Queue summaries, including future questions, still omit all answers.
+        assert all("answer" not in unit for unit in reloaded["units"])
+        assert all(unit["revealed"] is False for unit in reloaded["units"])
+        rated = client.post(f"/api/learning/attempts/{attempt_id}/rate", json={"rating": "mastered", "request_id": "restore-answer-1"})
+        assert rated.status_code == 200
+        next_response = client.post("/api/learning/today/next", json={})
+        assert next_response.status_code == 200
+        next_item = next_response.json()["current_attempt"]
+        assert next_item["attempt_id"] != attempt_id
+        assert next_item["day_unit_id"] != unit_id
+        assert next_item["revealed"] is False
+        assert "answer" not in next_item
+        assert "answer" not in client.get("/api/learning/today").json()["current_attempt"]
+
+
+
+def test_http_last_card_next_exposes_round_completion_and_three_round_day_completion(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "DEMO_MODE", True)
+    init_db()
+    with TestClient(app) as client:
+        assert client.put("/api/learning/settings", json={"daily_new_limit": 1, "auto_advance": False}).status_code == 200
+        chapter = client.post("/api/learning/chapters", json={"title": "完整学习轮次"}).json()
+        card = client.post("/api/learning/cards", json={"chapter_id": chapter["id"], "prompt": "回忆问题", "answer": "原文答案"}).json()
+        assert client.post("/api/learning/revisions/review", json={"revisions": [{"revision_id": card["revision_id"], "decision": "approve"}]}).status_code == 200
+        assert client.post(f"/api/learning/cards/{card['id']}/publish", json={}).status_code == 200
+        opened = client.post("/api/learning/today/open", json={})
+        assert opened.status_code == 200
+        current = opened.json()
+        for round_no in (1, 2, 3):
+            assert current["current_round"] == round_no
+            assert current["round_complete"] is False
+            assert current["day_completed"] is False
+            question = current["current_attempt"]
+            assert question["revealed"] is False
+            assert "answer" not in question
+            attempt_id = question["attempt_id"]
+            assert client.post(f"/api/learning/attempts/{attempt_id}/reveal", json={"day_version": current["day_version"]}).status_code == 200
+            rated = client.post(f"/api/learning/attempts/{attempt_id}/rate", json={"rating": "mastered", "request_id": f"manual-round-{round_no}", "day_version": current["day_version"]})
+            assert rated.status_code == 200
+            rated = rated.json()
+            assert rated["attempt"]["id"] == attempt_id
+            assert rated["attempt"]["status"] == "rated"
+            assert rated["unit"]["answer"] == "原文答案"
+            refreshed = client.get("/api/learning/today").json()
+            assert refreshed["day_version"] == rated["day_version"]
+            assert refreshed["counts"]["completed"] == 1
+            next_response = client.post("/api/learning/today/next", json={"day_unit_id": question["day_unit_id"], "day_version": refreshed["day_version"]})
+            assert next_response.status_code == 200
+            finished = next_response.json()
+            assert finished["current_attempt"] is None
+            assert finished["round_complete"] is True
+            assert finished["can_advance"] is True
+            assert finished["day_completed"] is False
+            advanced = client.post("/api/learning/today/advance", json={"day_version": finished["day_version"]})
+            assert advanced.status_code == 200
+            current = advanced.json()
+        assert current["status"] == "completed"
+        assert current["round_complete"] is True
+        assert current["day_completed"] is True
+        assert current["can_advance"] is False
+        assert current["current_attempt"] is None
+
+
 def test_generation_collection_and_card_lifecycle_routes_exist(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(settings, "DEMO_MODE", True)

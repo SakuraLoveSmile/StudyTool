@@ -313,6 +313,7 @@ export interface TodayLearning {
   study_date?: string;
   status: LearningTodayStatus;
   round_complete?: boolean;
+  day_completed?: boolean;
   can_advance?: boolean;
   empty_reason?: 'no_chapters' | 'no_published_cards' | 'limits_unconfigured' | 'no_due_cards' | 'day_completed' | 'round_completed' | null;
   current_round_number?: number | null;
@@ -664,6 +665,7 @@ export function normaliseToday(value: unknown): TodayLearning {
     study_date: stringValue(record.study_date, '') || undefined,
     status: ['idle', 'active', 'paused', 'completed'].includes(statusValue) ? statusValue as LearningTodayStatus : 'idle',
     round_complete: booleanValue(record.round_complete, false),
+    day_completed: booleanValue(record.day_completed, false),
     can_advance: booleanValue(record.can_advance, false),
     empty_reason: (stringValue(record.empty_reason, '') || null) as TodayLearning['empty_reason'],
     round: numericRound ?? (['morning', 'noon', 'evening'].includes(roundValue) ? roundValue as LearningRound : null),
@@ -688,7 +690,10 @@ export function normaliseToday(value: unknown): TodayLearning {
 
 export function normaliseLearningAction(value: unknown): LearningActionResponse {
   const record = asRecord(unwrap(value)) ?? {};
-  const unit = record.unit ? normaliseAttempt({ ...(asRecord(record.unit) ?? {}), attempt: record.attempt }) : null;
+  // Reveal returns a flat public unit; rating returns a { unit, attempt } envelope.
+  // Keep the public question/answer and use only the explicit attempt identity.
+  const unitRecord = asRecord(record.unit) ?? (record.day_unit_id && typeof record.question === 'string' ? record : null);
+  const unit = unitRecord ? normaliseAttempt({ ...unitRecord, attempt: record.attempt ?? unitRecord.attempt }) : null;
   const attempt = record.attempt ? normaliseAttempt({ attempt: record.attempt }) : null;
   const additional = record.additional_attempt ? normaliseAttempt({ attempt: record.additional_attempt }) : null;
   return {
@@ -704,4 +709,19 @@ export function normaliseLearningAction(value: unknown): LearningActionResponse 
     unit,
     progress: asRecord(record.progress),
   };
+}
+
+/** Keep the just-rated card visible in manual mode only against a fresh matching day. */
+export function manualRatedAttempt(summary: TodayLearning, action: LearningActionResponse, previous: TodayLearning): TodayAttempt | null {
+  const rated = action.unit;
+  const prior = previous.current_attempt;
+  const actionVersion = action.state_version ?? action.day_version;
+  if (!rated || !prior || !rated.revealed || !rated.completed || !rated.rating) return null;
+  if (summary.status !== 'active' || summary.date !== previous.date || action.study_date !== summary.date) return null;
+  if (summary.round !== previous.round || rated.round !== prior.round) return null;
+  if (actionVersion == null || summary.state_version !== actionVersion) return null;
+  if (rated.id !== prior.id || rated.day_unit_id !== prior.day_unit_id || rated.card_id !== prior.card_id) return null;
+  if (rated.content_revision_no !== prior.content_revision_no) return null;
+  if (!summary.queue.some(card => card.id === rated.card_id && !card.is_paused && !card.is_archived)) return null;
+  return rated;
 }

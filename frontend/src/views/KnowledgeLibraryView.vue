@@ -1,13 +1,21 @@
 <template>
-  <div class="page-stack library-page">
-    <header class="surface p-5 sm:p-6">
+  <div class="page-stack library-page" :class="{ 'android-library': isAndroidApp, 'reader-large': isAndroidApp && largeText, 'reader-focused': isAndroidApp && focusedReading, 'show-question': androidPanel === 'question' }">
+    <header class="surface p-5 sm:p-6 reader-selection">
       <div class="flex flex-wrap justify-between items-start gap-3">
-        <div>
+        <div v-if="isAndroidApp" class="reader-book-title">
+          <p class="reader-eyebrow"><BookOpen :size="15" aria-hidden="true" /> 我的学习手账 · 教材研读</p>
+          <h1 class="font-display font-bold text-ink">{{ selectedDocument?.filename || '选一本教材，开始研读' }}</h1>
+          <p class="text-xs text-sub mt-2">{{ selectedChapter?.title || '总结、导图与背诵，沿着章节学扎实。' }}</p>
+        </div>
+        <div v-else>
           <p class="text-xs text-accent font-semibold mb-2">读懂教材 · 联系真题 · 随时复习</p>
           <h1 class="font-display text-2xl font-bold text-ink">知识库学习</h1>
           <p class="text-sm text-sub mt-2">按章整理总结、思维导图和背诵段落，带着教材依据提问。</p>
         </div>
-        <button class="btn btn-secondary" :disabled="materialsLoading" @click="loadMaterials">{{ materialsLoading ? '刷新中…' : '刷新资料' }}</button>
+        <div class="flex flex-wrap gap-2">
+          <button v-if="isAndroidApp" class="btn btn-secondary reader-select-toggle" type="button" aria-controls="reader-material-selection" :aria-expanded="readerSelectionOpen" @click="toggleReaderSelection"><ChevronDown :size="16" :class="{ 'rotate-180': readerSelectionOpen }" aria-hidden="true" />{{ readerSelectionOpen ? '收起选择' : '切换教材 / 章节' }}</button>
+          <button class="btn btn-secondary" :disabled="materialsLoading" @click="loadMaterials">{{ materialsLoading ? '刷新中…' : '刷新资料' }}</button>
+        </div>
       </div>
       <p v-if="materialsError" class="notice text-err bg-err/5 mt-4" role="alert">{{ materialsError }}</p>
       <p v-if="materialsLoading && !documents.length" class="text-sm text-sub mt-5" role="status">正在读取资料…</p>
@@ -16,7 +24,7 @@
         <p class="text-sm text-sub mt-2">导入教材并完成解析后，就可以选择章节学习。</p>
         <RouterLink class="btn btn-primary mt-4" to="/materials">去导入资料</RouterLink>
       </div>
-      <div v-else class="grid sm:grid-cols-2 gap-4 mt-5">
+      <div v-else v-show="!isAndroidApp || readerSelectionOpen" id="reader-material-selection" class="grid sm:grid-cols-2 gap-4 mt-5">
         <label class="min-w-0">
           <span class="field-label">学习教材</span>
           <select v-model="selectedDocId" class="field" :disabled="materialsLoading">
@@ -36,9 +44,9 @@
       </div>
       <p v-if="chaptersError" class="notice text-err bg-err/5 mt-3" role="alert">{{ chaptersError }}</p>
       <p v-else-if="selectedDocId && !chaptersLoading && !chapters.length" class="text-sm text-sub mt-3">尚未找到可用章节，请检查教材解析结果。</p>
-      <a v-if="selectedDocument" :href="apiClient.documentFileUrl(selectedDocument.id)" target="_blank" rel="noreferrer" class="inline-block text-xs text-accent underline mt-3">查看教材原文件</a>
+      <a v-if="selectedDocument" :href="apiClient.documentFileUrl(selectedDocument.id)" target="_blank" rel="noreferrer" class="inline-block text-xs text-accent underline mt-3 reader-original-link">查看教材原文件</a>
       <p v-if="selectedDocument?.filename.toLowerCase().endsWith('.docx')" class="text-xs text-faint mt-3">DOCX 按可读取文字整理，图片和公式请对照原文件核对。</p>
-      <details v-if="selectedDocId" class="mt-4 border-t border-line pt-4">
+      <details v-if="selectedDocId" v-show="!isAndroidApp || readerSelectionOpen" class="mt-4 border-t border-line pt-4">
         <summary class="text-sm text-sub cursor-pointer font-medium">补充资料范围（可选）</summary>
         <div class="grid sm:grid-cols-2 gap-5 mt-4">
           <fieldset class="min-w-0">
@@ -62,17 +70,34 @@
       </details>
     </header>
 
+    <div v-if="isAndroidApp" class="reader-tools surface" aria-label="阅读工具">
+      <div class="reader-panel-switch" role="group" aria-label="学习面板">
+        <button type="button" :aria-pressed="androidPanel === 'reading'" @click="androidPanel = 'reading'"><BookOpen :size="16" aria-hidden="true" /> 阅读</button>
+        <button type="button" :aria-pressed="androidPanel === 'question'" @click="androidPanel = 'question'"><MessageCircle :size="16" aria-hidden="true" /> 问答</button>
+      </div>
+      <div class="reader-display-tools">
+        <div class="reader-text-size" role="group" aria-label="阅读字号">
+          <button type="button" :aria-pressed="!largeText" @click="largeText = false">标准</button>
+          <button type="button" :aria-pressed="largeText" @click="largeText = true"><span class="reader-large-a" aria-hidden="true">大</span>大字</button>
+        </div>
+        <button type="button" class="reader-focus-button" :aria-pressed="focusedReading" @click="toggleFocusedReading"><Focus :size="16" aria-hidden="true" />{{ focusedReading ? '退出专注' : '专注阅读' }}</button>
+      </div>
+    </div>
+
     <div class="library-grid">
-      <main class="surface min-w-0 overflow-hidden" aria-labelledby="chapter-heading">
+      <main class="surface min-w-0 overflow-hidden reader-reading-panel" aria-labelledby="chapter-heading">
         <div class="p-5 sm:p-6 border-b border-line">
           <div class="flex flex-wrap justify-between gap-3 items-start">
             <div class="min-w-0">
               <h2 id="chapter-heading" class="font-display text-lg font-bold text-ink">{{ selectedChapter?.title || '章节学习' }}</h2>
-              <p class="text-xs text-sub mt-2">点击生成会调用服务端配置的 AI 模型，并保存结果。</p>
+              <p class="text-xs text-sub mt-2 reader-generation-help">点击生成会调用服务端配置的 AI 模型，并保存结果。</p>
             </div>
-            <button class="btn btn-primary shrink-0" :disabled="!selectedChapterId || generating || !!guideTaskSyncError || guideTasksLoading || chaptersLoading || guidesLoading" @click="generateGuide">
+            <div class="flex flex-wrap gap-2 reader-chapter-actions">
+              <button v-if="isAndroidApp" type="button" class="btn btn-secondary" :disabled="!selectedChapterId || chaptersLoading" @click="openChapterQuestion"><MessageCircle :size="16" aria-hidden="true" />问本章</button>
+            <button class="btn btn-primary shrink-0 reader-generate-button" :disabled="!selectedChapterId || generating || !!guideTaskSyncError || guideTasksLoading || chaptersLoading || guidesLoading" @click="generateGuide">
               {{ submittingGuide ? '正在提交…' : generating ? '正在生成…' : activeGuide ? '重新生成' : '生成章节资料' }}
             </button>
+            </div>
           </div>
           <div v-if="generationTask" class="text-xs text-sub mt-3 space-y-2" role="status">
             <p>{{ generationTask.message || '章节生成任务' }} · {{ generationTask.progress }}%</p>
@@ -84,7 +109,7 @@
             <button class="underline underline-offset-2 ml-2" @click="loadGuideTasks">重新获取任务状态</button>
           </p>
           <p v-if="guideError" class="notice text-err bg-err/5 mt-4" role="alert">{{ guideError }}</p>
-          <label v-if="guides.length" class="block mt-4">
+          <label v-if="guides.length" class="block mt-4 reader-saved-versions">
             <span class="field-label">已保存的学习资料</span>
             <select v-model="selectedGuideId" class="field text-sm">
               <option v-for="guide in guides" :key="guide.id" :value="guide.id">{{ formatTime(guide.created_at) }}{{ guide.source_stale ? ' · 来源已变化' : '' }}</option>
@@ -107,7 +132,7 @@
           <div class="tabs-scroll border-b border-line px-5 mt-2" role="tablist" aria-label="章节内容">
             <button v-for="tab in tabs" :id="`library-tab-${tab.id}`" :key="tab.id" type="button" role="tab" :aria-selected="activeTab === tab.id" :aria-controls="`library-panel-${activeTab}`" class="tab-button" :class="activeTab === tab.id ? 'text-accent border-accent' : 'text-sub border-transparent'" @click="activeTab = tab.id">{{ tab.label }}</button>
           </div>
-          <section :id="`library-panel-${activeTab}`" role="tabpanel" :aria-labelledby="`library-tab-${activeTab}`" class="p-5 sm:p-6 space-y-5">
+          <section :id="`library-panel-${activeTab}`" role="tabpanel" :aria-labelledby="`library-tab-${activeTab}`" class="p-5 sm:p-6 space-y-5 reader-content" :class="{ 'reader-map-content': activeTab === 'map' }">
             <template v-if="activeTab === 'summary'">
               <div class="reading-content whitespace-pre-wrap">{{ activeGuide.summary }}</div>
               <h3 class="font-semibold text-ink border-t border-line pt-5">核心概念</h3>
@@ -207,9 +232,11 @@
         </template>
       </main>
 
-      <aside class="space-y-5 min-w-0" aria-labelledby="ask-heading">
+      <aside ref="questionPanel" class="space-y-5 min-w-0 reader-question-panel" aria-labelledby="ask-heading">
         <section class="surface p-5">
-          <h2 id="ask-heading" class="font-display text-lg font-bold text-ink">向知识库提问</h2>
+          <div v-if="isAndroidApp" class="reader-question-heading"><span class="reader-question-icon"><MessageCircle :size="20" aria-hidden="true" /></span><div><p class="reader-eyebrow">把不懂的地方，问明白</p><h2 id="ask-heading" ref="questionHeading" tabindex="-1" class="font-display text-lg font-bold text-ink">学习问答</h2></div></div>
+          <h2 v-else id="ask-heading" class="font-display text-lg font-bold text-ink">向知识库提问</h2>
+          <p v-if="isAndroidApp && qaChapterId" class="reader-question-scope"><BookOpen :size="14" aria-hidden="true" />{{ chapters.find(chapter => chapter.id === qaChapterId)?.title || '已选章节' }}</p>
           <p class="text-xs text-sub mt-2">回答限定在所选资料内，支持基于当前回答追问。</p>
           <form class="mt-4 space-y-4" @submit.prevent="askQuestion">
             <details>
@@ -283,13 +310,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { BookOpen } from 'lucide-vue-next';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { BookOpen, ChevronDown, Focus, MessageCircle } from 'lucide-vue-next';
 import { apiClient, sessionTransport } from '../api/client';
 import { libraryApi } from '../api/library';
 import SourceQuoteModal from '../components/SourceQuoteModal.vue';
 import KnowledgeMindMap from '../components/KnowledgeMindMap.vue';
 import { useTaskManager } from '../composables/useTaskManager';
+import { isAndroidApp } from '../utils/clientPlatform';
 import type { DocumentItem, TaskStatus } from '../types';
 import type { LibraryAnswer, LibraryChapter, LibraryCitation, LibraryGuide } from '../types/library';
 
@@ -331,6 +359,12 @@ const answersLoading = ref(false);
 const answersError = ref('');
 const answerSourcesVerified = ref(false);
 const answerHistoryVerified = ref(false);
+const readerSelectionOpen = ref(!isAndroidApp);
+const largeText = ref(false);
+const focusedReading = ref(false);
+const androidPanel = ref<'reading' | 'question'>('reading');
+const questionPanel = ref<HTMLElement | null>(null);
+const questionHeading = ref<HTMLElement | null>(null);
 let materialsSequence = 0;
 let chapterSequence = 0;
 let guideSequence = 0;
@@ -355,6 +389,29 @@ const followUpAvailable = computed(() => answerSourcesVerified.value && !!active
 const selectedMapConcept = computed(() => activeGuide.value?.concepts.find(concept => concept.name === selectedMapNode.value));
 const selectedMapExamPoints = computed(() => activeGuide.value?.exam_points.filter(point => point.concept === selectedMapNode.value) || []);
 const selectedMapConnections = computed(() => activeGuide.value?.connections.filter(connection => connection.accounting_concept === selectedMapNode.value) || []);
+
+function toggleReaderSelection() {
+  readerSelectionOpen.value = !readerSelectionOpen.value;
+  if (readerSelectionOpen.value) focusedReading.value = false;
+}
+
+function toggleFocusedReading() {
+  focusedReading.value = !focusedReading.value;
+  if (focusedReading.value) {
+    readerSelectionOpen.value = false;
+    androidPanel.value = 'reading';
+  }
+}
+
+async function openChapterQuestion() {
+  if (!selectedChapterId.value || !selectedDocId.value) return;
+  qaDocIds.value = [selectedDocId.value];
+  qaChapterId.value = selectedChapterId.value;
+  androidPanel.value = 'question';
+  await nextTick();
+  questionHeading.value?.focus({ preventScroll: true });
+  questionPanel.value?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
 
 function errorText(error: unknown, fallback: string): string {
   const response = error as { response?: { data?: { detail?: unknown }; status?: number }; code?: string };
@@ -651,4 +708,66 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(generationTimer); ++genera
 .history-button:hover { background: rgb(var(--c-raised)); }
 .history-button:disabled { opacity: .5; cursor: not-allowed; }
 @media (min-width: 1100px) { .library-grid { grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); } }
+
+/* Android keeps the same learning and source checks, with a reading-first layout. */
+.android-library { gap: 1rem; }
+.android-library .reader-selection { padding: 1.1rem; border-radius: 1.25rem; }
+.reader-book-title { flex: 1 1 15rem; }
+.reader-book-title h1 { margin-top: .65rem; font-size: 1.15rem; line-height: 1.55; }
+.reader-eyebrow { display: flex; align-items: center; gap: .4rem; color: rgb(var(--c-accent)); font-size: .72rem; font-weight: 650; letter-spacing: .04em; }
+.reader-select-toggle svg { transition: transform .2s; }
+.reader-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .65rem; padding: .65rem; border-radius: 1.25rem; }
+.reader-panel-switch, .reader-text-size { display: flex; align-items: center; border-radius: .85rem; background: rgb(var(--c-raised)); padding: .2rem; }
+.reader-panel-switch button, .reader-text-size button, .reader-focus-button { display: flex; align-items: center; justify-content: center; gap: .35rem; min-height: 44px; padding: .55rem .8rem; border-radius: .7rem; font-size: .82rem; font-weight: 600; color: rgb(var(--c-sub)); }
+.reader-panel-switch button[aria-pressed="true"], .reader-text-size button[aria-pressed="true"] { background: rgb(var(--c-surface)); color: rgb(var(--c-accent)); box-shadow: 0 1px 4px rgb(var(--c-ink) / .07); }
+.reader-display-tools { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+.reader-focus-button { border: 1px solid rgb(var(--c-line)); }
+.reader-focus-button[aria-pressed="true"] { color: rgb(var(--c-accent)); background: rgb(var(--c-accent) / .09); border-color: rgb(var(--c-accent) / .3); }
+.reader-large-a { font-size: 1.05rem; }
+.reader-tools button:focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; }
+.android-library .reader-reading-panel, .android-library .reader-question-panel > section { border-radius: 1.25rem; }
+.android-library .reader-reading-panel > div:first-child { padding: 1.1rem; }
+.android-library .reader-reading-panel h2 { font-size: 1.15rem; line-height: 1.6; }
+.android-library .reader-chapter-actions { width: 100%; }
+.android-library .reader-chapter-actions .btn { flex: 1; }
+.android-library .tabs-scroll { gap: 1.15rem; padding-inline: 1.1rem; background: rgb(var(--c-accent) / .025); }
+.android-library .tab-button { min-height: 52px; font-size: .85rem; }
+.android-library .reader-content { padding: 1.15rem; }
+.android-library .reader-content:not(.reader-map-content) > * { max-width: 70ch; margin-left: auto; margin-right: auto; }
+.android-library .reading-content { font-size: 1rem; line-height: 1.95; color: rgb(var(--c-ink)); }
+.android-library.reader-large .reading-content { font-size: 1.2rem; line-height: 1.95; }
+.android-library .content-card { padding: 1.1rem; border-radius: 1rem; background: rgb(var(--c-raised) / .35); }
+.android-library .citation-button { min-height: 44px; display: inline-flex; align-items: center; padding: .55rem .7rem; }
+.android-library summary { min-height: 44px; align-content: center; }
+.android-library .check-row { min-height: 44px; align-items: center; }
+.android-library .check-row input { width: 18px; height: 18px; margin-top: 0; }
+.reader-question-heading { display: flex; align-items: center; gap: .7rem; }
+.reader-question-heading .reader-eyebrow { margin-bottom: .25rem; }
+.reader-question-icon { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: .9rem; color: rgb(var(--c-accent)); background: rgb(var(--c-accent) / .08); }
+.reader-question-scope { display: flex; align-items: center; gap: .35rem; margin-top: 1rem; padding: .7rem; border-radius: .7rem; font-size: .75rem; color: rgb(var(--c-accent)); background: rgb(var(--c-accent) / .06); }
+.reader-question-scope svg { flex-shrink: 0; }
+.android-library .reader-question-panel { scroll-margin-top: 1rem; }
+.android-library.reader-focused .reader-generation-help,
+.android-library.reader-focused .reader-generate-button,
+.android-library.reader-focused .reader-saved-versions { display: none; }
+.android-library.reader-focused .reader-book-title h1 { font-size: .95rem; margin-top: .35rem; }
+@media (max-width: 839px) {
+  .android-library .library-grid { grid-template-columns: minmax(0, 1fr); }
+  .android-library:not(.show-question) .reader-question-panel,
+  .android-library.show-question .reader-reading-panel { display: none; }
+  .android-library .reader-panel-switch { width: 100%; }
+  .android-library .reader-panel-switch button { flex: 1; }
+  .android-library .reader-display-tools { width: 100%; justify-content: space-between; }
+  .android-library .reader-selection > div:first-child > .flex { width: 100%; }
+  .android-library .reader-selection > div:first-child > .flex .btn:first-child { flex: 1; }
+}
+@media (min-width: 840px) {
+  .android-library .library-grid { grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); gap: 1.25rem; }
+  .android-library .reader-panel-switch { display: none; }
+  .android-library .reader-tools { justify-content: flex-end; }
+  .android-library .reader-reading-panel > div:first-child, .android-library .reader-content { padding: 1.4rem; }
+  .android-library .reader-chapter-actions { width: auto; }
+  .android-library .reader-chapter-actions .btn { flex: initial; }
+  .android-library.reader-focused .library-grid { grid-template-columns: minmax(0, 1.8fr) minmax(280px, 1fr); }
+}
 </style>

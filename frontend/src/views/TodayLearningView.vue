@@ -1,6 +1,34 @@
 <template>
-  <div class="page-stack">
-    <header class="surface p-5 sm:p-6 space-y-5">
+  <div class="page-stack" :class="{ 'android-today': isAndroidApp, 'is-focused': isAndroidApp && focusMode }">
+    <header v-if="isAndroidApp && !focusMode" class="surface study-journal-header">
+      <div class="journal-heading">
+        <div>
+          <p class="journal-eyebrow">我的学习手账 · {{ studyDate }}</p>
+          <h1>今天，学一点扎实的</h1>
+          <p class="journal-intro">先回想，再看答案。把读过的知识，变成自己的。</p>
+        </div>
+        <span class="chip" :class="statusClass(today.status)">{{ statusLabel(today.status) }}</span>
+      </div>
+      <div class="journal-stats" aria-label="今日学习统计">
+        <div><strong>{{ today.remaining }}</strong><span>待回忆</span></div>
+        <div><strong>{{ today.completed }}</strong><span>已完成 / 共 {{ today.total }}</span></div>
+        <div><strong>{{ today.new_count }} / {{ today.review_count }}</strong><span>新卡 / 复习</span></div>
+      </div>
+      <div class="journal-progress" role="progressbar" aria-label="今日完成进度" :aria-valuenow="completionPercent" aria-valuemin="0" aria-valuemax="100">
+        <span :style="{ width: `${completionPercent}%` }" />
+      </div>
+      <div class="journal-actions">
+        <button v-if="today.status === 'paused' || today.status === 'idle'" type="button" class="btn btn-primary" :disabled="busy || loading" @click="openToday">{{ busy ? '准备中…' : today.status === 'paused' ? '继续今日学习' : '开始今日学习' }}</button>
+        <button v-else-if="roundComplete && !dayComplete" type="button" class="btn btn-primary" :disabled="busy || loading" @click="advanceDay">{{ finalRound ? '完成今日学习' : '进入下一轮' }}</button>
+        <button v-else-if="today.status === 'active'" type="button" class="btn btn-primary" :disabled="busy || loading" @click="pauseToday">暂停学习</button>
+        <button type="button" class="btn btn-secondary" :disabled="busy || loading" @click="refreshToday()">{{ loading ? '刷新中…' : '刷新队列' }}</button>
+      </div>
+      <nav class="journal-shortcuts" aria-label="学习快捷入口">
+        <router-link to="/library"><BookOpen aria-hidden="true" /><span>读教材<small>理解章节，梳理知识</small></span><ChevronRight aria-hidden="true" /></router-link>
+        <router-link to="/recall"><Layers aria-hidden="true" /><span>回忆卡库<small>整理卡片，温故知新</small></span><ChevronRight aria-hidden="true" /></router-link>
+      </nav>
+    </header>
+    <header v-else-if="!isAndroidApp" class="surface p-5 sm:p-6 space-y-5">
       <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div class="flex flex-wrap items-center gap-2">
@@ -29,8 +57,8 @@
           <button v-else-if="today.status === 'active'" type="button" class="btn btn-secondary" :disabled="busy || loading" @click="pauseToday">
             暂停学习
           </button>
-          <button v-else-if="roundComplete" type="button" class="btn btn-primary" :disabled="busy || loading" @click="advanceDay">
-            进入下一轮
+          <button v-else-if="roundComplete && !dayComplete" type="button" class="btn btn-primary" :disabled="busy || loading" @click="advanceDay">
+            {{ finalRound ? '完成今日学习' : '进入下一轮' }}
           </button>
         </div>
       </div>
@@ -63,7 +91,11 @@
       {{ pageError }}
     </div>
 
-    <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
+    <div v-if="isAndroidApp" class="study-focus-toolbar">
+      <p>{{ focusMode ? '专注背诵' : '今日回忆' }}<span v-if="today.round"> · {{ roundLabel(today.round) }}</span></p>
+      <button v-if="today.current_attempt || focusMode" type="button" class="btn btn-secondary" :aria-pressed="focusMode" @click="focusMode = !focusMode">{{ focusMode ? '退出专注' : '专注背诵' }}</button>
+    </div>
+    <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]" :class="{ 'study-layout': isAndroidApp }">
       <div>
         <RecallSession
           :attempt="today.current_attempt"
@@ -72,6 +104,9 @@
           :show-hints="settings.show_hints !== false"
           :round-complete="roundComplete"
           :day-complete="dayComplete"
+          :final-round="finalRound"
+          :focused="isAndroidApp && focusMode"
+          :session-state="today.status"
           @reveal="revealCurrent"
           @rate="rateCurrent"
           @next="nextCard"
@@ -81,7 +116,15 @@
         />
       </div>
 
-      <aside class="space-y-4">
+      <aside v-if="!isAndroidApp || !focusMode" class="space-y-4 study-aside">
+        <button v-if="isAndroidApp" type="button" class="btn btn-secondary study-options-toggle" :aria-expanded="studyOptionsOpen" aria-controls="today-study-options" @click="studyOptionsOpen = !studyOptionsOpen">
+          学习范围与设置 <ChevronDown aria-hidden="true" :class="{ 'rotate-180': studyOptionsOpen }" />
+        </button>
+        <div v-if="isAndroidApp && !studyOptionsOpen" class="study-collapsed-feedback" aria-live="polite">
+          <p v-if="scopeError || settingsError" class="text-err" role="alert">{{ scopeError || settingsError }} 请展开设置查看。</p>
+          <p v-else-if="scopeNotice || settingsNotice" class="text-ok">{{ scopeNotice || settingsNotice }}</p>
+        </div>
+        <div id="today-study-options" v-show="!isAndroidApp || studyOptionsOpen" class="space-y-4 study-options-content">
         <section class="surface p-4 sm:p-5">
           <div class="flex items-center justify-between gap-2">
             <div>
@@ -186,6 +229,7 @@
             </span>
           </label>
         </section>
+        </div>
       </aside>
       </div>
     </div>
@@ -225,12 +269,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { BookOpen, ChevronDown, ChevronRight, Layers } from 'lucide-vue-next';
+import { isAndroidApp } from '../utils/clientPlatform';
 import { apiClient } from '../api/client';
 import BaseModal from '../components/BaseModal.vue';
 import RecallSession from '../components/RecallSession.vue';
 import type { AttemptRating, LearningChapter, LearningScope, LearningSettings, TodayLearning } from '../types/learning';
-import { normaliseScope, normaliseSettings, normaliseToday } from '../types/learning';
+import { manualRatedAttempt, normaliseScope, normaliseSettings, normaliseToday } from '../types/learning';
+
+const focusMode = ref(false);
+const studyOptionsOpen = ref(false);
+const studyDate = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
 
 const newRequestId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -247,6 +297,9 @@ const defaultSettings: LearningSettings = {
 };
 
 const today = ref<TodayLearning>(normaliseToday(null));
+watch(() => today.value.status, status => {
+  if (status === 'idle' || status === 'paused') focusMode.value = false;
+});
 const settings = ref<LearningSettings>({ ...defaultSettings });
 const chapters = ref<LearningChapter[]>([]);
 const selectedChapterIds = ref<string[]>([]);
@@ -297,6 +350,7 @@ const handleDayChangedClose = () => {
 const todayRecord = computed(() => today.value as TodayLearning & Record<string, unknown>);
 const emptyReason = computed(() => typeof todayRecord.value.empty_reason === 'string' ? todayRecord.value.empty_reason : null);
 const roundComplete = computed(() => todayRecord.value.round_complete === true || emptyReason.value === 'round_completed');
+const finalRound = computed(() => today.value.round === 3 || today.value.round === 'evening');
 const dayComplete = computed(() => todayRecord.value.day_completed === true || emptyReason.value === 'day_completed' || today.value.status === 'completed');
 
 const completionPercent = computed(() => {
@@ -434,21 +488,40 @@ const revealCurrent = async () => {
 };
 
 const rateCurrent = async (rating: AttemptRating) => {
-  const attempt = today.value.current_attempt;
+  const previousDay = today.value;
+  const attempt = previousDay.current_attempt;
   if (!attempt) return;
   busy.value = true;
   try {
     const requestId = ratingRequestIds.value[attempt.id] ?? newRequestId();
     ratingRequestIds.value[attempt.id] = requestId;
-    await apiClient.rateLearningAttempt(attempt.id, {
+    const action = await apiClient.rateLearningAttempt(attempt.id, {
       rating,
       request_id: requestId,
       content_revision_no: attempt.content_revision_no || undefined,
       day_unit_id: attempt.day_unit_id || undefined,
       day_version: today.value.state_version || undefined,
     });
-    await refreshToday();
-    if (settings.value.auto_advance && !roundComplete.value && today.value.current_attempt?.id === attempt.id) await nextCard();
+    const refreshed = await refreshToday();
+    if (!refreshed) {
+      // The write succeeded, but the day may have changed; do not offer another
+      // rating or restore a card against an unconfirmed day version.
+      if (today.value.current_attempt?.id === attempt.id) {
+        today.value.current_attempt = null;
+        today.value.current_card = null;
+      }
+      pageError.value = `评分已记录，但今日队列刷新失败，请刷新队列后继续。${pageError.value}`;
+      return;
+    }
+    if (!settings.value.auto_advance) {
+      const retained = manualRatedAttempt(today.value, action, previousDay);
+      if (retained) {
+        today.value.current_attempt = retained;
+        today.value.current_card = retained.card ?? today.value.queue.find(card => card.id === retained.card_id) ?? null;
+      }
+    } else if (!roundComplete.value && today.value.current_attempt?.id === attempt.id) {
+      await nextCard();
+    }
   } catch (error) {
     if (checkDayChangedError(error)) return;
     pageError.value = error instanceof Error ? error.message : '记录难度失败，请稍后重试。';
@@ -634,3 +707,53 @@ const loadPage = async () => {
 
 onMounted(loadPage);
 </script>
+
+<style scoped>
+.android-today { gap: 20px; }
+.study-journal-header { padding: 24px 20px 20px; }
+.journal-heading { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; }
+.journal-heading > div { min-width: 0; }
+.journal-eyebrow { color: rgb(var(--c-accent)); font-size: 12px; font-weight: 600; letter-spacing: .06em; }
+.journal-heading h1 { margin-top: 10px; color: rgb(var(--c-ink)); font-size: 24px; font-weight: 750; line-height: 1.45; letter-spacing: -.025em; }
+.journal-intro { margin-top: 8px; font-size: 13px; line-height: 1.8; color: rgb(var(--c-sub)); }
+.journal-heading > .chip { flex-shrink: 0; }
+.journal-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 28px; }
+.journal-stats > div { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid rgb(var(--c-line)); padding-left: 12px; }
+.journal-stats > div:first-child { padding-left: 0; }
+.journal-stats > div:last-child { border: 0; }
+.journal-stats strong { color: rgb(var(--c-accent)); font-size: 24px; font-weight: 700; line-height: 1.4; }
+.journal-stats span { font-size: 11px; color: rgb(var(--c-sub)); }
+.journal-progress { height: 5px; margin-top: 20px; overflow: hidden; border-radius: 99px; background: rgb(var(--c-raised)); }
+.journal-progress span { display: block; height: 100%; border-radius: inherit; background: rgb(var(--c-accent)); transition: width .2s; }
+.journal-actions { display: flex; gap: 10px; margin-top: 20px; }
+.journal-actions > .btn:first-child { flex: 1; }
+.android-today :deep(.btn) { min-height: 48px; }
+.journal-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; border-top: 1px solid rgb(var(--c-line)); padding-top: 18px; }
+.journal-shortcuts a { display: flex; align-items: center; gap: 9px; min-height: 48px; color: rgb(var(--c-ink)); font-size: 13px; font-weight: 650; }
+.journal-shortcuts svg { width: 20px; height: 20px; flex-shrink: 0; color: rgb(var(--c-accent)); }
+.journal-shortcuts a > svg:last-child { width: 14px; height: 14px; margin-left: auto; }
+.journal-shortcuts small { display: block; margin-top: 3px; font-size: 10px; font-weight: 400; color: rgb(var(--c-sub)); line-height: 1.6; }
+.study-focus-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.study-focus-toolbar p { color: rgb(var(--c-ink)); font-size: 14px; font-weight: 650; }
+.study-focus-toolbar p span { color: rgb(var(--c-sub)); font-size: 12px; font-weight: 400; }
+.study-options-toggle { width: 100%; justify-content: space-between; }
+.study-options-toggle svg { width: 18px; height: 18px; }
+.study-collapsed-feedback { font-size: 12px; line-height: 1.8; }
+.android-today .study-aside :deep(label) { min-height: 44px; }
+.android-today .study-aside :deep(input[type='checkbox']) { width: 18px; height: 18px; flex-shrink: 0; }
+.android-today .study-aside :deep(button) { min-height: 44px; }
+.android-today .study-aside :deep(.field) { min-height: 48px; font-size: 16px; }
+.android-today.is-focused .study-layout { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 840px) {
+  .study-journal-header { padding: 28px; }
+  .journal-heading h1 { font-size: 28px; }
+  .journal-stats { max-width: 650px; }
+  .journal-actions { max-width: 440px; }
+  .journal-shortcuts { max-width: 650px; }
+  .journal-shortcuts small { font-size: 12px; }
+  .study-layout { grid-template-columns: minmax(0, 1fr) 250px; align-items: start; gap: 20px; }
+  .study-options-toggle, .study-collapsed-feedback { display: none; }
+  .study-options-content { display: block !important; }
+  .android-today.is-focused { max-width: 1100px; margin-inline: auto; width: 100%; }
+}
+</style>

@@ -1,16 +1,19 @@
 <template>
   <div class="min-h-screen bg-page flex flex-col">
-    <Navbar v-if="showShell" />
+    <Navbar v-if="showShell && !isAndroidApp" />
     <LogNavNotice v-if="showShell" />
 
-    <main class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
+    <AndroidStudyShell v-if="showShell && isAndroidApp">
+      <router-view :key="sessionKey" />
+    </AndroidStudyShell>
+    <main v-else class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
       <router-view :key="sessionKey" />
     </main>
 
     <!-- Global Task Drawer -->
     <TaskDrawer v-if="showShell" />
 
-    <footer v-if="showShell" class="bg-surface border-t border-line py-4 text-center text-xs text-faint">
+    <footer v-if="showShell && !isAndroidApp" class="bg-surface border-t border-line py-4 text-center text-xs text-faint">
       <div class="max-w-7xl mx-auto px-4 flex flex-wrap items-center justify-between gap-2">
         <span>学习助手</span>
         <span>教材切片依据追溯 · 考查频次统计 · 规范答题框架</span>
@@ -28,6 +31,8 @@
 </template>
 
 <script setup lang="ts">
+import AndroidStudyShell from './components/AndroidStudyShell.vue';
+import { isAndroidApp } from './utils/clientPlatform';
 import Navbar from './components/Navbar.vue';
 import LogNavNotice from './components/LogNavNotice.vue';
 import TaskDrawer from './components/TaskDrawer.vue';

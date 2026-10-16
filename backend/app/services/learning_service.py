@@ -1296,6 +1296,9 @@ class LearningService:
                 "study_date": study_date.isoformat(),
                 "status": "not_open",
                 "opened": False,
+                "round_complete": False,
+                "day_completed": False,
+                "can_advance": False,
                 "current_round": None,
                 "override_enabled": False,
                 "state_version": None,
@@ -1343,12 +1346,24 @@ class LearningService:
                 attempts.sort(key=lambda a: int(a.get("attempt_index") or 0))
                 candidate = next((a for a in attempts if str(a.get("status") or "pending") in {"pending", "revealed"}), None)
                 if candidate:
-                    next_item = cls._unit_public(row, revealed=False, attempt=candidate)
+                    # Restore a previously revealed current attempt on reload,
+                    # while queue summaries and future attempts remain concealed.
+                    revealed = candidate.get("status") == "revealed" and bool(candidate.get("revealed_at"))
+                    next_item = cls._unit_public(row, revealed=revealed, attempt=candidate)
                     break
+        day_completed = day.get("status") == "completed"
+        round_complete = day_completed or (
+            day.get("status") == "active"
+            and bool(active_rows)
+            and cls._current_round_complete(db, day, study_date)
+        )
         return {
             "study_date": study_date.isoformat(),
             "status": day.get("status"),
             "opened": True,
+            "round_complete": round_complete,
+            "day_completed": day_completed,
+            "can_advance": round_complete and not day_completed,
             "current_round": current_round,
             "override_enabled": bool(day.get("override_enabled")),
             "state_version": int(day.get("state_version") or 1),
