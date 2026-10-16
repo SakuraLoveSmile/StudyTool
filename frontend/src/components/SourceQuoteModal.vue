@@ -8,7 +8,7 @@
       leave-from-class="opacity-100"
       leave-to-class="opacity-0"
     >
-      <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-sink/50 backdrop-blur-sm p-4" @click.self="close">
+      <div v-if="isOpen" ref="dialog" role="dialog" aria-modal="true" aria-label="资料原文与定位溯源" tabindex="-1" class="fixed inset-0 z-50 flex items-center justify-center bg-sink/50 backdrop-blur-sm p-4" @click.self="close" @keydown="onDialogKeydown">
         <div class="bg-surface rounded-2xl shadow-pop w-full max-w-2xl overflow-hidden border border-line">
           <!-- Modal Header -->
           <div class="px-6 py-4 border-b border-line flex items-center justify-between bg-raised/60">
@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { FileText, X, Check, Loader2 } from 'lucide-vue-next';
 import { apiClient } from '../api/client';
 
@@ -103,6 +103,31 @@ const emit = defineEmits<{
 const editableContent = ref(props.content);
 const isSaving = ref(false);
 const savedSuccess = ref(false);
+const dialog = ref<HTMLElement>();
+let previousFocus: HTMLElement | null = null;
+
+function restoreFocus() {
+  if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+  previousFocus = null;
+}
+
+watch(() => props.isOpen, async open => {
+  if (!open) { restoreFocus(); return; }
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  await nextTick();
+  dialog.value?.focus({ preventScroll: true });
+}, { immediate: true });
+onBeforeUnmount(restoreFocus);
+
+function onDialogKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }
+  if (event.key !== 'Tab' || !dialog.value) return;
+  const focusable = Array.from(dialog.value.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], textarea:not([disabled]), [tabindex="0"]')).filter(element => element.getClientRects().length);
+  const first = focusable[0]; const last = focusable.at(-1);
+  if (!first || !last) return;
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
 
 watch(() => props.content, (newVal) => {
   editableContent.value = newVal;

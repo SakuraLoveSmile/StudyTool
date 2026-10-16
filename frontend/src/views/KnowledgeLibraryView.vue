@@ -121,14 +121,47 @@
               <p v-if="!activeGuide.concepts.length" class="text-sm text-faint">本次结果未整理出独立概念，请结合总结核对原文。</p>
             </template>
             <template v-else-if="activeTab === 'map'">
-              <KnowledgeMindMap :key="activeGuide.id" :map="activeGuide.mind_map" :exam-concepts="examConcepts" @select="selectMapNode" />
-              <div v-if="selectedMapNode" class="content-card">
-                <h3 class="font-semibold text-ink">{{ selectedMapNode }}</h3>
-                <p class="reading-content whitespace-pre-wrap mt-2">{{ selectedMapConcept?.explanation || '此节点为章节结构主题；详细解释请查看章节总结，或限定本章向知识库提问。' }}</p>
-                <div v-if="selectedMapConcept" class="flex flex-wrap gap-2 mt-3">
-                  <button v-for="(citation, index) in selectedMapConcept.citations" :key="index" class="citation-button" :disabled="!guideSourcesVerified || activeGuide.source_stale" @click="openCitation(citation)">查看原文 {{ index + 1 }}</button>
-                </div>
-              </div>
+              <KnowledgeMindMap :key="activeGuide.id" :map="activeGuide.mind_map" :exam-concepts="examConcepts" :management-concepts="managementConcepts" :selected-title="selectedMapNode" :source-dialog-open="!!sourceCitation" @select="selectMapNode">
+                <template #detail>
+                  <div v-if="selectedMapNode" class="space-y-4">
+                    <div class="flex items-start justify-between gap-3">
+                      <h3 class="font-semibold text-ink break-words min-w-0">{{ selectedMapNode }}</h3>
+                      <button type="button" class="text-xs text-sub shrink-0 hover:text-accent" @click="selectedMapNode = ''">收起详情</button>
+                    </div>
+                    <p class="reading-content whitespace-pre-wrap">{{ selectedMapConcept?.explanation || '此节点为章节结构主题。可展开分支查看具体概念，或在章节总结中阅读完整说明。' }}</p>
+                    <template v-if="selectedMapConcept">
+                      <p v-if="selectedMapConcept.keywords.length" class="text-xs text-accent">{{ selectedMapConcept.keywords.join(' · ') }}</p>
+                      <details v-if="selectedMapConcept.recitation" class="border-t border-line pt-3">
+                        <summary class="text-sm font-medium text-ink cursor-pointer">背诵短段</summary>
+                        <p class="reading-content whitespace-pre-wrap mt-2">{{ selectedMapConcept.recitation }}</p>
+                      </details>
+                      <div class="flex flex-wrap gap-2">
+                        <button v-for="(citation, index) in selectedMapConcept.citations" :key="index" type="button" class="citation-button" :disabled="!guideSourcesVerified || activeGuide.source_stale" @click="openCitation(citation)">查看原文 {{ index + 1 }}</button>
+                      </div>
+                    </template>
+                    <section v-if="selectedMapExamPoints.length" class="border-t border-line pt-3 space-y-2">
+                      <h4 class="text-sm font-medium text-warn">真题已考</h4>
+                      <article v-for="(point, index) in selectedMapExamPoints" :key="`${point.question_id}-${index}`" class="text-sm text-sub">
+                        <p class="text-xs text-faint">{{ point.year == null ? '年份未标注' : `${point.year} 年` }} · {{ point.doc_name }} · {{ point.location || '定位未标注' }}</p>
+                        <p class="whitespace-pre-wrap mt-1">{{ point.stem }}</p>
+                      </article>
+                    </section>
+                    <section v-if="selectedMapConnections.length" class="border-t border-line pt-3 space-y-3">
+                      <h4 class="text-sm font-medium text-accent">管理学关联</h4>
+                      <article v-for="(connection, index) in selectedMapConnections" :key="index" class="text-sm text-sub space-y-2">
+                        <p class="font-medium text-ink">{{ connection.management_concept }}</p>
+                        <p class="text-xs text-faint">{{ connection.evidence_level === 'suggestion' ? '关联建议 · 不是已考证据' : '有教材依据 · 不代表已考' }}</p>
+                        <p class="whitespace-pre-wrap">{{ connection.explanation }}</p>
+                        <p class="whitespace-pre-wrap"><span class="font-medium">答题运用：</span>{{ connection.application }}</p>
+                        <div class="flex flex-wrap gap-2">
+                          <button v-for="(citation, citationIndex) in connection.citations" :key="citationIndex" type="button" class="citation-button" :disabled="!guideSourcesVerified || activeGuide.source_stale" @click="openCitation(citation)">关联原文 {{ citationIndex + 1 }}</button>
+                        </div>
+                      </article>
+                    </section>
+                    <p v-if="!guideSourcesVerified || activeGuide.source_stale" class="text-xs text-warn" role="status">来源尚未核实或已变化，原文入口已停用。请刷新或重新生成资料。</p>
+                  </div>
+                </template>
+              </KnowledgeMindMap>
             </template>
             <template v-else-if="activeTab === 'recitation'">
               <p class="text-sm text-sub">先用关键词回想，再展开核对。背诵短段由 AI 整理，请以教材为准。</p>
@@ -315,10 +348,13 @@ const examOptions = computed(() => readyDocuments.value.filter(doc => ['exam', '
 const selectedChapter = computed(() => chapters.value.find(chapter => chapter.id === selectedChapterId.value));
 const activeGuide = computed(() => guides.value.find(guide => guide.id === selectedGuideId.value));
 const examConcepts = computed(() => activeGuide.value?.exam_points.map(point => point.concept) || []);
+const managementConcepts = computed(() => activeGuide.value?.connections.map(connection => connection.accounting_concept) || []);
 const effectiveQaDocIds = computed(() => qaChapterId.value ? qaDocIds.value.filter(id => id === selectedDocId.value) : qaDocIds.value);
 const qaScope = computed(() => JSON.stringify([effectiveQaDocIds.value.slice().sort(), qaChapterId.value]));
 const followUpAvailable = computed(() => answerSourcesVerified.value && !!activeAnswer.value && !activeAnswer.value.source_stale && JSON.stringify([activeAnswer.value.doc_ids.slice().sort(), activeAnswer.value.chapter_id || '']) === qaScope.value);
-const selectedMapConcept = computed(() => activeGuide.value?.concepts.find(concept => concept.name === selectedMapNode.value || selectedMapNode.value.includes(concept.name)));
+const selectedMapConcept = computed(() => activeGuide.value?.concepts.find(concept => concept.name === selectedMapNode.value));
+const selectedMapExamPoints = computed(() => activeGuide.value?.exam_points.filter(point => point.concept === selectedMapNode.value) || []);
+const selectedMapConnections = computed(() => activeGuide.value?.connections.filter(connection => connection.accounting_concept === selectedMapNode.value) || []);
 
 function errorText(error: unknown, fallback: string): string {
   const response = error as { response?: { data?: { detail?: unknown }; status?: number }; code?: string };
