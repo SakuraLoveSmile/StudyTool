@@ -36,6 +36,8 @@ T1–T4在上述接口冻结后可并行，同一文件仅一名写入者，子�
 
 浏览器完整学习流程发现既有契约缺陷，纳入本次收尾：揭示接口的扁平公开单元被前端当作嵌套尝试而丢失题目/答案；摘要刷新未恢复当前已揭示状态。修复只对当前已揭示尝试恢复答案，队列及未来题继续隐藏，评分幂等身份保留。另核对手动评分后的“下一张”与本轮完成推进，保持原有每日量、轮次和跨天规则。
 
-隔离验证分支：`codex/android-learning-ui`，worktree位于 `/Users/sakurasep/.codex/worktrees/android-learning-ui/StudyTool`。共享原目录另有并发的知识库、导图和原文排版修改，未覆盖或纳入本次独立交付。
+隔离验证分支：`codex/android-learning-ui`，worktree位于 `/Users/sakurasep/.codex/worktrees/android-learning-ui/StudyTool`。共享原目录另有并发修改，未覆盖。已将另行发布的阅读改动034d716独立合入为058f5a6，避免回退其原文、问答排版及导图概念定位；合并后完成相关检查及独立审查。
 
 真机已识别为小米10、Android16/API36，旧debug包与本地签名不同，已用独立应用ID `com.studytool.connected.debug.uitest` 并存安装验收包。正式源码包名不变。解锁前不操作锁屏、不清除旧应用或数据。
+
+T1–T4状态：待体验。真机已完成教材/问答、软键盘、专注背诵、揭示评分、下一张、暂停恢复和稳定横屏答案保留。浏览器完成三轮学习与手机/平板尺寸检查；合并后前端构建、Node8项、后端131项、Actions双端及服务端构建通过。实体平板及旧Android API键盘未实测，详细边界见发布说明。
