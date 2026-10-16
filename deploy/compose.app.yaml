@@ -9,7 +9,7 @@ services:
       PUBLIC_MODE: "true"
       AUTH_COOKIE_SECURE: "true"
       DEMO_MODE: "false"
-      OCR_MODE: vision_llm
+      OCR_MODE: ${OCR_MODE:-vision_llm}
       EMBEDDING_MODE: remote
       LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
       HOST: 0.0.0.0

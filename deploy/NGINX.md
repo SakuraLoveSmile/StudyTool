@@ -21,6 +21,30 @@ nano .env
 
 章节资料通过后台任务生成，提交后可在“任务”中查看进度、重试与执行日志，刷新页面不会中断。`LLM_TIMEOUT=180` 控制每次模型请求的等待时限；已有部署若仍使用默认 60 秒，可在原 `.env` 添加这一项，再执行 `docker compose --env-file .env up -d --force-recreate app`。它与 Nginx 的 `proxy_read_timeout` 独立，延长等待不能保证模型一定成功。OCR 连通性测试等同步请求仍需要下面的代理超时配置。
 
+## 切换到百度 PaddleOCR
+
+在原 `.env` 中添加或修改以下三项，保留其他模型、端口和数据目录配置：
+
+```dotenv
+OCR_MODE=paddleocr_api
+BAIDU_OCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs
+BAIDU_OCR_TOKEN=在服务器本地填写百度控制台的Token
+```
+
+Token 从 [百度 PaddleOCR 控制台](https://aistudio.baidu.com/paddleocr) 获取；控制台页面地址不能直接填作 API 地址。Token 属于百度，与硅基流动 API Key 不通用。原 `OCR_BASE_URL`、`OCR_API_KEY` 和 `OCR_VISION_MODEL` 可保留，`paddleocr_api` 模式不会使用它们。LLM 与向量模型保持原配置。
+
+**旧 Compose 还需修改一行**：如果 `environment` 下写的是 `OCR_MODE: vision_llm`，请替换成 `OCR_MODE: ${OCR_MODE:-vision_llm}`，或改用本次 Release 的 `compose.yaml`；保留原端口、挂载和其余配置。Compose 的固定 `environment` 值会覆盖 `.env`。未设置 `OCR_MODE` 的旧部署继续使用视觉接口，避免仅更新镜像就无意切换供应商。
+
+```bash
+docker compose --env-file .env config --quiet
+docker compose --env-file .env up -d --force-recreate app
+docker compose --env-file .env exec -T app python -c 'from app.config import settings; from app.services.parser.ocr_service import OCRService; s=OCRService.configuration_status(); print("OCR模式:",s["mode"]); print("服务:",s["provider"]); print("配置完整:",s["configured"]); print("接口:",s["base_url"])'
+```
+
+应显示 `paddleocr_api`、`百度 PaddleOCR` 和 `配置完整: True`，命令不输出 Token。随后刷新网页，在设置页测试 OCR；测试会提交合成图片到百度并消耗相应额度。现有资料不会自动重新 OCR；需要时手动重试识别失败的任务。
+
+## 数据目录
+
 创建全新的数据目录时：
 
 ```bash
