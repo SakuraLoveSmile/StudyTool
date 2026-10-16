@@ -42,7 +42,7 @@ def _reply(prompt):
     citation = {"chunk_id": chunk["chunk_id"], "quote": chunk["passages"][0]["content"][:10]}
     return {"summary": "会计基本理论", "concepts": [{"name": "会计", "explanation": "管理活动",
         "recitation": "会计是经济管理活动。", "keywords": ["管理"], "citations": [citation]}],
-        "mind_map": {"title": "会计", "children": [{"title": "管理活动", "children": []}]},
+        "mind_map": {"title": "会计", "children": [{"title": "会计", "children": []}]},
         "connections": [], "citations": [citation]}
 
 

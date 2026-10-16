@@ -64,8 +64,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown, ListTree, Maximize2, Minimize2, Minus, MousePointer2, Network, Plus, Scan, Search, X } from 'lucide-vue-next';
 import type { LibraryMindMap } from '../types/library';
-const props = withDefaults(defineProps<{ map: LibraryMindMap; examConcepts?: string[]; managementConcepts?: string[]; selectedTitle?: string; sourceDialogOpen?: boolean }>(), { examConcepts: () => [], managementConcepts: () => [], selectedTitle: '', sourceDialogOpen: false });
-const emit = defineEmits<{ select: [title: string] }>();
+const props = withDefaults(defineProps<{ map: LibraryMindMap; examConcepts?: string[]; managementConcepts?: string[]; selectedTitle?: string; selectedNodePath?: string; sourceDialogOpen?: boolean }>(), { examConcepts: () => [], managementConcepts: () => [], selectedTitle: '', selectedNodePath: '', sourceDialogOpen: false });
+const emit = defineEmits<{ select: [title: string, path: string] }>();
 type NodeEntry = { path: string; title: string; branch?: number };
 const MIN_ZOOM = .2;
 const MAX_ZOOM = 2;
@@ -96,7 +96,7 @@ const allCollapsed = computed(() => expandableBranches.value.length > 0 && expan
 const matchPaths = computed(() => new Set(matches.value.map(node => node.path)));
 function hasBadge(title: string) { return props.examConcepts.includes(title) || props.managementConcepts.includes(title); }
 function nodeClasses(path: string) { return { 'is-selected': selectedPath.value === path, 'is-match': matchPaths.value.has(path), 'is-current-match': matches.value[matchIndex.value]?.path === path }; }
-function selectNode(node: NodeEntry) { selectedPath.value = node.path; emit('select', node.title); }
+function selectNode(node: NodeEntry) { selectedPath.value = node.path; emit('select', node.title, node.path); }
 function toggleBranch(index: number) { const next = new Set(collapsed.value); if (next.has(index)) next.delete(index); else next.add(index); collapsed.value = next; }
 function toggleAll() { collapsed.value = allCollapsed.value ? new Set() : new Set(expandableBranches.value); }
 function scheduleMeasure() { cancelAnimationFrame(measureFrame); measureFrame = requestAnimationFrame(measureWorld); }
@@ -213,7 +213,11 @@ function onDocumentKeydown(event: KeyboardEvent) {
   else if (!event.shiftKey && (document.activeElement === last || !panel.value.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
 }
 watch(query, () => { matchIndex.value = 0; const match = matches.value[0]; if (match) void locateNode(match); });
-watch(() => props.selectedTitle, title => { if (!title) { selectedPath.value = ''; return; } if (nodes.value.find(node => node.path === selectedPath.value)?.title !== title) selectedPath.value = nodes.value.find(node => node.title === title)?.path || ''; }, { immediate: true });
+watch([() => props.selectedTitle, () => props.selectedNodePath], ([title, path]) => {
+  if (!title) { selectedPath.value = ''; return; }
+  const node = path ? nodes.value.find(node => node.path === path) : nodes.value.find(node => node.title === title);
+  if (node && node.path !== selectedPath.value) void locateNode(node);
+}, { immediate: true });
 watch(() => props.map, () => { collapsed.value = new Set(); selectedPath.value = ''; query.value = ''; zoom.value = 1; void showRoot(); });
 watch([collapsed, mode, () => props.examConcepts, () => props.managementConcepts], () => { void nextTick(scheduleMeasure); });
 watch(world, (element, previous) => { if (previous) resizeObserver?.unobserve(previous); if (element) resizeObserver?.observe(element); });

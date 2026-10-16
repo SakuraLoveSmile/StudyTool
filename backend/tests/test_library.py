@@ -55,7 +55,10 @@ def mock_model(monkeypatch):
             chunk = data["complete_accounting_chapter"][0]
             citation = {"chunk_id": chunk["chunk_id"], "quote": chunk["passages"][0]["content"][:12]}
             return {"summary": "会计的含义与职能", "concepts": [{"name": "会计", "explanation": "会计反映经济活动",
-                "recitation": "会计是经济管理活动。", "keywords": ["反映", "监督"], "citations": [citation]}],
+                "recitation": "会计是经济管理活动。", "keywords": ["反映", "监督"], "citations": [citation]},
+                {"name": "反映", "explanation": "会计反映经济活动。", "recitation": "会计具有反映经济活动的职能。",
+                 "keywords": ["经济活动"], "citations": [{"chunk_id": data["complete_accounting_chapter"][-1]["chunk_id"],
+                    "quote": data["complete_accounting_chapter"][-1]["passages"][0]["content"][:12]}]}],
                 "mind_map": {"title": "会计基本理论", "children": [{"title": "会计", "children": [{"title": "反映"}]}]},
                 "connections": [{"accounting_concept": "会计", "management_concept": "管理控制", "explanation": "学习关联建议",
                     "application": "用于理解控制", "evidence_level": "textbook_supported", "citations": [citation]}],
@@ -100,6 +103,37 @@ async def test_guide_persists_complete_chapter_real_citations_no_fake_exam(sourc
     assert guide.citations[0].location == "段落 3-4"
     assert not guide.source_stale
     assert library.list_guides("accounting", source)[0] == guide
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_children", [False, True])
+async def test_terminal_mind_map_nodes_save_and_read_with_exact_concept_details(source, mock_model, monkeypatch, has_children):
+    original = library.LLMClient.chat_json
+    async def matching(system, prompt):
+        raw = await original(system, prompt)
+        raw["mind_map"] = {"title": "无需独立概念的章节", "children": [
+            {"title": "无需独立概念的分组", "children": [{"title": "反映"}]} if has_children else {"title": "反映"}]}
+        return raw
+    monkeypatch.setattr(library.LLMClient, "chat_json", matching)
+    guide = await library.generate_guide(GuideRequest(doc_id="accounting", chapter_id=source))
+    saved = library.get_guide(guide.id)
+    assert saved == guide
+    branch = saved.mind_map.children[0]
+    terminal = branch.children[0] if has_children else branch
+    details = [concept for concept in saved.concepts if concept.name == terminal.title]
+    assert len(details) == 1
+    assert details[0].explanation and details[0].recitation and details[0].keywords and details[0].citations
+
+
+@pytest.mark.asyncio
+async def test_historical_unmapped_mind_map_nodes_remain_readable(source, mock_model):
+    guide = await library.generate_guide(GuideRequest(doc_id="accounting", chapter_id=source))
+    legacy = guide.model_dump()
+    legacy["mind_map"]["children"][0]["children"][0]["title"] = "历史资料中没有概念详情的主题"
+    with db_session() as conn:
+        conn.execute("UPDATE library_guides SET payload_json=? WHERE id=?", (json.dumps(legacy), guide.id))
+    assert library.get_guide(guide.id).mind_map.children[0].children[0].title == "历史资料中没有概念详情的主题"
+    assert library.list_guides("accounting", source)[0] == library.get_guide(guide.id)
 
 
 @pytest.mark.asyncio

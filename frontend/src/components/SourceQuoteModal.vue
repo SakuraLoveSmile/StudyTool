@@ -9,9 +9,9 @@
       leave-to-class="opacity-0"
     >
       <div v-if="isOpen" ref="dialog" role="dialog" aria-modal="true" aria-label="资料原文与定位溯源" tabindex="-1" class="fixed inset-0 z-50 flex items-center justify-center bg-sink/50 backdrop-blur-sm p-4" @click.self="close" @keydown="onDialogKeydown">
-        <div class="bg-surface rounded-2xl shadow-pop w-full max-w-2xl overflow-hidden border border-line">
+        <div class="bg-surface rounded-2xl shadow-pop w-full max-w-3xl max-h-[90dvh] flex flex-col overflow-hidden border border-line">
           <!-- Modal Header -->
-          <div class="px-6 py-4 border-b border-line flex items-center justify-between bg-raised/60">
+          <div class="px-6 py-4 border-b border-line flex items-center justify-between bg-raised/60 shrink-0">
             <div class="flex items-center space-x-2">
               <FileText class="w-5 h-5 text-accent" />
               <h3 class="font-display font-semibold text-ink">资料原文与定位溯源</h3>
@@ -22,10 +22,10 @@
           </div>
 
           <!-- Modal Body -->
-          <div class="p-6 space-y-4">
+          <div class="p-4 sm:p-6 space-y-4 overflow-y-auto min-h-0">
             <!-- Metadata pills -->
             <div class="flex flex-wrap gap-2 text-xs">
-              <span class="px-2.5 py-1 rounded-full bg-accent/10 text-accent font-medium">
+              <span class="px-2.5 py-1 rounded-full bg-accent/10 text-accent font-medium break-all">
                 来源文件: {{ docName }}
               </span>
               <span class="px-2.5 py-1 rounded-full bg-warn/10 text-warn font-medium">
@@ -41,23 +41,31 @@
 
             <!-- Content Area / Editable Area -->
             <div>
-              <div class="flex justify-between items-center mb-1.5">
-                <label class="field-label mb-0">原文切片内容{{ readOnly ? '' : '（支持人工校对与修改）' }}</label>
+              <div class="flex flex-wrap justify-between items-center gap-2 mb-3">
+                <label v-if="!readOnly && !readingPreview" for="source-content-editor" class="field-label mb-0">原文切片内容（支持人工校对与修改）</label>
+                <span v-else class="field-label mb-0">原文切片内容</span>
+                <button v-if="!readOnly" type="button" class="btn-sm btn-secondary" :aria-pressed="readingPreview" @click="readingPreview = !readingPreview">
+                  {{ readingPreview ? '返回校对编辑' : '阅读排版预览' }}
+                </button>
                 <span v-if="savedSuccess" class="text-xs text-ok font-medium flex items-center">
                   <Check class="w-3.5 h-3.5 mr-0.5" /> 已保存修改并更新检索索引
                 </span>
               </div>
+              <div v-if="readOnly || readingPreview" class="rounded-xl border border-line bg-page px-4 py-5 sm:px-6">
+                <SourceText :content="editableContent" />
+              </div>
               <textarea
+                v-else
+                id="source-content-editor"
                 v-model="editableContent"
-                rows="8"
-                :readonly="readOnly"
-                class="field font-mono text-sm leading-relaxed bg-raised/50"
+                rows="12"
+                class="field source-editor bg-raised/50"
               ></textarea>
             </div>
           </div>
 
           <!-- Modal Footer -->
-          <div class="px-6 py-3.5 bg-raised/60 border-t border-line flex justify-end gap-2">
+          <div class="px-6 py-3.5 bg-raised/60 border-t border-line flex justify-end gap-2 shrink-0">
             <button @click="close" class="btn btn-secondary">
               关闭
             </button>
@@ -81,6 +89,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { FileText, X, Check, Loader2 } from 'lucide-vue-next';
 import { apiClient } from '../api/client';
+import SourceText from './SourceText.vue';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -103,6 +112,7 @@ const emit = defineEmits<{
 const editableContent = ref(props.content);
 const isSaving = ref(false);
 const savedSuccess = ref(false);
+const readingPreview = ref(false);
 const dialog = ref<HTMLElement>();
 let previousFocus: HTMLElement | null = null;
 
@@ -113,6 +123,7 @@ function restoreFocus() {
 
 watch(() => props.isOpen, async open => {
   if (!open) { restoreFocus(); return; }
+  readingPreview.value = false;
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   await nextTick();
   dialog.value?.focus({ preventScroll: true });
@@ -156,3 +167,12 @@ const handleSave = async () => {
   }
 };
 </script>
+
+<style scoped>
+.source-editor {
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+</style>

@@ -4,6 +4,8 @@ COPY frontend/package.json frontend/package-lock.json ./
 COPY frontend/vendor ./vendor
 RUN npm ci
 COPY frontend/ ./
+ARG VITE_FEEDBACK_API_BASE
+ARG VITE_FEEDBACK_APP_ID
 RUN npm run build
 
 FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea

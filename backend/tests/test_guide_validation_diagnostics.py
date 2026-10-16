@@ -32,7 +32,7 @@ def _reply():
     citation = {"chunk_id": "a1", "quote": "会计是经济管理活动。"}
     return {"summary": "基本理论", "concepts": [{"name": "会计", "explanation": "管理活动",
         "recitation": "会计是经济管理活动。", "keywords": ["管理"], "citations": [copy.deepcopy(citation)]}],
-        "mind_map": {"title": "会计", "children": [{"title": "管理活动"}]},
+        "mind_map": {"title": "会计", "children": [{"title": "会计"}]},
         "connections": [], "citations": [copy.deepcopy(citation)]}
 
 
@@ -47,6 +47,10 @@ CASES = [
     ("missing_recitation", "schema_field_missing", "concepts[0].recitation"),
     ("wrong_keywords", "schema_field_type", "concepts[0].keywords[0]"),
     ("wrong_mind_map", "schema_field_type", "mind_map"),
+    ("unmapped_leaf", "mind_map_concept_missing", "mind_map.children[0].children[0].title"),
+    ("unmapped_branch", "mind_map_concept_missing", "mind_map.children[0].title"),
+    ("ambiguous_leaf", "mind_map_concept_ambiguous", "mind_map.children[0].children[0].title"),
+    ("ambiguous_branch", "mind_map_concept_ambiguous", "mind_map.children[0].title"),
     ("missing_citations", "citation_missing", "citations"),
     ("wrong_citations", "citation_format", "citations"),
     ("wrong_citation", "citation_format", "citations[0]"),
@@ -71,6 +75,11 @@ def _bad(case):
     elif case == "missing_recitation": raw["concepts"][0].pop("recitation")
     elif case == "wrong_keywords": raw["concepts"][0]["keywords"] = [{SECRET: SECRET}]
     elif case == "wrong_mind_map": raw["mind_map"] = SECRET
+    elif case in {"unmapped_leaf", "unmapped_branch", "ambiguous_leaf", "ambiguous_branch"}:
+        if case.startswith("ambiguous"):
+            raw["concepts"][0]["name"] = SECRET
+            raw["concepts"].append(copy.deepcopy(raw["concepts"][0]))
+        raw["mind_map"]["children"] = [{"title": "分组", "children": [{"title": SECRET}]}] if case.endswith("leaf") else [{"title": SECRET}]
     elif case == "wrong_citations": raw["citations"] = {SECRET: SECRET}
     elif case == "wrong_citation": raw["citations"] = [SECRET]
     elif case == "chunk_invalid": raw["citations"][0]["chunk_id"] = {SECRET: SECRET}
@@ -143,6 +152,28 @@ async def test_multiple_schema_errors_report_count_without_model_values(chapter,
         event = dict(conn.execute("SELECT * FROM task_events WHERE task_id=? AND event_type='validation_failed'", (task["id"],)).fetchone())
     assert json.loads(event["data_json"]) == {"reason_code": "schema_field_type", "field": "summary", "error_count": 2}
     assert SECRET not in json.dumps(event, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_multiple_terminal_errors_count_nodes_without_logging_names(chapter, monkeypatch):
+    async def model(*args, **kwargs):
+        raw = _reply()
+        raw["concepts"].append(copy.deepcopy(raw["concepts"][0]))
+        raw["mind_map"]["children"] = [{"title": "分组", "children": [{"title": SECRET}, {"title": "会计"}]},
+                                         {"title": SECRET}]
+        return raw
+    monkeypatch.setattr(library.LLMClient, "chat_json", model)
+    task = dict(library.enqueue_guide(GuideRequest(doc_id="accounting", chapter_id=chapter)))
+    await TaskWorker._dispatch_task(task)
+    assert get_task_status(task["id"]).status == "failed"
+    with db_session() as conn:
+        events = [dict(row) for row in conn.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task["id"],))]
+    diagnostic = [event for event in events if event["event_type"] == "validation_failed"]
+    assert len(diagnostic) == 1
+    assert json.loads(diagnostic[0]["data_json"]) == {"reason_code": "mind_map_concept_missing",
+        "field": "mind_map.children[0].children[0].title", "error_count": 3}
+    assert SECRET not in json.dumps(events, ensure_ascii=False)
+    assert not library.list_guides()
 
 
 def test_unknown_exceptions_and_cause_priority_remain_safe():

@@ -72,6 +72,16 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5274' },
       testMatch: /specs\/materials-ocr\.spec\.ts/,
     },
+    {
+      name: 'library-map',
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5274' },
+      testMatch: /specs\/library-map\.spec\.ts/,
+    },
+    {
+      name: 'library-answer',
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5274' },
+      testMatch: /specs\/library-answer\.spec\.ts/,
+    },
   ],
   webServer: [
     {
