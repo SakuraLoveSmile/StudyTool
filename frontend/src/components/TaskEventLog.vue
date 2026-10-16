@@ -40,7 +40,8 @@ const detailFields = [
   ['call_id', '调用 ID'], ['failed_stage', '失败阶段'], ['stage', '当前阶段'],
   ['elapsed_ms', '本次尝试耗时（毫秒）'], ['stage_elapsed_ms', '阶段耗时（毫秒）'],
   ['status_code', 'HTTP 状态'], ['provider_request_id', '上游请求 ID'],
-  ['exception_type', '错误类型'], ['error_type', '错误类型']
+  ['exception_type', '错误类型'], ['error_type', '错误类型'],
+  ['reason_code', '校验错误编号'], ['field', '失败字段'], ['error_count', '错误数量']
 ] as const;
 
 const stageLabels: Record<string, string> = {
@@ -91,6 +92,7 @@ const formatEventType = (type: string): string => {
     reading_sources: '读取资料',
     model_call: '模型生成',
     validation: '引用校验',
+    validation_failed: '校验失败',
     saving: '保存资料',
     slot_wait: '等待名额',
     slot_wait_started: '等待名额',
@@ -137,6 +139,7 @@ const getEventBadgeClass = (type: string): string => {
       return 'bg-warn/10 text-warn';
     case 'failed':
     case 'request_failed':
+    case 'validation_failed':
       return 'bg-err/10 text-err';
     default:
       return 'bg-raised text-sub';
