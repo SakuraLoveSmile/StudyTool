@@ -522,14 +522,27 @@
                 <p v-if="task.task_type === 'rebuild_vector_index'" class="text-xs text-sub">
                   向量索引重建会调用向量 API，可能产生费用，请到设置页核对当前模型并重新确认。
                 </p>
+                <p v-if="task.task_type === 'generate_recall_cards'" class="text-xs text-sub">
+                  重试会复用已成功知识点，只补做失败项。
+                </p>
 
                 <!-- Units diagnostic -->
-                <div v-if="task.progress_detail" class="flex items-center gap-3 text-xs text-sub">
-                  <span>成功: {{ task.progress_detail.succeeded }} 批</span>
-                  <span>失败: {{ task.progress_detail.failed }} 批</span>
-                  <span v-if="task.progress_detail.skipped > 0">跳过: {{ task.progress_detail.skipped }} 批</span>
-                  <span>识别结果: {{ task.progress_detail.resultCount }} 个</span>
+                <div v-if="task.progress_detail" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-sub">
+                  <span>成功: {{ task.progress_detail.succeeded }}{{ task.task_type === 'generate_recall_cards' ? ' 个知识点' : ' 批' }}</span>
+                  <span>失败: {{ task.progress_detail.failed }}{{ task.task_type === 'generate_recall_cards' ? ' 个知识点' : ' 批' }}</span>
+                  <span v-if="task.progress_detail.skipped > 0">跳过: {{ task.progress_detail.skipped }}{{ task.task_type === 'generate_recall_cards' ? ' 个知识点' : ' 批' }}</span>
+                  <span>{{ task.task_type === 'generate_recall_cards' ? '候选卡' : '识别结果' }}: {{ task.progress_detail.resultCount }}{{ task.task_type === 'generate_recall_cards' ? ' 张' : ' 个' }}</span>
                 </div>
+                <details
+                  v-if="task.task_type === 'generate_recall_cards' && recallBatchErrors(task).length"
+                  open
+                  class="rounded-lg border border-err/30 bg-surface/80 p-2.5 text-xs text-sub"
+                >
+                  <summary class="cursor-pointer font-medium text-err">失败知识点与原因（{{ recallBatchErrors(task).length }} 项）</summary>
+                  <ul class="mt-2 max-h-48 space-y-1.5 overflow-y-auto pl-4 list-disc">
+                    <li v-for="(error, index) in recallBatchErrors(task)" :key="`${index}-${error}`" class="break-words">{{ error }}</li>
+                  </ul>
+                </details>
 
                 <button type="button" class="text-xs text-accent underline" :aria-expanded="isTaskExpanded(task.id)" @click="toggleTaskExpansion(task.id)">{{ isTaskExpanded(task.id) ? '收起日志' : '查看执行日志' }}</button>
                 <TaskEventLog v-if="isTaskExpanded(task.id)" :events="taskEvents[task.id]" :sync-failed="eventSyncFailed[task.id]" @refresh="fetchTaskEvents(task.id, true)" />
@@ -898,6 +911,18 @@ const formatUnit = (unit?: string): string => {
     question: '题'
   };
   return map[unit] || unit;
+};
+
+const recallBatchErrors = (task: TaskStatus): string[] => {
+  if (typeof task.batch_errors_json !== 'string') return [];
+  try {
+    const value: unknown = JSON.parse(task.batch_errors_json);
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
 };
 
 const isIndeterminate = (task: TaskStatus): boolean => {

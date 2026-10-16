@@ -150,7 +150,7 @@ async def test_snapshot_preserves_original_whitespace_through_worker(monkeypatch
 
     async def model(system, prompt, **kwargs):
         payload = json.loads(prompt.split("模型输入 JSON：\n", 1)[1])
-        assert payload["source_chunks"][0]["content"] == original
+        assert "".join(p["content"] for p in payload["source_chunks"][0]["passages"]) == original
         return _response("kp-1", "chunk-1", original.strip())
 
     monkeypatch.setattr(LLMClient, "chat_json", model)

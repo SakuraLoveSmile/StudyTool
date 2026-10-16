@@ -28,6 +28,7 @@ from app.config import settings
 from app.database import db_session
 from app.services.llm.client import LLMClient
 from app.services.llm.prompts import RECALL_CARD_GENERATION_SYSTEM_PROMPT
+from app.services.library import _guide_sources
 from app.services.task_worker import TaskWorker
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,15 @@ class RecallGenerationError(ValueError):
 
 class SourceChangedError(RecallGenerationError):
     """The immutable input snapshot no longer matches persisted source text."""
+
+
+class RecallValidationError(RecallGenerationError):
+    """Safe, structured output diagnostics without model-returned values."""
+
+    def __init__(self, reason_code: str, field: str, message: str):
+        self.reason_code = reason_code
+        self.field = field
+        super().__init__(f"{message}（字段 {field}；错误码 {reason_code}）")
 
 
 @dataclass(frozen=True)
@@ -888,6 +898,7 @@ class RecallGenerator:
                 unit_index=index,
                 service="llm",
             )
+            failed_stage = "source_validation"
             try:
                 cls._assert_snapshot_current(unit)
                 user_prompt = cls._build_user_prompt(
@@ -897,6 +908,7 @@ class RecallGenerator:
                     mode=mode,
                     instructions=metadata.get("instructions", ""),
                 )
+                failed_stage = "model_request"
                 response = await LLMClient.chat_json(
                     RECALL_CARD_GENERATION_SYSTEM_PROMPT,
                     user_prompt,
@@ -912,15 +924,29 @@ class RecallGenerator:
                         fingerprint=fingerprint,
                     )
                     return {"status": "cancelled", "batch_id": batch_id, "card_count": card_count}
+                failed_stage = "output_validation"
                 TaskWorker.upsert_exec_unit(
                     task_id,
                     unit_id,
-                    state="saving",
-                    action="正在严格校验并保存候选卡...",
+                    state="processing",
+                    action="正在严格校验模型输出与原文引用...",
                     force=True,
                 )
+                TaskWorker.log_event(
+                    task_id, "validation", f"{scope}：模型已返回，正在校验记忆卡与原文引用",
+                    stage=failed_stage, unit_index=index,
+                )
                 cards, insufficient_reason = cls.validate_model_output(response, unit)
+                failed_stage = "source_validation"
                 cls._assert_snapshot_current(unit)
+                failed_stage = "saving"
+                TaskWorker.upsert_exec_unit(
+                    task_id, unit_id, state="saving", action="校验通过，正在保存候选卡...", force=True,
+                )
+                TaskWorker.log_event(
+                    task_id, "saving", f"{scope}：校验通过，正在保存候选卡",
+                    stage=failed_stage, unit_index=index,
+                )
                 saved = cls._persist_unit(
                     task_id=task_id,
                     batch_id=batch_id,
@@ -932,6 +958,10 @@ class RecallGenerator:
                 )
                 card_count += saved
                 succeeded += 1
+                TaskWorker.log_event(
+                    task_id, "save_done", f"{scope}：已保存 {saved} 张候选卡",
+                    stage="saving", unit_index=index,
+                )
                 TaskWorker.finish_exec_unit(task_id, unit_id, state="succeeded", force=True)
                 TaskWorker.update_progress_detail(
                     task_id,
@@ -953,8 +983,11 @@ class RecallGenerator:
                 )
                 raise
             except SourceChangedError as exc:
+                # Persistence rechecks sources inside its transaction as well.
+                failed_stage = "source_validation"
                 failed += 1
                 errors.append(f"{scope}: 来源已变化")
+                cls._log_unit_failure(task_id, unit, index, failed_stage, exc)
                 cls._save_unit_checkpoint(
                     batch_id,
                     unit,
@@ -977,6 +1010,7 @@ class RecallGenerator:
                 failed += 1
                 safe_error = TaskWorker.sanitize_error(exc) or type(exc).__name__
                 errors.append(f"{scope}: {safe_error}")
+                cls._log_unit_failure(task_id, unit, index, failed_stage, exc)
                 cls._save_unit_checkpoint(
                     batch_id,
                     unit,
@@ -1040,6 +1074,32 @@ class RecallGenerator:
     generate = execute_generation_task
     run = execute_generation_task
 
+    @staticmethod
+    def _log_unit_failure(task_id, unit, index, stage, exc):
+        data = {
+            "knowledge_point_id": unit.knowledge_point_id,
+            "knowledge_point_name": unit.knowledge_point_name,
+            "failed_stage": stage,
+            "exception_type": type(exc).__name__,
+        }
+        if isinstance(exc, RecallValidationError):
+            data.update(reason_code=exc.reason_code, field=exc.field)
+        reason = TaskWorker.sanitize_error(exc) or type(exc).__name__
+        TaskWorker.log_event(
+            task_id, "validation_failed" if stage == "output_validation" else "unit_failed",
+            f"{unit.knowledge_point_name}：{reason}",
+            stage=stage, unit_index=index, data=data,
+        )
+
+    @staticmethod
+    def _citation_sources(unit: SnapshotUnit):
+        # Derive the prompt and lookup from the same immutable text, never the
+        # current document or a global cache. Each original character is sent once.
+        context, sources = _guide_sources([chunk.as_dict() for chunk in unit.chunks])
+        for item, chunk in zip(context, unit.chunks):
+            item.update(source_hash=chunk.source_hash, content_hash=chunk.content_hash)
+        return context, sources
+
     @classmethod
     def _build_user_prompt(
         cls,
@@ -1060,7 +1120,7 @@ class RecallGenerator:
             "chapter_id": unit.chapter_id,
             "chapter_title": unit.chapter_title,
             "source_doc_id": unit.source_doc_id,
-            "source_chunks": [chunk.as_dict() for chunk in unit.chunks],
+            "source_chunks": cls._citation_sources(unit)[0],
         }
         return (
             "以下是不可变的单知识点输入快照。只能依据 source_chunks 生成；"
@@ -1122,6 +1182,7 @@ class RecallGenerator:
             raise RecallGenerationError("无卡片时必须说明 insufficient_reason")
 
         chunks = {chunk.id: chunk for chunk in unit.chunks}
+        _, sources = cls._citation_sources(unit)
         validated: List[Dict[str, Any]] = []
         for card_index, raw_card in enumerate(raw_cards, start=1):
             if not isinstance(raw_card, Mapping):
@@ -1153,45 +1214,72 @@ class RecallGenerator:
             )
             raw_citations = _first(card, "citations", "source_citations", "sources")
             if not isinstance(raw_citations, list) or not (1 <= len(raw_citations) <= MAX_CITATIONS_PER_CARD):
-                raise RecallGenerationError(
-                    f"第 {card_index} 张卡片必须有 1—{MAX_CITATIONS_PER_CARD} 条引用"
+                raise RecallValidationError(
+                    "citation_count_invalid", f"cards[{card_index - 1}].citations",
+                    f"每张卡片必须有 1—{MAX_CITATIONS_PER_CARD} 条引用",
                 )
             citations: List[Dict[str, Any]] = []
             seen_citations: set[Tuple[str, str]] = set()
             for citation_index, raw_citation in enumerate(raw_citations, start=1):
+                field = f"cards[{card_index - 1}].citations[{citation_index - 1}]"
+                def fail(code, suffix, message):
+                    raise RecallValidationError(code, field + suffix, message)
+
                 if not isinstance(raw_citation, Mapping):
-                    raise RecallGenerationError(f"第 {card_index} 张卡片第 {citation_index} 条引用无效")
+                    fail("citation_format", "", "原文引用必须是对象")
                 citation = dict(raw_citation)
-                chunk_id = _text(
-                    _first(citation, "chunk_id", "chunkId", "source_chunk_id"),
-                    field="citation.chunk_id",
-                    required=True,
-                    max_chars=300,
-                )
-                if chunk_id not in chunks:
-                    raise RecallGenerationError(f"引用了不属于当前快照的切片: {chunk_id}")
-                quote = _text(
-                    _first(citation, "quote", "snippet", "excerpt"),
-                    field="citation.quote",
-                    required=True,
-                    max_chars=MAX_QUOTE_CHARS,
-                )
-                if not _quote_matches(quote, chunks[chunk_id].content):
-                    raise RecallGenerationError(f"引用原文不匹配切片: {chunk_id}")
-                emitted_hash = _text(
-                    _first(citation, "source_hash", "document_hash", "hash", "file_hash"),
-                    field="citation.source_hash",
-                    required=True,
-                    max_chars=300,
-                )
-                if emitted_hash not in {
-                    chunks[chunk_id].source_hash,
-                    chunks[chunk_id].content_hash,
-                }:
-                    raise RecallGenerationError(f"引用来源哈希不匹配切片: {chunk_id}")
+                if "citation_id" in citation:
+                    citation_id = citation["citation_id"]
+                    if not isinstance(citation_id, str) or not citation_id:
+                        fail("citation_id_invalid", ".citation_id", "原文片段编号必须是非空字符串")
+                    if citation_id not in sources:
+                        fail("citation_id_unknown", ".citation_id", "原文片段编号不属于当前输入快照，请重新生成")
+                    chunk_id, quote = sources[citation_id]
+                    if not quote.strip():
+                        fail("citation_quote_missing", ".citation_id", "所选原文片段仅含空白，无法支持记忆卡内容")
+                    chunk = chunks[chunk_id]
+                    # The server owns the evidence. Extra legacy fields cannot
+                    # override or contradict the selected original passage.
+                    for key, expected in (
+                        ("chunk_id", chunk_id), ("chunkId", chunk_id), ("source_chunk_id", chunk_id),
+                        ("quote", quote), ("snippet", quote), ("excerpt", quote),
+                        ("doc_id", chunk.doc_id), ("doc_name", chunk.doc_name),
+                        ("content_hash", chunk.content_hash),
+                    ):
+                        if key in citation and citation[key] != expected:
+                            fail("citation_reference_conflict", "." + key, "引用附带信息与所选原文片段不一致")
+                    for key in ("source_hash", "document_hash", "hash", "file_hash"):
+                        if key in citation and citation[key] not in (chunk.source_hash, chunk.content_hash):
+                            fail("citation_reference_conflict", "." + key, "引用附带哈希与所选原文片段不一致")
+                    emitted_hash = chunk.source_hash
+                else:
+                    # Preserve the old in-flight response contract, including
+                    # its existing whitespace handling, but never repair quotes.
+                    chunk_id = _text(
+                        _first(citation, "chunk_id", "chunkId", "source_chunk_id"),
+                        field="citation.chunk_id", max_chars=300,
+                    )
+                    if not chunk_id:
+                        fail("citation_id_missing", ".citation_id", "引用缺少原文片段编号")
+                    if chunk_id not in chunks:
+                        fail("citation_chunk_out_of_scope", ".chunk_id", "引用切片不属于当前输入快照")
+                    quote = _text(
+                        _first(citation, "quote", "snippet", "excerpt"),
+                        field="citation.quote", max_chars=MAX_QUOTE_CHARS,
+                    )
+                    if not quote:
+                        fail("citation_quote_missing", ".quote", "引用缺少原文摘录")
+                    if not _quote_matches(quote, chunks[chunk_id].content):
+                        fail("citation_quote_not_original", ".quote", "引用原文不匹配切片")
+                    emitted_hash = _text(
+                        _first(citation, "source_hash", "document_hash", "hash", "file_hash"),
+                        field="citation.source_hash", max_chars=300,
+                    )
+                    if emitted_hash not in {chunks[chunk_id].source_hash, chunks[chunk_id].content_hash}:
+                        fail("citation_hash_mismatch", ".source_hash", "引用来源哈希不匹配切片")
                 key = (chunk_id, quote)
                 if key in seen_citations:
-                    raise RecallGenerationError("同一张卡片存在重复引用")
+                    fail("citation_duplicate", "", "同一张卡片存在重复引用")
                 seen_citations.add(key)
                 citations.append(
                     {
@@ -1634,6 +1722,7 @@ async def execute_generation_task(task_id: str, batch_id: str) -> Dict[str, Any]
 
 __all__ = [
     "RecallGenerationError",
+    "RecallValidationError",
     "SourceChangedError",
     "RecallGenerator",
     "SnapshotChunk",

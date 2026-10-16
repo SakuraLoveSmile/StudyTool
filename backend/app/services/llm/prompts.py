@@ -159,9 +159,7 @@ RECALL_CARD_GENERATION_SYSTEM_PROMPT = """你是严格受证据约束的专业�
       "back_content": "答案面",
       "citations": [
         {
-          "chunk_id": "必须来自输入 source_chunks",
-          "quote": "必须逐字摘自对应 chunk 的 content",
-          "source_hash": "必须与对应 source_chunk 的 source_hash 或 content_hash 完全一致"
+          "citation_id": "必须从输入 source_chunks[].passages[] 选择已有的 citation_id"
         }
       ]
     }
@@ -169,6 +167,7 @@ RECALL_CARD_GENERATION_SYSTEM_PROMPT = """你是严格受证据约束的专业�
   "insufficient_reason": null
 }
 
-硬性规则：每个知识点最多12张卡；每张卡必须有1—10条引用；引用 chunk_id、quote、source_hash 都要可由输入验证。
+source_chunks 的 passages 按原文顺序连续提供完整正文。请选择能支持卡片内容的原文片段编号，不要生成或复制 quote、chunk_id、hash；程序会按编号还原准确原文。
+硬性规则：每个知识点最多12张卡；每张卡必须有1—10条引用；citations 中每项只能包含 citation_id，且编号必须来自当前知识点输入，不能编造、改写或借用其他知识点的编号。
 若现有资料不足以生成一张有充分依据的卡片，cards 必须为空，并填写非空 insufficient_reason；有 cards 时 insufficient_reason 必须为 null。
 """
