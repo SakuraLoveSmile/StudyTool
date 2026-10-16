@@ -148,10 +148,10 @@
     >
       <div class="space-y-4 text-sm">
         <p class="text-xs text-sub leading-relaxed">
-          基于所选章节的知识点与教材切片，AI 自动提取核心概念并生成结构化「问答」回忆卡，作为待审核候选存入卡库。
+          选择目标章节和 1–20 个已有知识点，AI 根据知识点的教材原文生成「问答」回忆卡，作为待审核候选存入卡库。
         </p>
 
-        <div v-if="batchError" class="rounded-xl border border-err/30 bg-err/10 px-3 py-2 text-xs text-err">
+        <div v-if="batchError" class="rounded-xl border border-err/30 bg-err/10 px-3 py-2 text-xs text-err" role="alert">
           {{ batchError }}
         </div>
         <div v-if="batchSuccessMessage" class="rounded-xl border border-ok/30 bg-ok/10 px-3 py-2 text-xs text-ok">
@@ -159,11 +159,30 @@
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-sub mb-1.5">目标章节</label>
-          <select v-model="batchChapterId" class="field text-xs w-full" :disabled="batchGenerating">
+          <label for="batch-chapter" class="block text-xs font-semibold text-sub mb-1.5">目标章节</label>
+          <select id="batch-chapter" v-model="batchChapterId" class="field text-xs w-full" :disabled="batchGenerating">
             <option v-for="ch in chapters" :key="ch.id" :value="ch.id">{{ ch.name }}</option>
           </select>
         </div>
+
+        <fieldset :disabled="batchGenerating || batchKnowledgeLoading" class="space-y-2">
+          <legend class="text-xs font-semibold text-sub">选择知识点（已选 {{ batchKnowledgePointIds.length }}/20）</legend>
+          <p class="text-xs leading-relaxed text-faint">知识点需有有效教材来源，且所属章节与目标章节一致。</p>
+          <p v-if="batchKnowledgeLoading" class="text-xs text-faint">正在加载知识点…</p>
+          <div v-else-if="batchKnowledgePoints.length" class="max-h-40 overflow-y-auto rounded-xl border border-line divide-y divide-line">
+            <label v-for="point in batchKnowledgePoints" :key="point.id" class="flex items-start gap-2 px-3 py-2 text-xs text-ink">
+              <input
+                v-model="batchKnowledgePointIds"
+                type="checkbox"
+                :value="point.id"
+                :disabled="!batchKnowledgePointIds.includes(point.id) && batchKnowledgePointIds.length >= 20"
+                class="mt-0.5 rounded border-line-strong text-accent focus:ring-accent"
+              />
+              <span class="min-w-0 break-words">{{ point.name }}<span class="block text-faint">{{ point.chapter || '未标注章节' }}</span></span>
+            </label>
+          </div>
+          <p v-else class="text-xs text-faint">暂无可选知识点，请先在<router-link to="/analysis" class="text-accent hover:underline">考点分析</router-link>中提取并审核知识点。</p>
+        </fieldset>
 
         <div>
           <label class="block text-xs font-semibold text-sub mb-1.5">生成要求 / 额外提示（选填）</label>
@@ -180,7 +199,7 @@
       <template #footer>
         <div class="flex justify-end gap-2">
           <button type="button" class="btn btn-secondary text-xs" :disabled="batchGenerating" @click="showBatchModal = false">取消</button>
-          <button type="button" class="btn btn-primary text-xs" :disabled="batchGenerating" @click="handleBatchGenerate">
+          <button type="button" class="btn btn-primary text-xs" :disabled="batchGenerating || batchKnowledgeLoading || batchKnowledgePointIds.length === 0 || Boolean(batchSuccessMessage)" @click="handleBatchGenerate">
             {{ batchGenerating ? '正在提交生成任务…' : '开始批量生成' }}
           </button>
         </div>
@@ -196,6 +215,7 @@ import { apiClient } from '../api/client';
 import BaseModal from '../components/BaseModal.vue';
 import RecallCardEditor from '../components/RecallCardEditor.vue';
 import type { LearningCardHistoryItem, LearningChapter, LearningCardPayload, RecallCard, LearningCardStatus, RevisionReviewPayload } from '../types/learning';
+import type { KnowledgePoint } from '../types';
 
 const cards = ref<RecallCard[]>([]);
 const chapters = ref<LearningChapter[]>([]);
@@ -224,8 +244,19 @@ const batchInstructions = ref('');
 const batchGenerating = ref(false);
 const batchSuccessMessage = ref('');
 const batchError = ref('');
+const batchKnowledgePoints = ref<KnowledgePoint[]>([]);
+const batchKnowledgePointIds = ref<string[]>([]);
+const batchKnowledgeLoading = ref(false);
+let batchKnowledgeRequest = 0;
 
-const openBatchGenerateModal = () => {
+const batchFailureMessage = (error: unknown, fallback: string): string => {
+  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') return detail.message;
+  return error instanceof Error ? error.message : fallback;
+};
+
+const openBatchGenerateModal = async () => {
   if (chapters.value.length === 0) {
     showChapterEditor.value = true;
     return;
@@ -234,7 +265,19 @@ const openBatchGenerateModal = () => {
   batchInstructions.value = '';
   batchError.value = '';
   batchSuccessMessage.value = '';
+  batchKnowledgePoints.value = [];
+  batchKnowledgePointIds.value = [];
   showBatchModal.value = true;
+  batchKnowledgeLoading.value = true;
+  const request = ++batchKnowledgeRequest;
+  try {
+    const points = await apiClient.listKnowledgePoints();
+    if (request === batchKnowledgeRequest) batchKnowledgePoints.value = points.filter((point) => !point.is_deleted);
+  } catch (error) {
+    if (request === batchKnowledgeRequest) batchError.value = batchFailureMessage(error, '加载知识点失败，请关闭后重试。');
+  } finally {
+    if (request === batchKnowledgeRequest) batchKnowledgeLoading.value = false;
+  }
 };
 
 const handleBatchGenerate = async () => {
@@ -242,11 +285,16 @@ const handleBatchGenerate = async () => {
     batchError.value = '请选择章节';
     return;
   }
+  if (batchKnowledgePointIds.value.length < 1 || batchKnowledgePointIds.value.length > 20) {
+    batchError.value = '请选择 1–20 个知识点';
+    return;
+  }
   batchGenerating.value = true;
   batchError.value = '';
   try {
     await apiClient.createLearningGeneration({
       chapter_id: batchChapterId.value,
+      knowledge_point_ids: [...batchKnowledgePointIds.value],
       instructions: batchInstructions.value.trim() || undefined,
     });
     batchSuccessMessage.value = '已成功提交批量生成任务！生成完成后可在列表中勾选「含待审核候选」查看。';
@@ -257,7 +305,7 @@ const handleBatchGenerate = async () => {
       batchSuccessMessage.value = '';
     }, 2000);
   } catch (error) {
-    batchError.value = error instanceof Error ? error.message : '创建生成任务失败，请稍后重试。';
+    batchError.value = batchFailureMessage(error, '创建生成任务失败，请稍后重试。');
   } finally {
     batchGenerating.value = false;
   }

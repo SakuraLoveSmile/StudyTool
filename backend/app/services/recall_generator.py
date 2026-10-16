@@ -462,13 +462,15 @@ class RecallGenerator:
                 raise RecallGenerationError(f"知识点单元重复: {kp_id}")
             seen.add(kp_id)
             kp_row = conn.execute(
-                "SELECT id, name, chapter, is_deleted FROM knowledge_points WHERE id = ?",
+                "SELECT id, name, chapter, is_deleted, source_reference, source_status "
+                "FROM knowledge_points WHERE id = ?",
                 (kp_id,),
             ).fetchone()
             if not kp_row:
                 raise RecallGenerationError(f"知识点不存在: {kp_id}")
             if kp_row["is_deleted"]:
                 raise RecallGenerationError(f"知识点已删除: {kp_id}")
+            kp_row = dict(kp_row)
 
             unit_chapter_id = _first(unit, "chapter_id", "chapterId")
             if unit_chapter_id is not None and str(unit_chapter_id) != str(chapter["id"]):
@@ -545,18 +547,57 @@ class RecallGenerator:
         chapter_source_doc_id: Optional[str],
     ) -> List[Dict[str, Any]]:
         """Derive chunks from explicit source references when callers omit units."""
+        kp_row = _as_dict(kp_row)
+        if kp_row.get("source_status") not in (None, "valid"):
+            raise RecallGenerationError("知识点来源已失效，请先核对原文来源后重新生成")
+
+        # Accepted extraction citations store the chunk-content hash, whereas a
+        # generation snapshot stores the document-file hash. Validate the former
+        # here, then load canonical rows below rather than confusing both hashes.
         refs: List[str] = []
-        raw_reference = kp_row.get("source_reference") if isinstance(kp_row, Mapping) else None
+        candidates = conn.execute(
+            "SELECT citations_json, source_status FROM extraction_candidates "
+            "WHERE target_kp_id = ? AND status IN ('accepted', 'merged') ORDER BY id",
+            (kp_row["id"],),
+        ).fetchall()
+        for candidate in candidates:
+            if candidate["source_status"] not in (None, "valid"):
+                raise RecallGenerationError("知识点的已审核提取来源已失效，请先核对原文来源")
+            try:
+                citations = json.loads(candidate["citations_json"])
+            except (TypeError, ValueError) as exc:
+                raise RecallGenerationError("知识点的已审核引用格式错误，请核对或重新提取来源") from exc
+            if not isinstance(citations, list) or not citations:
+                raise RecallGenerationError("知识点的已审核提取结果缺少原文引用，请核对或重新提取来源")
+            for citation in citations:
+                if not isinstance(citation, dict) or not isinstance(citation.get("chunk_id"), str):
+                    raise RecallGenerationError("知识点的已审核引用缺少切片编号，请核对或重新提取来源")
+                chunk_id = citation["chunk_id"]
+                current = conn.execute(
+                    "SELECT c.doc_id, c.content, c.parse_error FROM document_chunks c "
+                    "JOIN documents d ON d.id = c.doc_id WHERE c.id = ?", (chunk_id,)
+                ).fetchone()
+                if not current or current["parse_error"] or not str(current["content"] or "").strip():
+                    raise RecallGenerationError("知识点引用的原文切片已缺失或不可用，请重新导入并核对来源")
+                if citation.get("doc_id") != current["doc_id"]:
+                    raise RecallGenerationError("知识点引用的资料归属不一致，请重新核对来源")
+                if chapter_source_doc_id and current["doc_id"] != chapter_source_doc_id:
+                    raise RecallGenerationError("知识点引用不属于所选章节资料，请选择正确章节或核对来源")
+                content = str(current["content"])
+                if citation.get("source_hash") != _sha256_text(content):
+                    raise RecallGenerationError("知识点引用的原文已变化，请重新核对来源后生成")
+                quote = citation.get("quote")
+                if not isinstance(quote, str) or not quote.strip() or quote not in content:
+                    raise RecallGenerationError("知识点引用摘录与当前原文不一致，请重新核对来源后生成")
+                refs.append(chunk_id)
+
+        raw_reference = kp_row.get("source_reference")
         if raw_reference:
             try:
                 parsed = json.loads(raw_reference) if isinstance(raw_reference, str) else raw_reference
-            except Exception:
-                parsed = raw_reference
+            except (TypeError, ValueError):
+                parsed = None
             refs.extend(cls._find_chunk_ids(parsed))
-            if isinstance(raw_reference, str):
-                # A plain comma-separated source reference is common in hand-made
-                # rows; only use IDs that are actually present in the DB below.
-                refs.extend(part.strip() for part in raw_reference.split(","))
         refs = list(dict.fromkeys(refs))
         if refs:
             placeholders = ",".join("?" for _ in refs)
@@ -567,11 +608,13 @@ class RecallGenerator:
                 f"WHERE c.id IN ({placeholders}) ORDER BY c.chunk_index", refs
             ).fetchall()
             if len(rows) != len(refs):
-                raise RecallGenerationError("知识点来源引用了不存在的切片")
+                raise RecallGenerationError("知识点来源引用了不存在的切片，请重新核对来源")
             return [dict(row) for row in rows]
 
+        if raw_reference:
+            raise RecallGenerationError("知识点来源仅有展示说明，无法确定原文切片，请核对或重新提取来源")
         if not chapter_source_doc_id:
-            raise RecallGenerationError("知识点没有可推导的章节资料来源")
+            raise RecallGenerationError("知识点没有可推导的章节资料来源，请先关联教材并核对来源")
         # Prefer chunks whose heading matches the chapter.  If the importer did
         # not preserve headings, use all valid chunks only when the cardinality is
         # already within the strict per-unit bound.
