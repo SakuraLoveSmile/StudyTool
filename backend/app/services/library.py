@@ -250,6 +250,10 @@ def _save(table, value, snapshot, *, task_id=None):
 
 def guide_task_error(exc):
     """Preserve useful typed failures without persisting a provider body/prompt."""
+    from app.services.llm.observability import get_llm_diagnostic, format_call_failure
+    diagnostic = get_llm_diagnostic(exc)
+    if diagnostic:
+        return format_call_failure(diagnostic)
     current, seen = exc, set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))

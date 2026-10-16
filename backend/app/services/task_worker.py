@@ -491,8 +491,54 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
         service_label = SERVICE_LABELS.get(service or "", "外部服务")
 
         async def handler(event: str, info: Optional[Dict[str, Any]] = None):
+            from app.services.llm.observability import (
+                CALL_STAGE_LABELS, safe_call_details, format_call_failure,
+            )
             info = info or {}
-            if event == "slot_wait":
+            diagnostics = safe_call_details(info)
+            stage_name = CALL_STAGE_LABELS.get(diagnostics.get("stage"), "处理请求")
+            model = diagnostics.get("model")
+            context = ""
+            if model:
+                context = f"；模型 {model}"
+                if "timeout_seconds" in diagnostics:
+                    context += f"，单次网络等待上限 {diagnostics['timeout_seconds']:g} 秒"
+                if "max_attempts" in diagnostics:
+                    context += f"，第 {diagnostics.get('attempt', 1)}/{diagnostics['max_attempts']} 次尝试"
+            if event in {"slot_wait_started", "network_stage", "response_headers", "read_body",
+                         "response_body", "parse_response", "request_failed"}:
+                if event == "request_failed":
+                    message = format_call_failure(diagnostics)
+                    cls.upsert_exec_unit(task_id, unit_id, state="processing", action=message,
+                                         error=message if diagnostics.get("will_retry") is False else None,
+                                         force=True)
+                else:
+                    actions = {
+                        "slot_wait_started": f"等待{service_label}调用名额",
+                        "network_stage": stage_name,
+                        "response_headers": f"收到响应头（HTTP {diagnostics.get('status_code', '?')}）",
+                        "read_body": "正在读取响应内容",
+                        "response_body": "响应内容读取完成",
+                        "parse_response": "正在解析模型返回结果",
+                    }
+                    action = actions[event]
+                    if event == "network_stage":
+                        trace_event = diagnostics.get("trace_event", "")
+                        action += "完成" if trace_event.endswith(".complete") else (
+                            "中断" if trace_event.endswith(".failed") else "中")
+                    state = "waiting_slot" if event == "slot_wait_started" else (
+                        "processing" if event in {"response_body", "parse_response"} else "awaiting_response")
+                    cls.upsert_exec_unit(task_id, unit_id, service=service, state=state,
+                                         action=action, attempt=diagnostics.get("attempt"), force=True)
+                    elapsed = diagnostics.get("elapsed_ms")
+                    # Detailed context stays expandable; the timeline names each
+                    # transition without repeating the model on every network step.
+                    message = f"{label}：{action}"
+                    if elapsed is not None:
+                        message += f"，本次已耗时 {elapsed / 1000:.1f} 秒"
+                cls.log_event(task_id, event, message, stage=stage, unit_index=unit_index,
+                              data=diagnostics)
+            elif event == "slot_wait":
                 waited = float(info.get("waited_seconds") or 0.0)
                 cls.upsert_exec_unit(
                     task_id, unit_id, service=service, state="waiting_slot",
@@ -502,7 +548,7 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
                     cls.log_event(
                         task_id, "slot_wait",
                         f"{label}等待调用名额 {waited:.1f} 秒",
-                        stage=stage, unit_index=unit_index
+                        stage=stage, unit_index=unit_index, data=diagnostics
                     )
             elif event == "request_start":
                 cls.upsert_exec_unit(
@@ -520,8 +566,8 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
                 scope_txt = info.get("scope") or unit_now.get("scope") or "当前批次"
                 cls.log_event(
                     task_id, "request_start",
-                    f"{label}请求已发送（范围：{scope_txt}）",
-                    stage=stage, unit_index=unit_index
+                    f"{label}开始发送请求（范围：{scope_txt}）{context}",
+                    stage=stage, unit_index=unit_index, data=diagnostics
                 )
             elif event == "response_received":
                 cls.upsert_exec_unit(
@@ -530,8 +576,8 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
                 )
                 cls.log_event(
                     task_id, "response_received",
-                    f"{label}收到模型响应",
-                    stage=stage, unit_index=unit_index
+                    f"{label}模型响应解析成功{context}",
+                    stage=stage, unit_index=unit_index, data=diagnostics
                 )
             elif event == "retry_wait":
                 attempt = info.get("attempt")
@@ -545,7 +591,7 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
                 cls.log_event(
                     task_id, "retry_wait",
                     f"{label}重试等待（第 {attempt} 次尝试）: {reason}",
-                    stage=stage, unit_index=unit_index
+                    stage=stage, unit_index=unit_index, data=diagnostics
                 )
                 try:
                     cls.record_timing(task_id, "retry_wait", float(wait_s or 0.0) * 1000.0)
@@ -577,7 +623,7 @@ class TaskWorker(metaclass=_TaskWorkerMeta):
             waiting_since = None
         else:
             if longest.get("state") == "awaiting_response":
-                waiting_reason = f"等待{SERVICE_LABELS.get(longest.get('service') or '', '服务')}响应"
+                waiting_reason = longest.get("action") or f"等待{SERVICE_LABELS.get(longest.get('service') or '', '服务')}响应"
             else:
                 waiting_reason = state_reasons.get(longest.get("state"), longest.get("state"))
             waiting_since = longest.get("requestStartedAt") or longest.get("startedAt")

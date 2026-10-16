@@ -13,10 +13,10 @@ from app.diagnostics import (
     log_diagnostic,
     sanitize_endpoint,
     extract_provider_request_id,
-    extract_safe_exception_info,
     stream_request_context,
-    sanitize_text,
 )
+
+from app.services.llm.observability import LLMCallError, safe_call_details, format_call_failure
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class LLMClient:
             if asyncio.iscoroutine(res):
                 await res
         except Exception as cb_err:
-            logger.warning("on_event callback error (%s): %s", event, cb_err)
+            logger.warning("on_event callback error (%s): %s", event, type(cb_err).__name__)
 
     @classmethod
     async def chat_json(
@@ -42,363 +42,169 @@ class LLMClient:
         on_retry: Optional[Callable[[int, float, str], Any]] = None,
         on_event: Optional[Callable[[str, Dict[str, Any]], Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Calls configured LLM with JSON output guarantee.
-        Offline generation is only available when DEMO_MODE is explicitly enabled.
-
-        on_event receives the unified request lifecycle:
-          slot_wait {waited_seconds}      - waiting for a rate-limiter slot
-          request_start {attempt}         - emitted right before the HTTP request is issued
-                                            (request start time must be recorded here, per attempt)
-          response_received {}            - response parsed successfully
-          retry_wait {attempt, wait_seconds, reason}
-        """
+        """Call the JSON model; callbacks expose safe, observed transport stages."""
         if getattr(settings, "DEMO_MODE", False) or os.getenv("DEMO_MODE", "").lower() in {"1", "true", "yes"}:
             logger.info("DEMO_MODE enabled. Using offline fallback generator.")
             return cls._offline_fallback(system_prompt, user_prompt)
-
         if not settings.LLM_API_KEY:
             raise RuntimeError("LLM 未配置 API 密钥；正式模式禁止使用离线模拟结果")
 
         base_url = settings.LLM_BASE_URL.rstrip("/")
+        model = settings.LLM_MODEL
+        timeout_val = float(settings.LLM_TIMEOUT)
         payload = {
-            "model": settings.LLM_MODEL,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt + "\n\n请必须仅以纯 JSON 格式输出结果，不要包含任何 markdown 代码块标记以外的文字。"},
                 {"role": "user", "content": user_prompt}
             ],
             "temperature": 0.2
         }
-
-        headers = {
-            "Authorization": f"Bearer {settings.LLM_API_KEY}",
-            "Content-Type": "application/json"
-        }
-
-        retries = max_retries
+        headers = {"Authorization": f"Bearer {settings.LLM_API_KEY}", "Content-Type": "application/json"}
         client = HttpClientProvider.get_client()
         endpoint = sanitize_endpoint(f"{base_url}/chat/completions")
-        input_chars = len(system_prompt) + len(user_prompt)
-        timeout_val = float(settings.LLM_TIMEOUT)
-
+        # Names verified against httpcore's asynchronous connection/http11/http2 traces.
+        trace_stages = {
+            "connection.connect_tcp": "connect_tcp", "connection.connect_unix_socket": "connect",
+            "connection.start_tls": "tls",
+            "proxy.start_tls": "tls", "socks.start_tls": "tls",
+            "socks.connect_tcp": "connect_tcp", "socks.setup_socks5_connection": "connect",
+            **{f"{protocol}.{event}": stage
+               for protocol in ("http11", "http2")
+               for event, stage in (("send_request_headers", "send_request"),
+                                    ("send_request_body", "send_request"),
+                                    ("receive_response_headers", "await_headers"))},
+        }
         with call_context() as base_cid:
-            for attempt in range(retries + 1):
+            for attempt in range(max_retries + 1):
                 attempt_num = attempt + 1
                 with call_context(call_id=base_cid, attempt=attempt_num):
-                    t_slot = time.monotonic()
+                    started = stage_started = time.monotonic()
+                    current_stage = "slot_wait"
+                    status_code = provider_req_id = None
+                    base = {"service": "llm", "model": model, "endpoint": endpoint,
+                            "timeout_seconds": timeout_val, "attempt": attempt_num,
+                            "max_attempts": max_retries + 1, "call_id": base_cid}
+
+                    def details(**extra):
+                        now = time.monotonic()
+                        return safe_call_details({**base, "stage": current_stage,
+                            "elapsed_ms": (now - started) * 1000,
+                            "stage_elapsed_ms": (now - stage_started) * 1000,
+                            "status_code": status_code, "provider_request_id": provider_req_id, **extra})
+
+                    async def stage_event(event, stage, **extra):
+                        nonlocal current_stage, stage_started
+                        if stage != current_stage:
+                            current_stage, stage_started = stage, time.monotonic()
+                        await cls._emit(on_event, event, details(**extra))
+
+                    async def trace(event, info):
+                        # Deliberately do not read info: it contains headers, bytes, exception text.
+                        stem, _, phase = event.rpartition(".")
+                        stage = trace_stages.get(stem)
+                        # Header/body sends share one stage. Record its first entry,
+                        # not every internal completion or protocol callback.
+                        if stage and ((phase == "started" and stage != current_stage)
+                                      or (phase == "complete" and stage in {"connect", "connect_tcp", "tls"})):
+                            await stage_event("network_stage", stage, trace_event=event)
+
+                    await cls._emit(on_event, "slot_wait_started", details())
                     await GlobalRateLimiter.acquire()
-                    slot_waited = time.monotonic() - t_slot
-                    await cls._emit(on_event, "slot_wait", {"waited_seconds": round(slot_waited, 3), "attempt": attempt_num})
-                    log_diagnostic(
-                        "slot_wait",
-                        level=logging.DEBUG,
-                        message=f"等待 LLM 信号量调用名额完成 ({slot_waited:.3f}s)",
-                        service="llm",
-                        model=settings.LLM_MODEL,
-                        duration_ms=round(slot_waited * 1000.0, 2),
-                        attempt=attempt_num
-                    )
-
-                    current_stage = "request_send"
-                    status_code = None
-                    provider_req_id = None
                     try:
-                        await cls._emit(on_event, "request_start", {"attempt": attempt_num})
-                        log_diagnostic(
-                            "request_dispatched",
-                            level=logging.INFO,
-                            message="LLM 请求已发送",
-                            service="llm",
-                            model=settings.LLM_MODEL,
-                            endpoint=endpoint,
-                            input_chars=input_chars,
-                            timeout_config=timeout_val,
-                            attempt=attempt_num
-                        )
-
-                        t_req_start = time.monotonic()
-                        current_stage = "await_headers"
-
-                        async with stream_request_context(
-                            client,
-                            "POST",
-                            f"{base_url}/chat/completions",
-                            json=payload,
-                            headers=headers,
-                            timeout=settings.LLM_TIMEOUT
-                        ) as res:
-                            headers_ms = (time.monotonic() - t_req_start) * 1000.0
+                        waited = time.monotonic() - started
+                        await cls._emit(on_event, "slot_wait", details(waited_seconds=waited))
+                        log_diagnostic("slot_wait", level=logging.DEBUG,
+                            message="等待 LLM 信号量调用名额完成", duration_ms=round(waited * 1000, 2), **details())
+                        await stage_event("request_start", "request_send")
+                        log_diagnostic("request_dispatched", message="LLM 请求开始发送",
+                            input_chars=len(system_prompt) + len(user_prompt), timeout_config=timeout_val, **details())
+                        # Until real transport traces arrive, connection reuse/MockTransport cannot
+                        # establish whether a TCP connection was opened for this request.
+                        current_stage, stage_started = "await_headers", time.monotonic()
+                        async with stream_request_context(client, "POST", f"{base_url}/chat/completions",
+                            json=payload, headers=headers, timeout=timeout_val,
+                            extensions={"trace": trace}) as res:
                             status_code = res.status_code
                             provider_req_id = extract_provider_request_id(res.headers)
-                            log_diagnostic(
-                                "response_headers",
-                                level=logging.DEBUG,
-                                message="收到 LLM 响应头",
-                                service="llm",
-                                model=settings.LLM_MODEL,
-                                status_code=status_code,
-                                provider_request_id=provider_req_id,
-                                duration_ms=round(headers_ms, 2),
-                                attempt=attempt_num
-                            )
-
-                            current_stage = "read_body"
-                            t_body_start = time.monotonic()
+                            await stage_event("response_headers", "await_headers")
+                            log_diagnostic("response_headers", level=logging.DEBUG,
+                                message="收到 LLM 响应头", duration_ms=details()["elapsed_ms"], **details())
+                            await stage_event("read_body", "read_body")
                             content_bytes = await res.aread()
-                            body_ms = (time.monotonic() - t_body_start) * 1000.0
-                            log_diagnostic(
-                                "response_body",
-                                level=logging.DEBUG,
-                                message="LLM 响应体读取完成",
-                                service="llm",
-                                model=settings.LLM_MODEL,
-                                status_code=status_code,
-                                provider_request_id=provider_req_id,
-                                duration_ms=round(body_ms, 2),
-                                input_bytes=len(content_bytes),
-                                attempt=attempt_num
-                            )
-
-                            current_stage = "http_status"
+                            await cls._emit(on_event, "response_body", details())
+                            log_diagnostic("response_body", level=logging.DEBUG,
+                                message="LLM 响应体读取完成", duration_ms=details()["stage_elapsed_ms"],
+                                input_bytes=len(content_bytes), **details())
+                            current_stage, stage_started = "http_status", time.monotonic()
                             res.raise_for_status()
-
-                            current_stage = "parse_response"
-                            t_parse_start = time.monotonic()
+                            await stage_event("parse_response", "parse_response")
                             data = json.loads(content_bytes.decode("utf-8"))
                             content = data["choices"][0]["message"]["content"].strip()
-
-                            # Clean markdown codeblocks if present
                             if content.startswith("```"):
                                 content = re.sub(r"^```(?:json)?\n?", "", content)
                                 content = re.sub(r"\n?```$", "", content)
-
                             result = json.loads(content)
-                            parse_ms = (time.monotonic() - t_parse_start) * 1000.0
-                            total_req_ms = (time.monotonic() - t_req_start) * 1000.0
-
-                            await cls._emit(on_event, "response_received", {})
-                            log_diagnostic(
-                                "response_parsed",
-                                level=logging.INFO,
-                                message="LLM 响应解析成功",
-                                service="llm",
-                                model=settings.LLM_MODEL,
-                                status_code=status_code,
-                                provider_request_id=provider_req_id,
-                                duration_ms=round(total_req_ms, 2),
-                                attempt=attempt_num
-                            )
+                            await cls._emit(on_event, "response_received", details())
+                            log_diagnostic("response_parsed", message="LLM 响应解析成功",
+                                duration_ms=details()["elapsed_ms"], **details())
                             return result
+                    except Exception as exc:
+                        # asyncio.CancelledError is a BaseException: cancellation is never a
+                        # provider failure, never retried, and still releases the acquired slot.
+                        exception_type = type(exc).__name__
+                        retryable = isinstance(exc, (httpx.HTTPStatusError, httpx.TimeoutException,
+                                                    httpx.NetworkError, json.JSONDecodeError))
+                        if isinstance(exc, httpx.HTTPStatusError):
+                            current_stage = "http_status"
+                            status_code = exc.response.status_code
+                            provider_req_id = extract_provider_request_id(exc.response.headers) or provider_req_id
+                            retryable = status_code not in {400, 401, 403, 404, 422}
+                        elif isinstance(exc, httpx.PoolTimeout):
+                            current_stage, stage_started = "pool_wait", started + waited
+                        elif isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError)):
+                            if current_stage not in {"connect_tcp", "tls"}:
+                                current_stage = "connect"
+                        elif isinstance(exc, (httpx.WriteTimeout, httpx.WriteError)):
+                            current_stage = "send_request"
+                        will_retry = retryable and attempt < max_retries
+                        failure = details(failed_stage=current_stage, exception_type=exception_type,
+                                          will_retry=will_retry)
+                        await cls._emit(on_event, "request_failed", failure)
+                        log_diagnostic("request_failed", level=logging.WARNING if will_retry else logging.ERROR,
+                            message=format_call_failure(failure), duration_ms=failure["elapsed_ms"], **failure)
+                        if not will_retry:
+                            # Keep a safe context on the cause chain without returning provider text.
+                            raise LLMCallError(format_call_failure(failure), failure) from exc
 
-                    except httpx.HTTPStatusError as e:
-                        failed_stage = "http_status"
-                        status_code = e.response.status_code
-                        provider_req_id = extract_provider_request_id(e.response.headers) or provider_req_id
-
-                        if status_code in {400, 401, 403, 404, 422}:
-                            detail_msg = f"HTTP {status_code}"
-                            if status_code == 401:
-                                detail_msg = "LLM API Key 无效或未授权 (401)"
-                            elif status_code == 403:
-                                detail_msg = "LLM 访问被拒绝或权限不足 (403)"
-                            elif status_code == 404:
-                                detail_msg = f"LLM 模型或端点不存在 (404: {settings.LLM_MODEL})"
-                            elif status_code in (400, 422):
-                                detail_msg = f"LLM 请求格式错误 ({status_code})"
-
-                            log_diagnostic(
-                                "request_failed",
-                                level=logging.ERROR,
-                                message=f"LLM 请求被拒绝: {detail_msg}",
-                                service="llm",
-                                model=settings.LLM_MODEL,
-                                endpoint=endpoint,
-                                status_code=status_code,
-                                provider_request_id=provider_req_id,
-                                failed_stage=failed_stage,
-                                exception_type="HTTPStatusError",
-                                attempt=attempt_num
-                            )
-                            raise RuntimeError(f"LLM 请求被拒绝: {detail_msg}") from e
-
-                        if attempt == retries:
-                            log_diagnostic(
-                                "request_failed",
-                                level=logging.ERROR,
-                                message=f"LLM 请求重试耗尽 (HTTP {status_code})",
-                                service="llm",
-                                model=settings.LLM_MODEL,
-                                endpoint=endpoint,
-                                status_code=status_code,
-                                provider_request_id=provider_req_id,
-                                failed_stage=failed_stage,
-                                exception_type="HTTPStatusError",
-                                attempt=attempt_num
-                            )
-                            raise RuntimeError(f"LLM 请求重试耗尽（HTTP {status_code}）") from e
-
-                        wait_sec = min(15.0, 2.0 * attempt_num)
-                        if status_code == 429:
-                            retry_header = e.response.headers.get("Retry-After")
-                            if retry_header and retry_header.isdigit():
-                                wait_sec = min(15.0, float(retry_header))
-                            await GlobalRateLimiter.report_429(wait_sec)
-                            reason = f"服务商限流 (429)，等待 {wait_sec:.1f} 秒后重试"
+                        if isinstance(exc, json.JSONDecodeError):
+                            wait_sec, reason = 1.0, "模型返回非合规 JSON，正在重试"
+                        elif isinstance(exc, httpx.HTTPStatusError):
+                            wait_sec = min(15.0, 2.0 * attempt_num)
+                            if status_code == 429:
+                                retry_header = exc.response.headers.get("Retry-After")
+                                if retry_header and retry_header.isdigit():
+                                    wait_sec = min(15.0, float(retry_header))
+                                await GlobalRateLimiter.report_429(wait_sec)
+                                reason = f"服务商限流 (429)，等待 {wait_sec:.1f} 秒后重试"
+                            else:
+                                reason = f"服务临时异常 (HTTP {status_code})，等待 {wait_sec:.1f} 秒后重试"
                         else:
-                            reason = f"服务临时异常 (HTTP {status_code})，等待 {wait_sec:.1f} 秒后重试"
-
-                        logger.warning("LLM call attempt %d failed with HTTP %s. %s", attempt_num, status_code, reason)
-                        log_diagnostic(
-                            "retry_wait",
-                            level=logging.WARNING,
-                            message=reason,
-                            service="llm",
-                            model=settings.LLM_MODEL,
-                            endpoint=endpoint,
-                            status_code=status_code,
-                            provider_request_id=provider_req_id,
-                            failed_stage=failed_stage,
-                            exception_type="HTTPStatusError",
-                            retry_reason=reason,
-                            retry_wait_seconds=wait_sec,
-                            attempt=attempt_num
-                        )
-                        await cls._emit(on_event, "retry_wait", {
-                            "attempt": attempt_num,
-                            "wait_seconds": wait_sec,
-                            "reason": reason
-                        })
+                            wait_sec = min(15.0, 2.0 * attempt_num)
+                            reason = f"网络连接或超时 ({exception_type})，等待 {wait_sec:.1f} 秒后重试"
+                        retry_info = details(failed_stage=current_stage, exception_type=exception_type,
+                                             wait_seconds=wait_sec, reason=reason, will_retry=True)
+                        log_diagnostic("retry_wait", level=logging.WARNING, message=reason,
+                            retry_wait_seconds=wait_sec, **retry_info)
+                        await cls._emit(on_event, "retry_wait", retry_info)
                         if on_retry:
                             try:
                                 res_cb = on_retry(attempt_num, wait_sec, reason)
                                 if asyncio.iscoroutine(res_cb):
                                     await res_cb
                             except Exception as cb_err:
-                                logger.warning("on_retry callback error: %s", cb_err)
-
+                                logger.warning("on_retry callback error: %s", type(cb_err).__name__)
                         await asyncio.sleep(wait_sec)
-
-                    except (httpx.TimeoutException, httpx.NetworkError) as e:
-                        if isinstance(e, httpx.ConnectTimeout) or isinstance(e, httpx.ConnectError):
-                            failed_stage = "connect"
-                        else:
-                            failed_stage = current_stage
-
-                        exc_name = type(e).__name__
-                        if attempt == retries:
-                            logger.error("All LLM attempts failed: %s", exc_name)
-                            log_diagnostic(
-                                "request_failed",
-                                level=logging.ERROR,
-                                message=f"LLM 网络超时或连接失败: {exc_name}",
-                                service="llm",
-                                model=settings.LLM_MODEL,
-                                endpoint=endpoint,
-                                status_code=status_code,
-                                provider_request_id=provider_req_id,
-                                failed_stage=failed_stage,
-                                exception_type=exc_name,
-                                attempt=attempt_num
-                            )
-                            raise RuntimeError(f"LLM 网络超时或连接失败: {exc_name}") from e
-
-                        wait_sec = min(15.0, 2.0 * attempt_num)
-                        reason = f"网络连接或超时 ({exc_name})，等待 {wait_sec:.1f} 秒后重试"
-                        logger.warning("LLM call attempt %d failed: %s. %s", attempt_num, exc_name, reason)
-                        log_diagnostic(
-                            "retry_wait",
-                            level=logging.WARNING,
-                            message=reason,
-                            service="llm",
-                            model=settings.LLM_MODEL,
-                            endpoint=endpoint,
-                            status_code=status_code,
-                            provider_request_id=provider_req_id,
-                            failed_stage=failed_stage,
-                            exception_type=exc_name,
-                            retry_reason=reason,
-                            retry_wait_seconds=wait_sec,
-                            attempt=attempt_num
-                        )
-                        await cls._emit(on_event, "retry_wait", {
-                            "attempt": attempt_num,
-                            "wait_seconds": wait_sec,
-                            "reason": reason
-                        })
-                        if on_retry:
-                            try:
-                                res_cb = on_retry(attempt_num, wait_sec, reason)
-                                if asyncio.iscoroutine(res_cb):
-                                    await res_cb
-                            except Exception as cb_err:
-                                logger.warning("on_retry callback error: %s", cb_err)
-
-                        await asyncio.sleep(wait_sec)
-
-                    except json.JSONDecodeError as e:
-                        failed_stage = "parse_response"
-                        if attempt == retries:
-                            log_diagnostic(
-                                "request_failed",
-                                level=logging.ERROR,
-                                message="模型未输出有效 JSON 格式",
-                                service="llm",
-                                model=settings.LLM_MODEL,
-                                endpoint=endpoint,
-                                status_code=status_code,
-                                provider_request_id=provider_req_id,
-                                failed_stage=failed_stage,
-                                exception_type="JSONDecodeError",
-                                attempt=attempt_num
-                            )
-                            raise RuntimeError(f"模型未输出有效 JSON 格式: {e}") from e
-
-                        wait_sec = 1.0
-                        reason = "模型返回非合规 JSON，正在重试"
-                        log_diagnostic(
-                            "retry_wait",
-                            level=logging.WARNING,
-                            message=reason,
-                            service="llm",
-                            model=settings.LLM_MODEL,
-                            endpoint=endpoint,
-                            status_code=status_code,
-                            provider_request_id=provider_req_id,
-                            failed_stage=failed_stage,
-                            exception_type="JSONDecodeError",
-                            retry_reason=reason,
-                            retry_wait_seconds=wait_sec,
-                            attempt=attempt_num
-                        )
-                        await cls._emit(on_event, "retry_wait", {
-                            "attempt": attempt_num,
-                            "wait_seconds": wait_sec,
-                            "reason": reason
-                        })
-                        if on_retry:
-                            try:
-                                res_cb = on_retry(attempt_num, wait_sec, reason)
-                                if asyncio.iscoroutine(res_cb):
-                                    await res_cb
-                            except Exception:
-                                pass
-                        await asyncio.sleep(wait_sec)
-
-                    except Exception as e:
-                        log_diagnostic(
-                            "request_failed",
-                            level=logging.ERROR,
-                            message="LLM 请求发生未预期异常",
-                            service="llm",
-                            model=settings.LLM_MODEL,
-                            endpoint=endpoint,
-                            failed_stage=current_stage,
-                            exception_type=type(e).__name__,
-                            attempt=attempt_num
-                        )
-                        safe_info = extract_safe_exception_info(e, stage=current_stage)
-                        logger.error("Unexpected LLM failure: %s", safe_info["message"])
-                        raise
                     finally:
                         GlobalRateLimiter.release()
 

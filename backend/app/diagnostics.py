@@ -168,6 +168,7 @@ LOG_FIELD_WHITELIST = frozenset({
     # external calls / provider observability
     "service", "model", "endpoint", "method", "input_chars", "input_bytes",
     "timeout_config", "status_code", "provider_request_id", "duration_ms",
+    "timeout_seconds", "max_attempts", "stage_elapsed_ms", "trace_event", "will_retry",
     "spawn_elapsed_ms", "probe_elapsed_ms", "total_elapsed_ms", "remaining_budget_ms",
     "retry_reason", "retry_wait_seconds", "result_count", "exception_info",
     # process lifecycle

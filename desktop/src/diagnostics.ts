@@ -72,6 +72,7 @@ export const FIELD_WHITELIST: ReadonlySet<string> = new Set([
   'service', 'model', 'endpoint', 'method', 'status_code', 'provider_request_id',
   'duration_ms', 'spawn_elapsed_ms', 'probe_elapsed_ms', 'total_elapsed_ms',
   'remaining_budget_ms', 'timeout_config', 'failure_reason',
+  'timeout_seconds', 'max_attempts', 'stage_elapsed_ms', 'trace_event', 'will_retry',
   'termination_confirmed', 'termination_failed', 'retry_reason', 'retry_wait_seconds',
   'input_chars', 'input_bytes', 'result_count',
   // process lifecycle
