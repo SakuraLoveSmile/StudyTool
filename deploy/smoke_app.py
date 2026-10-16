@@ -93,7 +93,8 @@ http {
             (root / '.env').write_text('PUBLIC_ORIGIN=https://studytool-smoke:8443\nRAG_DATA_DIR=/unused-smoke-data\n')
             (root / 'source.yaml').write_bytes((args.deployment / 'compose.yaml').read_bytes())
             clean_env = {k: v for k, v in os.environ.items()
-                         if k not in {'APP_IMAGE', 'PUBLIC_ORIGIN', 'APP_PORT', 'RAG_DATA_DIR'}}
+                         if k not in {'APP_IMAGE', 'PUBLIC_ORIGIN', 'APP_PORT', 'RAG_DATA_DIR',
+                                      'OCR_MODE', 'BAIDU_OCR_API_URL', 'BAIDU_OCR_TOKEN'}}
             rendered = json.loads(run(*docker, 'compose', '-f', str(root / 'source.yaml'),
                                      'config', '--format', 'json', env=clean_env).stdout)
             assert set(rendered['services']) == {'app'}
@@ -107,6 +108,7 @@ http {
                                   'config', '--format', 'json', env=version_env).stdout)
             app = fixed['services']['app']
             assert app['image'] == manifest['image']['tag']
+            assert app['environment']['OCR_MODE'] == 'vision_llm'
             app['environment'] = environment
             app['ports'] = []
             app['volumes'] = ['data:/data']
@@ -147,12 +149,47 @@ print('Non-root, no Caddy binary, anonymous JavaScript assets and hidden API doc
             run(*compose, 'exec', '-T', 'app', 'python', '-', input=static_probe)
             run(*compose, 'restart', 'app')
             restarted = run(*compose, 'exec', '-T', 'app', 'python', '-', input=RESTART_PROBE)
+            # Start the same image in Baidu mode as well. Rendering alone missed
+            # a lifespan guard that rejected this supported provider in public mode.
+            baidu_environment = {'OCR_MODE': 'paddleocr_api',
+                                 'BAIDU_OCR_API_URL': 'http://127.0.0.1:9/api/v2/ocr/jobs',
+                                 'BAIDU_OCR_TOKEN': 'isolated-unused-baidu-token'}
+            if manifest:
+                with (root / '.env').open('a') as output:
+                    output.write(''.join(f'{key}={value}\n' for key, value in baidu_environment.items()))
+                baidu_rendered = json.loads(run(*docker, 'compose', '-f', str(root / 'source.yaml'),
+                                               'config', '--format', 'json', env=version_env).stdout)
+                selected = baidu_rendered['services']['app']['environment']
+                for key, value in baidu_environment.items():
+                    assert selected[key] == value, f'Compose did not pass {key}'
+                baidu_environment = {key: selected[key] for key in baidu_environment}
+            environment.update(baidu_environment)
+            services['app']['environment'] = environment
+            (root / 'compose.json').write_text(json.dumps({'services': services, 'volumes': {'data': {}},
+                                                           'networks': {'default': {'internal': True}}}))
+            run(*compose, 'up', '-d', '--no-deps', '--force-recreate', '--pull', 'never', 'app')
+            run(*compose, 'exec', '-T', 'app', 'python', '-c',
+                'import sys; open("/tmp/smoke-ca.pem", "w").write(sys.stdin.read())', input=cert)
+            # A recreated container can have a new IP; refresh this test proxy's DNS.
+            run(*compose, 'exec', '-T', 'nginx', 'nginx', '-s', 'reload')
+            baidu_probe = RESTART_PROBE + '''
+with opener.open(origin + '/api/desktop/status', timeout=10) as response:
+    status = json.load(response)
+assert status['ocr']['mode'] == 'paddleocr_api' and status['ocr']['configured']
+assert status['ocr']['provider'] == '百度 PaddleOCR'
+print(json.dumps({'result': 'passed', 'mode': status['ocr']['mode'],
+    'checks': ['public-startup', 'https-login', 'account-and-material-persistence', 'selected-ocr-provider'],
+    'real_ocr_called': False}))
+'''
+            baidu = run(*compose, 'exec', '-T', 'app', 'python', '-', input=baidu_probe)
             evidence = {'result': 'passed', 'image': reference,
                         'anonymous_pull_verified': bool(manifest),
                         'version_tag_verified': manifest['image']['tag'] if manifest else None,
                         'default_image': manifest['image']['latest'] if manifest else None,
                         'initial': json.loads(initial.stdout.strip().splitlines()[-1]),
                         'restart': json.loads(restarted.stdout.strip().splitlines()[-1]),
+                        'ocr_startup': {'vision_llm': {'result': 'passed'},
+                                        'paddleocr_api': json.loads(baidu.stdout.strip().splitlines()[-1])},
                         'production_deployed': False,
                         'extra_checks': ['non-root', 'no-caddy-binary', 'anonymous-js-assets', 'api-docs-hidden'],
                         'isolation': 'temporary named data volume, internal network, no host ports, test Nginx and certificate'}

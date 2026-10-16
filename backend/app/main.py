@@ -192,8 +192,12 @@ async def lifespan(app: FastAPI):
                 raise RuntimeError("PUBLIC_ORIGIN must be a single HTTPS origin")
             if not settings.AUTH_COOKIE_SECURE:
                 raise RuntimeError("Public mode requires secure cookies")
-            if settings.DEMO_MODE or settings.OCR_MODE != "vision_llm" or settings.EMBEDDING_MODE != "remote":
-                raise RuntimeError("Public mode requires real LLM, vision OCR and remote embeddings")
+            if settings.DEMO_MODE:
+                raise RuntimeError("Public mode requires DEMO_MODE=false")
+            if settings.OCR_MODE not in {"vision_llm", "paddleocr_api"}:
+                raise RuntimeError("Public mode requires OCR_MODE=vision_llm or paddleocr_api")
+            if settings.EMBEDDING_MODE != "remote":
+                raise RuntimeError("Public mode requires EMBEDDING_MODE=remote")
 
         failed_stage = "database"
         log_diagnostic("startup.database.begin", message="开始初始化数据库", phase="database")
