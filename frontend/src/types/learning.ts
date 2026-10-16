@@ -94,6 +94,42 @@ export interface LearningGenerationPayload {
   request_id?: string;
 }
 
+export interface LearningGenerationSourceScope {
+  doc_id: string;
+  library_chapter_id?: string;
+}
+
+export interface LearningGenerationPreview {
+  doc_id: string;
+  doc_name: string;
+  library_chapter_id: string | null;
+  fingerprint: string;
+  eligible_count: number;
+  skipped_count: number;
+  batch_count: number;
+  chapters: {
+    library_chapter_id: string;
+    title: string;
+    knowledge_point_count: number;
+    batch_count: number;
+  }[];
+  skipped: { knowledge_point_id: string; name: string; reason: string }[];
+  knowledge_points: { id: string; name: string; library_chapter_id: string; chapter_title: string }[];
+}
+
+export interface LearningGenerationFromSourcePayload extends LearningGenerationSourceScope {
+  instructions?: string;
+  request_id: string;
+  preview_fingerprint: string;
+}
+
+export interface LearningGenerationFromSourceResult {
+  request_id: string;
+  eligible_count: number;
+  batch_count: number;
+  generations: LearningGeneration[];
+}
+
 export interface LearningCitation {
   id?: string;
   chunk_id?: string | null;

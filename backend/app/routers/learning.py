@@ -592,12 +592,38 @@ def _generation_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
         "request_id": _first(payload, "request_id", "requestId", "idempotency_key"),
         "mode": _first(payload, "mode", "generation_mode", default="formal"),
         "source_doc_id": _first(payload, "source_doc_id", "sourceDocId"),
-        "message": _first(payload, "message", "instructions"),
+        "message": payload.get("message"),
+        "instructions": payload.get("instructions"),
         # RecallGenerator accepts request= and extracts aliases itself.  Keeping
         # this also makes the adapter compatible with later generator versions.
         "request": dict(payload),
     }
     return {key: value for key, value in result.items() if value is not None}
+
+
+@router.post("/generation-preview")
+def preview_source_generation(body: Any = Body(default=None)) -> Any:
+    from app.services import recall_scope
+
+    payload = _mapping(body)
+    return _run(lambda: recall_scope.preview(
+        doc_id=payload.get("doc_id"),
+        library_chapter_id=payload.get("library_chapter_id"),
+    ))
+
+
+@router.post("/generations/from-source")
+def create_source_generation(body: Any = Body(default=None)) -> Any:
+    from app.services import recall_scope
+
+    payload = _mapping(body)
+    return _run(lambda: recall_scope.generate(
+        doc_id=payload.get("doc_id"),
+        library_chapter_id=payload.get("library_chapter_id"),
+        instructions=payload.get("instructions", ""),
+        request_id=payload.get("request_id"),
+        preview_fingerprint=payload.get("preview_fingerprint"),
+    ))
 
 
 @router.post("/generations")

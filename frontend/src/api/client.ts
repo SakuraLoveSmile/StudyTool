@@ -16,6 +16,10 @@ import type {
   LearningGeneration,
   LearningGenerationPayload,
   LearningGenerationQuery,
+  LearningGenerationSourceScope,
+  LearningGenerationPreview,
+  LearningGenerationFromSourcePayload,
+  LearningGenerationFromSourceResult,
   LearningScope,
   LearningScopeUpdate,
   LearningSettings,
@@ -351,6 +355,16 @@ export const apiClient = {
   createLearningGeneration: async (data: LearningGenerationPayload): Promise<LearningGeneration> => {
     const res = await api.post('/learning/generations', data);
     return normaliseGeneration(unwrapLearningPayload<unknown>(res.data));
+  },
+  previewLearningGeneration: async (data: LearningGenerationSourceScope): Promise<LearningGenerationPreview> => {
+    const res = await api.post('/learning/generation-preview', data);
+    return res.data;
+  },
+  createLearningGenerationFromSource: async (data: LearningGenerationFromSourcePayload): Promise<LearningGenerationFromSourceResult> => {
+    const res = await api.post<LearningGenerationFromSourceResult>('/learning/generations/from-source', data, {
+      headers: { 'Idempotency-Key': data.request_id },
+    });
+    return { ...res.data, generations: res.data.generations.map((item, index) => normaliseGeneration(item, index)) };
   },
   listLearningGenerations: async (params?: LearningGenerationQuery): Promise<LearningGeneration[]> => {
     const res = await api.get('/learning/generations', { params });

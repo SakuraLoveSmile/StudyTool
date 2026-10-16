@@ -22,6 +22,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from fastapi import HTTPException
+
 from app.config import settings
 from app.database import db_session
 from app.services.llm.client import LLMClient
@@ -94,6 +96,8 @@ class SnapshotUnit:
     chapter_title: str
     source_doc_id: Optional[str]
     chunks: Tuple[SnapshotChunk, ...]
+    library_chapter_id: Optional[str] = None
+    library_scope_fingerprint: Optional[str] = None
 
     @property
     def source_hashes(self) -> Dict[str, str]:
@@ -113,6 +117,8 @@ class SnapshotUnit:
             "source_doc_id": self.source_doc_id,
             "source_hashes": self.source_hashes,
             "chunks": [chunk.as_dict() for chunk in self.chunks],
+            "library_chapter_id": self.library_chapter_id,
+            "library_scope_fingerprint": self.library_scope_fingerprint,
         }
 
 
@@ -169,11 +175,12 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _fingerprint(snapshot_units: Sequence[SnapshotUnit], chapter_id: str, source_doc_id: Optional[str]) -> str:
+def _fingerprint(snapshot_units: Sequence[SnapshotUnit], chapter_id: str, source_doc_id: Optional[str], instructions: str = "") -> str:
     payload = {
         "chapter_id": chapter_id,
         "source_doc_id": source_doc_id,
         "units": [unit.as_dict() for unit in snapshot_units],
+        "instructions": instructions,
     }
     return _sha256_text(_canonical_json(payload))
 
@@ -289,6 +296,8 @@ class RecallGenerator:
         parent_task_id: Optional[str] = None,
         conn: Optional[Any] = None,
         message: Optional[str] = None,
+        instructions: Optional[str] = None,
+        library_chapter_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Validate a request, snapshot inputs, and atomically create batch/task.
@@ -310,12 +319,15 @@ class RecallGenerator:
             if request_id is None:
                 request_id = _first(request_map, "request_id", "requestId")
             mode = _first(request_map, "mode", "generation_mode", default=mode)
+            if instructions is None:
+                instructions = request_map.get("instructions")
 
         chapter_id = _normalize_id(chapter_id, field="chapter_id")
         request_id = _normalize_id(request_id or f"recall-{uuid.uuid4().hex}", field="request_id")
         if len(request_id) > MAX_REQUEST_ID_CHARS:
             raise RecallGenerationError(f"request_id超过 {MAX_REQUEST_ID_CHARS} 字符限制")
         mode = _normalise_mode(mode)
+        instructions = _text(instructions, field="生成要求", max_chars=4000)
 
         def _create(active_conn: Any) -> Dict[str, Any]:
             chapter = active_conn.execute(
@@ -345,6 +357,8 @@ class RecallGenerator:
                 if metadata.get("request_id") == request_id:
                     existing_fp = metadata.get("batch_fingerprint")
                     if units is None and knowledge_point_ids is None:
+                        if instructions != metadata.get("instructions", "") or library_chapter_id != metadata.get("library_chapter_id"):
+                            raise RecallGenerationError("request_id已用于不同的批次输入")
                         return cls._batch_response(row, metadata)
                     candidate_units = cls._build_units(
                         active_conn,
@@ -352,8 +366,9 @@ class RecallGenerator:
                         units=units,
                         knowledge_point_ids=knowledge_point_ids,
                         chapter_source_doc_id=chapter_source_doc_id,
+                        library_chapter_id=library_chapter_id,
                     )
-                    candidate_fp = _fingerprint(candidate_units, chapter_id, chapter_source_doc_id)
+                    candidate_fp = _fingerprint(candidate_units, chapter_id, chapter_source_doc_id, instructions)
                     if existing_fp != candidate_fp:
                         raise RecallGenerationError("request_id已用于不同的批次输入")
                     return cls._batch_response(row, metadata)
@@ -364,8 +379,9 @@ class RecallGenerator:
                 units=units,
                 knowledge_point_ids=knowledge_point_ids,
                 chapter_source_doc_id=chapter_source_doc_id,
+                library_chapter_id=library_chapter_id,
             )
-            batch_fingerprint = _fingerprint(snapshot_units, chapter_id, chapter_source_doc_id)
+            batch_fingerprint = _fingerprint(snapshot_units, chapter_id, chapter_source_doc_id, instructions)
             batch_id = f"recall-batch-{uuid.uuid4().hex[:16]}"
             task_message = message or f"生成章节记忆卡（{len(snapshot_units)} 个知识点）"
             snapshot = {
@@ -380,6 +396,8 @@ class RecallGenerator:
                     chunk.doc_id for unit in snapshot_units for chunk in unit.chunks
                 }),
                 "mode": mode,
+                "instructions": instructions,
+                "library_chapter_id": library_chapter_id,
                 "units": [unit.as_dict() for unit in snapshot_units],
             }
 
@@ -433,6 +451,7 @@ class RecallGenerator:
         units: Optional[Sequence[Any]],
         knowledge_point_ids: Optional[Sequence[str]],
         chapter_source_doc_id: Optional[str],
+        library_chapter_id: Optional[str] = None,
     ) -> List[SnapshotUnit]:
         if units is None:
             if knowledge_point_ids is None:
@@ -476,10 +495,21 @@ class RecallGenerator:
             if unit_chapter_id is not None and str(unit_chapter_id) != str(chapter["id"]):
                 raise RecallGenerationError(f"知识点 {kp_id} 不属于所选章节")
             unit_chapter = _first(unit, "chapter", "chapter_title", "chapterTitle")
-            cls._validate_chapter_text(kp_id, kp_row["chapter"], chapter["title"], unit_chapter)
+            if not library_chapter_id:
+                cls._validate_chapter_text(kp_id, kp_row["chapter"], chapter["title"], unit_chapter)
 
             raw_chunks = _first(unit, "chunks", "source_chunks", "input_chunks")
-            if raw_chunks is None:
+            scope_fingerprint = None
+            if library_chapter_id:
+                # Scope is always resolved again by the server. Supplying this
+                # identifier never grants permission to bypass source validation.
+                from app.services.recall_scope import validated_chunks, chapter_scope
+                from app.services.recall_cards import normalize_title
+                scope_title, _, scope_fingerprint = chapter_scope(conn, chapter_source_doc_id, library_chapter_id)
+                if normalize_title(scope_title) != normalize_title(chapter["title"]) or chapter.get("source_doc_id") != chapter_source_doc_id:
+                    raise RecallGenerationError("回忆卡目录与教材章节不一致")
+                raw_chunks = validated_chunks(conn, kp_row, chapter_source_doc_id, library_chapter_id)
+            elif raw_chunks is None:
                 raw_chunks = cls._derive_chunks(conn, kp_row, chapter, chapter_source_doc_id)
             if isinstance(raw_chunks, Mapping):
                 raw_chunks = list(raw_chunks.values())
@@ -511,6 +541,8 @@ class RecallGenerator:
                     chapter_title=_text(chapter["title"], field="chapter.title", required=True),
                     source_doc_id=chapter_source_doc_id,
                     chunks=tuple(snapshot_chunks),
+                    library_chapter_id=library_chapter_id,
+                    library_scope_fingerprint=scope_fingerprint,
                 )
             )
         return result
@@ -863,6 +895,7 @@ class RecallGenerator:
                     request_id=request_id,
                     fingerprint=fingerprint,
                     mode=mode,
+                    instructions=metadata.get("instructions", ""),
                 )
                 response = await LLMClient.chat_json(
                     RECALL_CARD_GENERATION_SYSTEM_PROMPT,
@@ -1015,11 +1048,13 @@ class RecallGenerator:
         request_id: str,
         fingerprint: str,
         mode: str,
+        instructions: str = "",
     ) -> str:
         payload = {
             "request_id": request_id,
             "batch_fingerprint": fingerprint,
             "mode": mode,
+            "instructions": instructions,
             "knowledge_point_id": unit.knowledge_point_id,
             "knowledge_point_name": unit.knowledge_point_name,
             "chapter_id": unit.chapter_id,
@@ -1030,6 +1065,8 @@ class RecallGenerator:
         return (
             "以下是不可变的单知识点输入快照。只能依据 source_chunks 生成；"
             "严禁使用外部知识、演示文本或虚构引用。\n"
+            "在原文证据范围内遵循 instructions 中的生成要求；"
+            "不得因额外要求放宽引用与审核规则。\n"
             "模型输入 JSON：\n"
             + json.dumps(payload, ensure_ascii=False, indent=2)
         )
@@ -1200,6 +1237,7 @@ class RecallGenerator:
     ) -> int:
         """Persist a fully validated unit and its checkpoint in one transaction."""
         with db_session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             # The task status check is made in the same transaction as inserts;
             # cancellation therefore cannot race a successful card write.
             task_row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -1392,6 +1430,30 @@ class RecallGenerator:
     @classmethod
     def _assert_snapshot_current(cls, unit: SnapshotUnit, conn: Optional[Any] = None) -> None:
         def _check(active_conn: Any) -> None:
+            if unit.library_chapter_id:
+                from app.services.recall_scope import chapter_scope, validated_chunks
+                from app.services.recall_cards import normalize_title
+                try:
+                    directory = active_conn.execute(
+                        "SELECT source_doc_id,status,title FROM recall_chapters WHERE id=?", (unit.chapter_id,)
+                    ).fetchone()
+                    if not directory:
+                        raise RecallGenerationError("目标回忆卡目录已删除")
+                    if directory["source_doc_id"] != unit.source_doc_id:
+                        raise RecallGenerationError("目标回忆卡目录的教材归属已变化")
+                    if directory["status"] not in (None, "active"):
+                        raise RecallGenerationError("目标回忆卡目录已归档，已停止写入")
+                    if normalize_title(directory["title"]) != normalize_title(unit.chapter_title):
+                        raise RecallGenerationError("目标回忆卡目录名称已变化")
+                    title, _, scope_fp = chapter_scope(active_conn, unit.source_doc_id, unit.library_chapter_id)
+                    kp = active_conn.execute("SELECT * FROM knowledge_points WHERE id=? AND is_deleted=0", (unit.knowledge_point_id,)).fetchone()
+                    if not kp:
+                        raise RecallGenerationError("知识点已删除")
+                    current_sources = validated_chunks(active_conn, dict(kp), unit.source_doc_id, unit.library_chapter_id)
+                    if normalize_title(title) != normalize_title(unit.chapter_title) or scope_fp != unit.library_scope_fingerprint or {c["id"] for c in current_sources} != {c.id for c in unit.chunks}:
+                        raise RecallGenerationError("教材章节归属或知识点来源已变化")
+                except (RecallGenerationError, HTTPException) as exc:
+                    raise SourceChangedError(str(getattr(exc, "detail", str(exc)))) from exc
             placeholders = ",".join("?" for _ in unit.chunks)
             rows = active_conn.execute(
                 f"SELECT c.id, c.doc_id, c.content, c.parse_error, d.file_hash "
@@ -1516,6 +1578,8 @@ class RecallGenerator:
             chapter_title=_text(raw.get("chapter_title"), field="snapshot.chapter_title", required=True),
             source_doc_id=(str(raw["source_doc_id"]) if raw.get("source_doc_id") else None),
             chunks=tuple(chunks),
+            library_chapter_id=raw.get("library_chapter_id"),
+            library_scope_fingerprint=raw.get("library_scope_fingerprint"),
         )
 
     @classmethod

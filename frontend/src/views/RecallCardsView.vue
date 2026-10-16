@@ -94,8 +94,8 @@
 
     <div v-if="chapters.length === 0 && !loading" class="surface p-8 text-center">
       <Layers class="mx-auto h-8 w-8 text-faint" />
-      <h2 class="mt-3 font-display text-base font-semibold text-ink">先创建章节</h2>
-      <p class="mt-1 text-xs text-sub">章节用于组织卡片，也是今日学习的范围。</p>
+      <h2 class="mt-3 font-display text-base font-semibold text-ink">还没有回忆卡章节</h2>
+      <p class="mt-1 text-xs text-sub">按教材生成时会自动安排章节，也可手动创建，用于组织卡片和今日学习范围。</p>
       <button type="button" class="btn btn-primary mt-4" @click="showChapterEditor = true">新建章节</button>
     </div>
 
@@ -144,62 +144,81 @@
       :show="showBatchModal"
       title="批量生成回忆卡"
       max-width="lg"
-      @close="!batchGenerating && (showBatchModal = false)"
+      @close="closeBatchModal"
     >
       <div class="space-y-4 text-sm">
         <p class="text-xs text-sub leading-relaxed">
-          选择目标章节和 1–20 个已有知识点，AI 根据知识点的教材原文生成「问答」回忆卡，作为待审核候选存入卡库。
+          选择教材，可再限定章节。程序会按真实原文引用自动匹配已审核知识点、安排回忆卡章节并拆分任务；生成的卡片仍需审核后发布。
         </p>
 
         <div v-if="batchError" class="rounded-xl border border-err/30 bg-err/10 px-3 py-2 text-xs text-err" role="alert">
           {{ batchError }}
         </div>
         <div v-if="batchSuccessMessage" class="rounded-xl border border-ok/30 bg-ok/10 px-3 py-2 text-xs text-ok">
-          {{ batchSuccessMessage }}
+          <p>{{ batchSuccessMessage }}</p>
+          <button type="button" class="mt-2 font-semibold text-accent hover:underline" @click="showBatchTasks">查看任务列表</button>
         </div>
 
         <div>
-          <label for="batch-chapter" class="block text-xs font-semibold text-sub mb-1.5">目标章节</label>
-          <select id="batch-chapter" v-model="batchChapterId" class="field text-xs w-full" :disabled="batchGenerating">
-            <option v-for="ch in chapters" :key="ch.id" :value="ch.id">{{ ch.name }}</option>
+          <label for="batch-document" class="block text-xs font-semibold text-sub mb-1.5">教材 / 已解析资料</label>
+          <select id="batch-document" v-model="batchDocId" class="field text-xs w-full" :disabled="batchMaterialsLoading || batchGenerating || Boolean(batchSuccessMessage)" @change="changeBatchDocument">
+            <option value="" disabled>{{ batchMaterialsLoading ? '正在加载资料…' : '请选择教材或资料' }}</option>
+            <option v-for="doc in batchMaterials" :key="doc.id" :value="doc.id">{{ doc.filename }}{{ doc.file_type === 'textbook' ? '（教材）' : '' }}</option>
+          </select>
+          <p v-if="!batchMaterialsLoading && !batchMaterials.length" class="mt-2 text-xs text-faint">暂无已解析资料，请先在<router-link to="/materials" class="text-accent hover:underline">资料管理</router-link>中上传并完成解析。</p>
+        </div>
+
+        <div>
+          <label for="batch-source-chapter" class="block text-xs font-semibold text-sub mb-1.5">教材章节（选填）</label>
+          <select id="batch-source-chapter" v-model="batchLibraryChapterId" class="field text-xs w-full" :disabled="!batchDocId || batchChaptersLoading || batchGenerating || Boolean(batchSuccessMessage)" @change="refreshBatchPreview">
+            <option value="">{{ batchChaptersLoading ? '正在读取章节…' : '全部章节' }}</option>
+            <option v-for="chapter in batchSourceChapters" :key="chapter.id" :value="chapter.id">{{ chapter.title }}</option>
           </select>
         </div>
 
-        <fieldset :disabled="batchGenerating || batchKnowledgeLoading" class="space-y-2">
-          <legend class="text-xs font-semibold text-sub">选择知识点（已选 {{ batchKnowledgePointIds.length }}/20）</legend>
-          <p class="text-xs leading-relaxed text-faint">知识点需有有效教材来源，且所属章节与目标章节一致。</p>
-          <p v-if="batchKnowledgeLoading" class="text-xs text-faint">正在加载知识点…</p>
-          <div v-else-if="batchKnowledgePoints.length" class="max-h-40 overflow-y-auto rounded-xl border border-line divide-y divide-line">
-            <label v-for="point in batchKnowledgePoints" :key="point.id" class="flex items-start gap-2 px-3 py-2 text-xs text-ink">
-              <input
-                v-model="batchKnowledgePointIds"
-                type="checkbox"
-                :value="point.id"
-                :disabled="!batchKnowledgePointIds.includes(point.id) && batchKnowledgePointIds.length >= 20"
-                class="mt-0.5 rounded border-line-strong text-accent focus:ring-accent"
-              />
-              <span class="min-w-0 break-words">{{ point.name }}<span class="block text-faint">{{ point.chapter || '未标注章节' }}</span></span>
-            </label>
+        <section class="space-y-2" aria-live="polite" aria-label="自动匹配预览">
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="text-xs font-semibold text-sub">自动匹配预览</h3>
+            <button v-if="batchDocId && !batchSuccessMessage" type="button" class="text-xs text-accent hover:underline disabled:opacity-50" :disabled="batchPreviewLoading || batchChaptersLoading || batchGenerating" @click="refreshBatchPreview">刷新预览</button>
           </div>
-          <p v-else class="text-xs text-faint">暂无可选知识点，请先在<router-link to="/analysis" class="text-accent hover:underline">考点分析</router-link>中提取并审核知识点。</p>
-        </fieldset>
+          <p v-if="batchPreviewLoading || batchChaptersLoading" class="text-xs text-faint">正在根据教材原文匹配知识点…</p>
+          <template v-else-if="batchPreview">
+            <p class="text-xs leading-relaxed text-ink">可生成 {{ batchPreview.eligible_count }} 个知识点 · {{ batchPreview.chapters.length }} 个章节 · {{ batchPreview.batch_count }} 个任务</p>
+            <p class="text-xs leading-relaxed text-faint">将自动创建或复用对应教材的回忆卡章节，无需先手建目录。每个任务最多处理 20 个知识点；开始后会调用模型服务。</p>
+            <div v-if="batchPreview.knowledge_points.length" class="max-h-44 overflow-y-auto rounded-xl border border-line divide-y divide-line">
+              <div v-for="point in batchPreview.knowledge_points" :key="`${point.library_chapter_id}:${point.id}`" class="px-3 py-2 text-xs">
+                <p class="break-words text-ink">{{ point.name }}</p>
+                <p class="mt-0.5 break-words text-faint">{{ point.chapter_title }}</p>
+              </div>
+            </div>
+            <p v-else class="rounded-xl bg-raised px-3 py-2 text-xs leading-relaxed text-sub">所选范围暂无可生成的已审核知识点。请到<router-link to="/analysis" class="text-accent hover:underline">考点分析</router-link>提取并审核知识点，再回来刷新预览。</p>
+            <details v-if="batchPreview.skipped_count" class="rounded-xl border border-warn/30 bg-warn/10 px-3 py-2 text-xs">
+              <summary class="cursor-pointer text-sub">{{ batchPreview.skipped_count }} 个知识点暂不可用，查看原因</summary>
+              <ul class="mt-2 max-h-40 space-y-2 overflow-y-auto">
+                <li v-for="point in batchPreview.skipped" :key="`${point.knowledge_point_id}:${point.reason}`" class="break-words"><span class="font-medium text-ink">{{ point.name }}</span><span class="block text-sub">{{ point.reason }}</span></li>
+              </ul>
+            </details>
+          </template>
+          <p v-else class="text-xs text-faint">{{ batchDocId ? '预览尚未就绪，请刷新预览后生成。' : '选择教材后将自动匹配知识点。' }}</p>
+        </section>
 
         <div>
-          <label class="block text-xs font-semibold text-sub mb-1.5">生成要求 / 额外提示（选填）</label>
+          <label for="batch-instructions" class="block text-xs font-semibold text-sub mb-1.5">生成要求 / 额外提示（选填）</label>
           <textarea
+            id="batch-instructions"
             v-model="batchInstructions"
             rows="3"
             class="field text-xs w-full"
             placeholder="例如：着重考察核心定义与易错概念辨析，问题表述要求简明扼要…"
-            :disabled="batchGenerating"
+            :disabled="batchGenerating || Boolean(batchSuccessMessage)"
           />
         </div>
       </div>
 
       <template #footer>
         <div class="flex justify-end gap-2">
-          <button type="button" class="btn btn-secondary text-xs" :disabled="batchGenerating" @click="showBatchModal = false">取消</button>
-          <button type="button" class="btn btn-primary text-xs" :disabled="batchGenerating || batchKnowledgeLoading || batchKnowledgePointIds.length === 0 || Boolean(batchSuccessMessage)" @click="handleBatchGenerate">
+          <button type="button" class="btn btn-secondary text-xs" :disabled="batchGenerating" @click="closeBatchModal">{{ batchSuccessMessage ? '完成' : '取消' }}</button>
+          <button type="button" class="btn btn-primary text-xs" :disabled="batchGenerating || batchMaterialsLoading || batchChaptersLoading || batchPreviewLoading || !batchPreview?.eligible_count || Boolean(batchSuccessMessage)" @click="handleBatchGenerate">
             {{ batchGenerating ? '正在提交生成任务…' : '开始批量生成' }}
           </button>
         </div>
@@ -209,13 +228,16 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { Layers, Pencil } from 'lucide-vue-next';
 import { apiClient } from '../api/client';
+import { libraryApi } from '../api/library';
+import { useTaskManager } from '../composables/useTaskManager';
 import BaseModal from '../components/BaseModal.vue';
 import RecallCardEditor from '../components/RecallCardEditor.vue';
-import type { LearningCardHistoryItem, LearningChapter, LearningCardPayload, RecallCard, LearningCardStatus, RevisionReviewPayload } from '../types/learning';
-import type { KnowledgePoint } from '../types';
+import type { LearningCardHistoryItem, LearningChapter, LearningCardPayload, RecallCard, LearningCardStatus, RevisionReviewPayload, LearningGenerationPreview } from '../types/learning';
+import type { DocumentItem } from '../types';
+import type { LibraryChapter } from '../types/library';
 
 const cards = ref<RecallCard[]>([]);
 const chapters = ref<LearningChapter[]>([]);
@@ -239,15 +261,26 @@ const chapterSaving = ref(false);
 const chapterError = ref('');
 
 const showBatchModal = ref(false);
-const batchChapterId = ref('');
+const batchDocId = ref('');
+const batchLibraryChapterId = ref('');
 const batchInstructions = ref('');
 const batchGenerating = ref(false);
 const batchSuccessMessage = ref('');
 const batchError = ref('');
-const batchKnowledgePoints = ref<KnowledgePoint[]>([]);
-const batchKnowledgePointIds = ref<string[]>([]);
-const batchKnowledgeLoading = ref(false);
-let batchKnowledgeRequest = 0;
+const batchMaterials = ref<DocumentItem[]>([]);
+const batchSourceChapters = ref<LibraryChapter[]>([]);
+const batchPreview = ref<LearningGenerationPreview | null>(null);
+const batchMaterialsLoading = ref(false);
+const batchChaptersLoading = ref(false);
+const batchPreviewLoading = ref(false);
+const { openDrawer } = useTaskManager();
+let batchRequest = 0;
+let batchRequestId = '';
+let batchPreviewFingerprint = '';
+
+const newBatchRequest = () => { batchRequestId = crypto.randomUUID(); };
+watch(batchInstructions, newBatchRequest, { flush: 'sync' });
+watch(batchLibraryChapterId, newBatchRequest, { flush: 'sync' });
 
 const batchFailureMessage = (error: unknown, fallback: string): string => {
   const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
@@ -256,56 +289,127 @@ const batchFailureMessage = (error: unknown, fallback: string): string => {
   return error instanceof Error ? error.message : fallback;
 };
 
-const openBatchGenerateModal = async () => {
-  if (chapters.value.length === 0) {
-    showChapterEditor.value = true;
-    return;
+const closeBatchModal = () => {
+  if (batchGenerating.value) return;
+  showBatchModal.value = false;
+  ++batchRequest;
+};
+
+const showBatchTasks = () => {
+  closeBatchModal();
+  openDrawer();
+};
+
+const fetchBatchPreview = async (request: number) => {
+  batchPreviewLoading.value = true;
+  const previousFingerprint = batchPreviewFingerprint;
+  batchPreview.value = null;
+  try {
+    const preview = await apiClient.previewLearningGeneration({
+      doc_id: batchDocId.value,
+      library_chapter_id: batchLibraryChapterId.value || undefined,
+    });
+    if (request !== batchRequest || !showBatchModal.value) return;
+    if (previousFingerprint && previousFingerprint !== preview.fingerprint) newBatchRequest();
+    batchPreviewFingerprint = preview.fingerprint;
+    batchPreview.value = preview;
+  } catch (error) {
+    if (request === batchRequest && showBatchModal.value) {
+      batchError.value = batchFailureMessage(error, '自动匹配失败，请刷新预览重试。');
+    }
+  } finally {
+    if (request === batchRequest) batchPreviewLoading.value = false;
   }
-  batchChapterId.value = chapterFilter.value || chapters.value[0]?.id || '';
+};
+
+const refreshBatchPreview = async () => {
+  if (!batchDocId.value || batchGenerating.value || batchSuccessMessage.value) return;
+  batchError.value = '';
+  await fetchBatchPreview(++batchRequest);
+};
+
+const changeBatchDocument = async () => {
+  const request = ++batchRequest;
+  newBatchRequest();
+  batchLibraryChapterId.value = '';
+  batchSourceChapters.value = [];
+  batchPreview.value = null;
+  batchPreviewFingerprint = '';
+  batchPreviewLoading.value = false;
+  batchError.value = '';
+  if (!batchDocId.value) return;
+  batchChaptersLoading.value = true;
+  try {
+    const sourceChapters = await libraryApi.chapters(batchDocId.value);
+    if (request !== batchRequest || !showBatchModal.value) return;
+    batchSourceChapters.value = sourceChapters;
+    await fetchBatchPreview(request);
+  } catch (error) {
+    if (request === batchRequest && showBatchModal.value) {
+      batchError.value = batchFailureMessage(error, '读取教材章节失败，请重新选择教材。');
+    }
+  } finally {
+    if (request === batchRequest) batchChaptersLoading.value = false;
+  }
+};
+
+const openBatchGenerateModal = async () => {
+  const request = ++batchRequest;
+  batchDocId.value = '';
+  batchLibraryChapterId.value = '';
   batchInstructions.value = '';
+  newBatchRequest();
   batchError.value = '';
   batchSuccessMessage.value = '';
-  batchKnowledgePoints.value = [];
-  batchKnowledgePointIds.value = [];
+  batchMaterials.value = [];
+  batchSourceChapters.value = [];
+  batchPreview.value = null;
+  batchPreviewFingerprint = '';
+  batchChaptersLoading.value = false;
+  batchPreviewLoading.value = false;
   showBatchModal.value = true;
-  batchKnowledgeLoading.value = true;
-  const request = ++batchKnowledgeRequest;
+  batchMaterialsLoading.value = true;
   try {
-    const points = await apiClient.listKnowledgePoints();
-    if (request === batchKnowledgeRequest) batchKnowledgePoints.value = points.filter((point) => !point.is_deleted);
+    const materials = await apiClient.listMaterials();
+    if (request !== batchRequest || !showBatchModal.value) return;
+    batchMaterials.value = materials.filter((doc) => doc.status === 'completed')
+      .sort((a, b) => Number(b.file_type === 'textbook') - Number(a.file_type === 'textbook'));
+    batchMaterialsLoading.value = false;
+    if (batchMaterials.value[0]) {
+      batchDocId.value = batchMaterials.value[0].id;
+      await changeBatchDocument();
+    }
   } catch (error) {
-    if (request === batchKnowledgeRequest) batchError.value = batchFailureMessage(error, '加载知识点失败，请关闭后重试。');
+    if (request === batchRequest && showBatchModal.value) {
+      batchError.value = batchFailureMessage(error, '加载教材失败，请关闭后重试。');
+    }
   } finally {
-    if (request === batchKnowledgeRequest) batchKnowledgeLoading.value = false;
+    if (request === batchRequest) batchMaterialsLoading.value = false;
   }
 };
 
 const handleBatchGenerate = async () => {
-  if (!batchChapterId.value) {
-    batchError.value = '请选择章节';
-    return;
-  }
-  if (batchKnowledgePointIds.value.length < 1 || batchKnowledgePointIds.value.length > 20) {
-    batchError.value = '请选择 1–20 个知识点';
+  if (batchGenerating.value || batchPreviewLoading.value || batchChaptersLoading.value || batchSuccessMessage.value) return;
+  const preview = batchPreview.value;
+  if (!batchDocId.value || !preview?.eligible_count) {
+    batchError.value = '请先选择教材并刷新预览，确认有可生成的知识点。';
     return;
   }
   batchGenerating.value = true;
   batchError.value = '';
   try {
-    await apiClient.createLearningGeneration({
-      chapter_id: batchChapterId.value,
-      knowledge_point_ids: [...batchKnowledgePointIds.value],
+    const result = await apiClient.createLearningGenerationFromSource({
+      doc_id: batchDocId.value,
+      library_chapter_id: batchLibraryChapterId.value || undefined,
       instructions: batchInstructions.value.trim() || undefined,
+      request_id: batchRequestId,
+      preview_fingerprint: preview.fingerprint,
     });
-    batchSuccessMessage.value = '已成功提交批量生成任务！生成完成后可在列表中勾选「含待审核候选」查看。';
+    batchSuccessMessage.value = `已提交 ${result.batch_count} 个任务，自动处理 ${result.eligible_count} 个知识点。可在任务列表查看进度与日志，完成后到卡库审核候选。`;
     includeCandidates.value = true;
-    await loadCards();
-    setTimeout(() => {
-      showBatchModal.value = false;
-      batchSuccessMessage.value = '';
-    }, 2000);
+    await Promise.all([loadCards(), loadChapters()]);
   } catch (error) {
-    batchError.value = batchFailureMessage(error, '创建生成任务失败，请稍后重试。');
+    batchError.value = `${batchFailureMessage(error, '创建生成任务失败。')} 可重试；如教材或知识点已变化，请先刷新预览。`;
   } finally {
     batchGenerating.value = false;
   }
